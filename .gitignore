@@ -1,0 +1,49 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+ENV/
+
+# --- IDE / Editor ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Project: logs & per-run outputs ---
+logs/
+training_curves*.png
+trajectory_plot*.png
+*_trajectory.gif
+trajectory_animation*.gif
+
+# Keep one curated demo GIF (committed manually if desired)
+!demo/*.gif
+
+# --- Project: copyrighted papers / reference PDFs ---
+*.pdf
+gerekli olabilecek makaleler/
+
+# --- Project: large temporary files ---
+*.tmp
+*.bak
+
+# --- Jupyter ---
+.ipynb_checkpoints/

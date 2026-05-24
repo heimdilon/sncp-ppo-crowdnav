@@ -1,0 +1,18 @@
+# SNCP-PPO Social Navigation — Python dependencies
+# Tested with Python 3.11.
+
+# Deep learning framework
+torch>=2.0
+
+# Liquid Time Constant networks (custom recurrent cells used by SNCPPolicy)
+ncps>=0.0.5
+
+# RL environment API
+gymnasium>=0.29
+
+# Numerical computing
+numpy>=1.24
+
+# Plotting and GIF generation for trajectory visualization
+matplotlib>=3.7
+pillow>=10.0
