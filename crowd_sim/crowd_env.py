@@ -101,8 +101,14 @@ class CrowdSimEnv(gym.Env):
         
         if scenario_type == 'circle':
             radius = 4.0
+            # Offset by π/N so the i-th spawn angle is (i + 0.5) * 2π/N. This
+            # keeps every human at least radius·sin(π/N) away from the robot
+            # spawn (0,-4) and the goal (0,+4) for any N. The old i·2π/N
+            # collided catastrophically at N=4: human 1 spawned at the goal
+            # and human 3 spawned on top of the robot → 100% collision on
+            # step 1 throughout the HARD curriculum phase.
             for i in range(self.num_humans):
-                angle = i * 2.0 * np.pi / self.num_humans
+                angle = (i + 0.5) * 2.0 * np.pi / self.num_humans
                 angle += np.random.uniform(-0.1, 0.1)
                 self.humans_px[i] = radius * np.cos(angle)
                 self.humans_py[i] = radius * np.sin(angle)
@@ -291,9 +297,13 @@ class CrowdSimEnv(gym.Env):
         timeout = self.current_time >= self.max_time
         
         # Calculate Reward components
-        # 1. Goal approaching reward (Eq. 18)
+        # 1. Goal approaching reward (Eq. 18). Terminal goal reward raised to
+        # 50.0 (from 20.0) so the value of a successful episode dominates the
+        # "wait out the timeout" attractor — at 20.0 the agent was learning to
+        # avoid collisions (-20) by stalling for ~60 s and accepting a -80
+        # timeout cost, which is locally cheaper than committing to a path.
         if reached_goal:
-            r_g = 20.0
+            r_g = 50.0
         else:
             prev_dist_to_goal = np.hypot(prev_rx - self.robot_gx, prev_ry - self.robot_gy)
             r_g = 10.0 * (prev_dist_to_goal - dist_to_goal)
