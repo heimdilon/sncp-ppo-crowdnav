@@ -321,8 +321,13 @@ class CrowdSimEnv(gym.Env):
         I_sp = self._compute_social_pressure()
         r_s = -0.5 * I_sp / max(1, self.num_humans)
         
-        # 4. Standstill penalty to prevent robot from staying still (v_linear < 0.05)
-        r_still = -0.5 if v < 0.05 else 0.0
+        # 4. Standstill penalty to prevent robot from staying still.
+        # Threshold lowered to 0.03 and magnitude reduced 10× so that the
+        # penalty is not triggered by Gaussian-sample variance when v_mu is
+        # near zero (P(v < 0.05 | N(0.13, 0.135)) ≈ 28%, plus the clip-to-0
+        # mass from negative samples pushes effective P ≥ 40%, drowning the
+        # approach reward).
+        r_still = -0.05 if v < 0.03 else 0.0
         
         reward = r_g + r_c + r_s + r_still
         
