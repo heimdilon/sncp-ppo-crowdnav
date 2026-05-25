@@ -58,10 +58,12 @@ class SNCPPolicy(nn.Module):
         )
         # Initial std scaled per action dimension to avoid wasted clipping.
         # Linear v in [0, 0.26]: exp(-2.0) ≈ 0.135 → ~half-range exploration.
-        # Angular w in [-1.8, 1.8]: exp(-0.5) ≈ 0.607 → ~17% range exploration.
-        # Old default [0.0, 0.0] gave std=1.0 — 4× the linear-velocity range,
-        # so most samples were clipped and the PPO ratio was effectively dead.
-        self.actor_logstd = nn.Parameter(torch.tensor([[-2.0, -0.5]]), requires_grad=True)
+        # Angular w in [-1.8, 1.8]: exp(-1.5) ≈ 0.22 — kept small so that
+        # σθ per step = 0.22 · 0.25 ≈ 3.2° and the 240-step heading random
+        # walk stays under ~50°. With the old exp(-0.5) ≈ 0.607 the heading
+        # drift was ~135° per episode and the robot could not maintain
+        # orientation toward the goal.
+        self.actor_logstd = nn.Parameter(torch.tensor([[-2.0, -1.5]]), requires_grad=True)
         
         self.critic = nn.Sequential(
             nn.Linear(256, 64),
@@ -85,7 +87,14 @@ class SNCPPolicy(nn.Module):
         for m in linears[:-1]:
             _orthogonal_linear(m, gain=sqrt2)
         _orthogonal_linear(linears[-1], gain=0.01)
-        
+        # Bias the linear-velocity pre-activation so sigmoid(2.0)·vpref ≈ 0.88·vpref
+        # at init (~0.23 m/s vs the old 0.13 m/s = sigmoid(0)·vpref). The robot
+        # needs ≥0.133 m/s to cover the 8 m goal distance within max_time = 60 s;
+        # the old default was right on the timeout cliff so the agent never
+        # received a goal-reward signal to bootstrap learning.
+        with torch.no_grad():
+            linears[-1].bias.data.copy_(torch.tensor([2.0, 0.0]))
+
         linears = [m for m in self.critic if isinstance(m, nn.Linear)]
         for m in linears[:-1]:
             _orthogonal_linear(m, gain=sqrt2)
