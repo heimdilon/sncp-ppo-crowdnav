@@ -136,7 +136,16 @@ def train(args):
         lr_end_factor=args.lr_end_factor,
     )
 
-    os.makedirs(os.path.dirname(args.save_path), exist_ok=True)
+    # Defensive: if `checkpoints` exists as a *file* (e.g. left over from a
+    # crashed run or a Colab artifact), os.makedirs would raise FileExistsError
+    # even with exist_ok=True. Remove the stray file before recreating.
+    ckpt_dir = os.path.dirname(args.save_path)
+    if ckpt_dir:
+        if os.path.exists(ckpt_dir) and not os.path.isdir(ckpt_dir):
+            os.remove(ckpt_dir)
+        os.makedirs(ckpt_dir, exist_ok=True)
+    if os.path.exists('logs') and not os.path.isdir('logs'):
+        os.remove('logs')
     os.makedirs('logs', exist_ok=True)
     log_path = os.path.join('logs', f"training_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
     csv_file = open(log_path, 'w', newline='')
