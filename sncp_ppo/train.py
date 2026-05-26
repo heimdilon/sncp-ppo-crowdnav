@@ -408,15 +408,17 @@ if __name__ == '__main__':
                         help='Subsequence length for BPTT through the LTC cells.')
     parser.add_argument('--update_freq', type=int, default=5,
                         help='Episodes between PPO updates.')
-    parser.add_argument('--curriculum_replay_ratio', type=float, default=0.2,
-                        help='Fraction of PPO update windows that re-sample a '
+    parser.add_argument('--curriculum_replay_ratio', type=float, default=0.0,
+                        help='[EXPERIMENTAL — default off after v5 regression] '
+                             'Fraction of PPO update windows that re-sample a '
                              'uniformly-random earlier curriculum phase instead '
-                             'of training on the current one. 0 disables replay '
-                             '(old behavior); 0.2 has each window draw replay '
-                             'with 20%% probability, which prevents the policy '
-                             'from forgetting low-density (N=1,2) scenarios '
-                             'while still spending ~80%% of its budget on the '
-                             'current phase.')
+                             'of training on the current one. The intent was to '
+                             'prevent forgetting of low-density (N=1,2) scenarios. '
+                             'Empirically at 0.2 this stole ~20%% of phase-specific '
+                             'sample budget AND contaminated the return-RMS '
+                             'normalizer with mixed-distribution returns, killing '
+                             'HARD-phase learning (rolling success 85%% → 10%%). '
+                             'Kept opt-in for experiments; set to 0 by default.')
 
     # Curriculum thresholds (inclusive) — 5-phase: 10%/25%/50%/75%/100%
     parser.add_argument('--curriculum_easy_until', type=int, default=None,
