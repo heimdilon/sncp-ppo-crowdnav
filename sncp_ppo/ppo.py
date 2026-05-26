@@ -4,6 +4,40 @@ import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
 
+
+class RunningMeanStd:
+    """Welford's online mean/variance estimator. Used to normalize the GAE
+    return targets so the critic MSE loss isn't dominated by reward outliers
+    (e.g. the +50 goal terminal vs the +5·Δd dense shaping vs the -25
+    collision). PPO best practice — see Engstrom et al. 2020
+    "Implementation Matters in Deep Policy Gradients"."""
+
+    def __init__(self):
+        self.mean = 0.0
+        self.var = 1.0
+        self.count = 1e-4
+
+    def update(self, x):
+        x = np.asarray(x, dtype=np.float64).flatten()
+        if x.size == 0:
+            return
+        batch_mean = float(x.mean())
+        batch_var = float(x.var())
+        batch_count = float(x.size)
+        delta = batch_mean - self.mean
+        tot = self.count + batch_count
+        self.mean = self.mean + delta * batch_count / tot
+        m_a = self.var * self.count
+        m_b = batch_var * batch_count
+        m2 = m_a + m_b + (delta ** 2) * self.count * batch_count / tot
+        self.var = m2 / tot
+        self.count = tot
+
+    @property
+    def std(self):
+        return float(max(np.sqrt(self.var), 1e-6))
+
+
 class PPOMemory:
     """
     Stores transitions from multiple episodes, tracking episode boundaries
@@ -110,12 +144,18 @@ class PPOMemory:
 class PPOAgent:
     def __init__(self, policy, lr=1e-4, gamma=0.99, gae_lambda=0.95, clip_eps=0.2,
                  c1=0.5, c2=0.01, epochs=4, batch_size=64, seq_len=16,
-                 total_updates=None, lr_end_factor=0.1):
+                 total_updates=None, lr_end_factor=0.1, target_kl=0.015,
+                 normalize_returns=True):
         """
         total_updates: if given, attaches a LinearLR scheduler that decays the
             learning rate from `lr` to `lr * lr_end_factor` linearly across
             `total_updates` calls to update(). Smooths value-function transitions
             across curriculum shifts.
+        target_kl: approximate KL above which a PPO update epoch early-stops.
+            Set to None to disable. 0.015 is the CleanRL / SB3 default.
+        normalize_returns: if True, scale GAE returns by a running std before
+            computing the value loss. Stabilizes the critic when reward magnitudes
+            change across curriculum phases (e.g. +50 goal vs -25 collision).
         """
         self.policy = policy
         self.optimizer = optim.Adam(self.policy.parameters(), lr=lr)
@@ -126,8 +166,16 @@ class PPOAgent:
         self.c2 = c2
         self.epochs = epochs
         self.batch_size = batch_size
-        self.seq_len = seq_len  # sub-sequence length for BPTT
+        self.seq_len = seq_len
+        self.target_kl = target_kl
+        self.normalize_returns = normalize_returns
+        self.return_rms = RunningMeanStd()
         self.memory = PPOMemory()
+        # Last-update diagnostics for logging from train.py
+        self.last_entropy = 0.0
+        self.last_approx_kl = 0.0
+        self.last_clip_frac = 0.0
+        self.last_epochs_ran = 0
 
         if total_updates is not None and total_updates > 0:
             self.scheduler = optim.lr_scheduler.LinearLR(
@@ -330,24 +378,48 @@ class PPOAgent:
             self.memory.episode_lengths,
             self.memory.episode_bootstrap_values,
         )
+
+        # Return normalization: scale returns by a running std so the critic
+        # MSE loss stays in a stable magnitude across curriculum phases. The
+        # behavior critic targets `values` are also rescaled by the *same*
+        # divisor — they were produced under the previous normalizer state
+        # but the clipped value loss compares them on the same scale, so we
+        # apply the current divisor to both.
+        if self.normalize_returns:
+            self.return_rms.update(returns.detach().cpu().numpy())
+            ret_std = self.return_rms.std
+            returns = returns / ret_std
+            values = values / ret_std
+
         # Normalize advantages
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-        
+
         # 2. Extract subsequences for BPTT (values plumbed for clipped value loss)
         seqs = self._extract_subsequences(obs, h_states, actions, old_log_probs,
                                           advantages, returns, values, device)
-        
+
         if seqs is None:
             self.memory.clear()
             return
-        
+
         num_seqs = seqs['obs_rn'].shape[0]
         S = self.seq_len
         num_humans = seqs['obs_se'].shape[2]
-        
+
+        # Per-epoch diagnostics — populated from the last batch of each epoch
+        # so we can early-stop on KL and surface entropy/clip-fraction to train.
+        epoch_kl = 0.0
+        epoch_entropy = 0.0
+        epoch_clip_frac = 0.0
+        epochs_ran = 0
+        kl_break = False
+
         # 3. PPO Update Epochs
-        for _ in range(self.epochs):
+        for epoch in range(self.epochs):
             perm = torch.randperm(num_seqs)
+            batch_kls = []
+            batch_entropies = []
+            batch_clip_fracs = []
             
             for batch_start in range(0, num_seqs, self.batch_size):
                 batch_idx = perm[batch_start:batch_start + self.batch_size]
@@ -426,12 +498,24 @@ class PPOAgent:
                 
                 # Apply valid mask
                 ratio = torch.exp(new_log_probs - b_old_lp)
-                
+
                 surr1 = ratio * b_adv
                 surr2 = torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * b_adv
-                
+
                 # Masked losses
                 actor_loss = -(torch.min(surr1, surr2) * valid_mask).sum() / valid_mask.sum()
+
+                # Diagnostics — approximate KL (Schulman 2020 "Approximating KL
+                # Divergence"), entropy, and the fraction of ratios that hit the
+                # clip. Computed under no_grad to avoid memory bloat.
+                with torch.no_grad():
+                    log_ratio = new_log_probs - b_old_lp
+                    approx_kl = (((torch.exp(log_ratio) - 1) - log_ratio) * valid_mask).sum() / valid_mask.sum()
+                    ent_mean = (entropy * valid_mask).sum() / valid_mask.sum()
+                    clip_frac = (((ratio - 1.0).abs() > self.clip_eps).float() * valid_mask).sum() / valid_mask.sum()
+                    batch_kls.append(approx_kl.item())
+                    batch_entropies.append(ent_mean.item())
+                    batch_clip_fracs.append(clip_frac.item())
 
                 # Clipped value loss (OpenAI / CleanRL standard): prevents the
                 # critic from moving more than clip_eps per step away from the
@@ -453,7 +537,25 @@ class PPOAgent:
                 loss.backward()
                 nn.utils.clip_grad_norm_(self.policy.parameters(), max_norm=0.5)
                 self.optimizer.step()
-                
+
+            epochs_ran = epoch + 1
+            if batch_kls:
+                epoch_kl = float(np.mean(batch_kls))
+                epoch_entropy = float(np.mean(batch_entropies))
+                epoch_clip_frac = float(np.mean(batch_clip_fracs))
+            # KL early stopping — prevent the policy from drifting too far in
+            # a single update. Threshold 1.5 × target_kl matches the OpenAI
+            # spinning-up / CleanRL convention.
+            if self.target_kl is not None and epoch_kl > 1.5 * self.target_kl:
+                kl_break = True
+                break
+
+        # Persist diagnostics for the training loop to log.
+        self.last_entropy = epoch_entropy
+        self.last_approx_kl = epoch_kl
+        self.last_clip_frac = epoch_clip_frac
+        self.last_epochs_ran = epochs_ran
+
         # Decay learning rate per update if a scheduler is attached
         if self.scheduler is not None:
             self.scheduler.step()

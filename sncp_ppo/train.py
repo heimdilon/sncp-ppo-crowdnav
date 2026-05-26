@@ -172,15 +172,19 @@ def train(args):
     comfort_history = []
     reward_history = []
 
-    # Curriculum schedule (5 phases, monotone N=1..5 and vpref 0.15..0.50)
-    # Smoother than the old 1→3→5 jumps to reduce catastrophic forgetting and
-    # value-function shock at phase boundaries.
+    # Curriculum schedule (4 phases on the 'circle' pattern). The previous
+    # 5-phase schedule ended with an EXTREME phase that switched to 'random'
+    # human spawn; this created a distribution shift the policy could not
+    # adapt to in the time remaining, and reward actively deteriorated
+    # (-26 → -90 over 360 episodes) — classic catastrophic forgetting on
+    # out-of-distribution data. Five humans at vpref 0.50 on the (well-tested)
+    # circle pattern is already a hard generalist target.
     curriculum = [
         (args.curriculum_easy_until,       'easy',      0.15, 1),
         (args.curriculum_easy_plus_until,  'easy_plus', 0.20, 2),
         (args.curriculum_medium_until,     'medium',    0.30, 3),
         (args.curriculum_hard_until,       'hard',      0.40, 4),
-        (args.episodes,                    'extreme',   0.50, 5),
+        (args.episodes,                    'circle',    0.50, args.num_humans),
     ]
 
     print("\nStarting SNCP-PPO training with curriculum learning...")
@@ -319,7 +323,6 @@ def train(args):
                     f"Steps: {total_steps:7d} | Reward: {avg_reward:7.2f} | "
                     f"Success: {avg_success:5.1%} | Collision: {avg_collision:5.1%} | "
                     f"Comfort: {avg_comfort:6.2f}")
-            # Show last holdout per scenario (if any eval has happened)
             ho_summary = " ".join(
                 f"{sc[:3]}:{r['success_rate']:.0%}"
                 for sc, r in last_holdout_per_scenario.items()
@@ -327,6 +330,15 @@ def train(args):
             )
             if ho_summary:
                 line += f" | Hold[{ho_summary}]"
+            # PPO diagnostics from the most recent update — reveals policy
+            # collapse (ent→0), exploding KL, or stuck std before the holdout
+            # metrics catch up.
+            with torch.no_grad():
+                std = policy.actor_logstd.exp().squeeze().cpu().numpy()
+            line += (f" | ent={agent.last_entropy:+.2f}"
+                     f" kl={agent.last_approx_kl:.3f}"
+                     f" std=[{std[0]:.2f},{std[1]:.2f}]"
+                     f" rms={agent.return_rms.std:.1f}")
             print(line)
 
         # Periodic checkpoints
