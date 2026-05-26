@@ -90,7 +90,7 @@ def run_and_animate_scenario(scenario_name, model_path='checkpoints/sncp_ppo.pt'
             print(f"   Trial {ep+1}: Reached: {info['success']} | Collision: {info['collision']}")
             
     if not success_found:
-        print(f"Could not find a successful episode in {max_eval_episodes} evaluation runs for {scenario_name}.")
+        print(f"Could not find a successful episode in {max_search_episodes} evaluation runs for {scenario_name}.")
         return
         
     print("Generating animation frames...")

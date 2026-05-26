@@ -106,7 +106,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_humans', type=int, default=5,
                         help='Must match training num_humans for fair comparison.')
     parser.add_argument('--scenario', type=str, default='circle',
-                        choices=['easy', 'medium', 'hard', 'extreme', 'circle', 'random'])
+                        choices=['easy', 'easy_plus', 'medium', 'hard', 'extreme', 'circle', 'random'])
     parser.add_argument('--n_episodes', type=int, default=20)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--verbose', action='store_true', help='Print per-step trace.')
