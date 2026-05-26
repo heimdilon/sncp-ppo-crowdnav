@@ -192,6 +192,8 @@ def train(args):
     print(f"LR: {args.lr:.1e} -> {args.lr * args.lr_end_factor:.1e} over ~{total_updates} updates")
     print(f"Curriculum: " + " | ".join(
         f"{sc}<={thr} (N={n})" for thr, sc, _, n in curriculum))
+    print(f"Replay ratio: {args.curriculum_replay_ratio:.0%} of update windows "
+          f"sample an earlier phase (anti-forgetting)")
     print(f"Holdout: {args.holdout_episodes} eps × {args.holdout_scenarios} every "
           f"{args.eval_freq} eps (best ckpt = min(success))")
     print("-" * 90)
@@ -202,14 +204,36 @@ def train(args):
     )
 
     total_steps = 0
+    # Persist the chosen phase across an entire PPO update window so a single
+    # rollout buffer stays single-N (avoids shape mismatches in _extract_subsequences).
+    window_phase = curriculum[0]
+    window_is_replay = False
 
     for episode in range(1, args.episodes + 1):
-        # Determine current curriculum phase
-        target_scenario, target_vpref, target_num_humans = curriculum[-1][1:]
-        for threshold, scenario, vpref, n_h in curriculum:
-            if episode <= threshold:
-                target_scenario, target_vpref, target_num_humans = scenario, vpref, n_h
-                break
+        # At the start of every update window, pick this window's phase.
+        # With prob (1 - replay_ratio) use the current curriculum phase;
+        # otherwise sample a uniformly-random *earlier* phase as replay.
+        # This prevents catastrophic forgetting of low-density scenarios: in
+        # the v3 run the policy trained ~1350 episodes on N=3..5 and lost
+        # the N=1 'easy' skill (test_eval scored 6% on 1-human after a
+        # successful 81% on 5-human hard).
+        if episode == 1 or ((episode - 1) % args.update_freq == 0):
+            current_phase_idx = len(curriculum) - 1
+            for idx, (threshold, _, _, _) in enumerate(curriculum):
+                if episode <= threshold:
+                    current_phase_idx = idx
+                    break
+            if (args.curriculum_replay_ratio > 0
+                    and current_phase_idx > 0
+                    and random.random() < args.curriculum_replay_ratio):
+                replay_idx = random.randint(0, current_phase_idx - 1)
+                window_phase = curriculum[replay_idx]
+                window_is_replay = True
+            else:
+                window_phase = curriculum[current_phase_idx]
+                window_is_replay = False
+
+        target_scenario, target_vpref, target_num_humans = window_phase[1:]
 
         # If phase changed, flush memory (only num_humans matters for obs shape).
         # vpref is excluded from the equality check because env.reset() will
@@ -319,7 +343,9 @@ def train(args):
             avg_collision = np.mean(collision_history[-window:])
             avg_comfort = np.mean(comfort_history[-window:])
 
-            line = (f"Ep {episode:4d}/{args.episodes} [{env.scenario.upper():9s} {env.num_humans}h] | "
+            replay_mark = "R" if window_is_replay else " "
+            line = (f"Ep {episode:4d}/{args.episodes} "
+                    f"[{replay_mark} {env.scenario.upper():9s} {env.num_humans}h] | "
                     f"Steps: {total_steps:7d} | Reward: {avg_reward:7.2f} | "
                     f"Success: {avg_success:5.1%} | Collision: {avg_collision:5.1%} | "
                     f"Comfort: {avg_comfort:6.2f}")
@@ -382,6 +408,15 @@ if __name__ == '__main__':
                         help='Subsequence length for BPTT through the LTC cells.')
     parser.add_argument('--update_freq', type=int, default=5,
                         help='Episodes between PPO updates.')
+    parser.add_argument('--curriculum_replay_ratio', type=float, default=0.2,
+                        help='Fraction of PPO update windows that re-sample a '
+                             'uniformly-random earlier curriculum phase instead '
+                             'of training on the current one. 0 disables replay '
+                             '(old behavior); 0.2 has each window draw replay '
+                             'with 20%% probability, which prevents the policy '
+                             'from forgetting low-density (N=1,2) scenarios '
+                             'while still spending ~80%% of its budget on the '
+                             'current phase.')
 
     # Curriculum thresholds (inclusive) — 5-phase: 10%/25%/50%/75%/100%
     parser.add_argument('--curriculum_easy_until', type=int, default=None,
