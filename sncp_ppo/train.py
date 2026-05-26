@@ -335,10 +335,10 @@ def train(args):
             # metrics catch up.
             with torch.no_grad():
                 std = policy.actor_logstd.exp().squeeze().cpu().numpy()
-            line += (f" | ent={agent.last_entropy:+.2f}"
-                     f" kl={agent.last_approx_kl:.3f}"
-                     f" std=[{std[0]:.2f},{std[1]:.2f}]"
-                     f" rms={agent.return_rms.std:.1f}")
+            line += (f" | ent={agent.last_entropy:+.3f}"
+                     f" kl={agent.last_approx_kl:.5f}"
+                     f" std=[{std[0]:.3f},{std[1]:.3f}]"
+                     f" rms={agent.return_rms.std:.2f}")
             print(line)
 
         # Periodic checkpoints
