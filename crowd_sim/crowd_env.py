@@ -101,14 +101,26 @@ class CrowdSimEnv(gym.Env):
         
         if scenario_type == 'circle':
             radius = 4.0
-            # Offset by π/N so the i-th spawn angle is (i + 0.5) * 2π/N. This
-            # keeps every human at least radius·sin(π/N) away from the robot
-            # spawn (0,-4) and the goal (0,+4) for any N. The old i·2π/N
-            # collided catastrophically at N=4: human 1 spawned at the goal
-            # and human 3 spawned on top of the robot → 100% collision on
-            # step 1 throughout the HARD curriculum phase.
+            # Spawn humans on a circle, but for each i check that the resulting
+            # position is at least min_safe away from the robot start (0,-4)
+            # and the goal (0,+4). If it isn't, shift the angle by π/N so the
+            # spawn lands mid-segment instead.
+            #
+            # History: the old i·2π/N placement put human 1 on the goal and
+            # human 3 on the robot at N=4 → 100% collision on step 1 through
+            # the entire HARD phase. A previous fix used (i+0.5)·2π/N globally,
+            # which fixed N=4 but BROKE N=2: it pushed human 0 to (0,+4) and
+            # human 1 to (0,-4) → same 1-step collision in EASY_PLUS. The
+            # per-spawn safety check handles every N correctly.
+            min_safe = self.robot_radius + self.human_radius + 0.5  # 1.1 m
             for i in range(self.num_humans):
-                angle = (i + 0.5) * 2.0 * np.pi / self.num_humans
+                angle = i * 2.0 * np.pi / self.num_humans
+                px = radius * np.cos(angle)
+                py = radius * np.sin(angle)
+                d_robot = np.hypot(px - self.robot_px, py - self.robot_py)
+                d_goal = np.hypot(px - self.robot_gx, py - self.robot_gy)
+                if d_robot < min_safe or d_goal < min_safe:
+                    angle = (i + 0.5) * 2.0 * np.pi / self.num_humans
                 angle += np.random.uniform(-0.1, 0.1)
                 self.humans_px[i] = radius * np.cos(angle)
                 self.humans_py[i] = radius * np.sin(angle)
@@ -297,13 +309,16 @@ class CrowdSimEnv(gym.Env):
         timeout = self.current_time >= self.max_time
         
         # Calculate Reward components
-        # 1. Goal approaching reward (Eq. 18). Terminal goal reward raised to
-        # 50.0 (from 20.0) so the value of a successful episode dominates the
-        # "wait out the timeout" attractor — at 20.0 the agent was learning to
-        # avoid collisions (-20) by stalling for ~60 s and accepting a -80
-        # timeout cost, which is locally cheaper than committing to a path.
+        # 1. Goal approaching reward (Eq. 18). Terminal goal reward set to
+        # 100.0 so a successful episode dominates the "wait out the timeout"
+        # attractor: medium/hard rollouts were stabilizing around a -65
+        # timeout reward, which is cheaper than the -20 collision and was
+        # being preferred over committing to a path. At +20 stalling won
+        # locally; at +50 it was close; at +100 a single success is worth
+        # ~6× a timeout, so the value function has a real incentive to
+        # explore goal-reaching trajectories.
         if reached_goal:
-            r_g = 50.0
+            r_g = 100.0
         else:
             prev_dist_to_goal = np.hypot(prev_rx - self.robot_gx, prev_ry - self.robot_gy)
             r_g = 10.0 * (prev_dist_to_goal - dist_to_goal)
