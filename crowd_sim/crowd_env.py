@@ -309,31 +309,33 @@ class CrowdSimEnv(gym.Env):
         timeout = self.current_time >= self.max_time
         
         # Calculate Reward components
-        # 1. Goal approaching reward (Eq. 18). Terminal goal reward set to
-        # 100.0 so a successful episode dominates the "wait out the timeout"
-        # attractor: medium/hard rollouts were stabilizing around a -65
-        # timeout reward, which is cheaper than the -20 collision and was
-        # being preferred over committing to a path. At +20 stalling won
-        # locally; at +50 it was close; at +100 a single success is worth
-        # ~6× a timeout, so the value function has a real incentive to
-        # explore goal-reaching trajectories.
+        # 1. Goal approaching reward. Terminal goal = +50 (a single success is
+        # worth ~3× a typical timeout reward, enough to dominate the stall
+        # attractor without making collision -20 look "affordable" relative to
+        # +100 — the 100.0 setting caused HARD-phase collision rates to spike
+        # to 65-95% as agents charged through humans toward the goal).
+        # Approach coefficient lowered 10 → 5 so the dense shaping does not
+        # drown out the sparse goal signal. Orientation penalty weight 0.3 →
+        # 0.05 so that the maximum per-step orientation cost (~0.15) stays
+        # well under the maximum per-step approach reward (~0.33 at v_max),
+        # preventing the "rotate toward goal but don't move" equilibrium.
         if reached_goal:
-            r_g = 100.0
+            r_g = 50.0
         else:
             prev_dist_to_goal = np.hypot(prev_rx - self.robot_gx, prev_ry - self.robot_gy)
-            r_g = 10.0 * (prev_dist_to_goal - dist_to_goal)
-            
-            # Add context-aware orientation penalty
+            r_g = 5.0 * (prev_dist_to_goal - dist_to_goal)
+
             angle_to_goal = np.arctan2(self.robot_gy - self.robot_py, self.robot_gx - self.robot_px)
             angle_diff = angle_to_goal - self.robot_theta
             angle_diff = (angle_diff + np.pi) % (2.0 * np.pi) - np.pi
-            # Scale weight dynamically based on d_min (0.6m collision threshold, 2.0m clear path threshold)
-            weight = 0.3 * np.clip((d_min - 0.6) / 1.4, 0.0, 1.0)
+            weight = 0.05 * np.clip((d_min - 0.6) / 1.4, 0.0, 1.0)
             r_g -= weight * np.abs(angle_diff)
-            
-        # 2. Collision penalty (Eq. 19)
+
+        # 2. Collision penalty. Raised 20 → 25 to keep deterrence after the
+        # goal reward was reduced 100 → 50; ratio collision/goal stays similar
+        # so the agent's risk/reward tradeoff is unchanged.
         if collision:
-            r_c = -20.0
+            r_c = -25.0
         else:
             r_c = 0.0
             
@@ -346,13 +348,12 @@ class CrowdSimEnv(gym.Env):
         I_sp = self._compute_social_pressure()
         r_s = -0.5 * I_sp / max(1, self.num_humans)
         
-        # 4. Standstill penalty to prevent robot from staying still.
-        # Threshold lowered to 0.03 and magnitude reduced 10× so that the
-        # penalty is not triggered by Gaussian-sample variance when v_mu is
-        # near zero (P(v < 0.05 | N(0.13, 0.135)) ≈ 28%, plus the clip-to-0
-        # mass from negative samples pushes effective P ≥ 40%, drowning the
-        # approach reward).
-        r_still = -0.05 if v < 0.03 else 0.0
+        # 4. Standstill penalty removed. Even the softened -0.05 / v<0.03
+        # version was sampling-driven (negative Normal samples clip to 0 and
+        # trigger it) rather than policy-driven. With approach coefficient
+        # now 5.0, a stalled agent simply collects zero approach reward —
+        # that's already the right signal.
+        r_still = 0.0
         
         reward = r_g + r_c + r_s + r_still
         
