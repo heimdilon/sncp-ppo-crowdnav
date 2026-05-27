@@ -158,6 +158,7 @@ def train(args):
     csv_writer.writerow([
         'episode', 'scenario', 'num_humans', 'human_vpref', 'steps', 'reward',
         'success', 'collision', 'timeout', 'comfort',
+        'is_best_checkpoint', 'best_reason',
     ] + holdout_cols)
     print(f"CSV log: {log_path}")
 
@@ -166,6 +167,8 @@ def train(args):
                   'timeout_rate': float('nan'), 'avg_reward': float('nan')}
     last_holdout_per_scenario = {sc: dict(nan_result) for sc in args.holdout_scenarios}
     best_holdout_min_success = -1.0  # generalist metric: min across scenarios
+    best_holdout_score = (-1.0, -float('inf'), -float('inf'))  # (min_success, avg_reward, -collision_rate)
+    holdout_eval_count = 0
 
     success_history = []
     collision_history = []
@@ -302,6 +305,8 @@ def train(args):
 
         # Multi-scenario holdout evaluation
         ran_eval = False
+        is_best_checkpoint = 0
+        best_reason = ''
         if episode % args.eval_freq == 0:
             for sc in args.holdout_scenarios:
                 last_holdout_per_scenario[sc] = evaluate_holdout(
@@ -311,17 +316,40 @@ def train(args):
                     base_seed=args.seed + 10_000 + episode,
                 )
             ran_eval = True
+            holdout_eval_count += 1
 
             # Generalist metric: min success across all holdout scenarios.
             # Refuses to crown "100% on easy, 0% on hard" as a 50% best.
             min_success = min(r['success_rate'] for r in last_holdout_per_scenario.values())
-            if min_success > best_holdout_min_success:
+            avg_reward = float(np.mean([r['avg_reward'] for r in last_holdout_per_scenario.values()]))
+            avg_collision = float(np.mean([r['collision_rate'] for r in last_holdout_per_scenario.values()]))
+            current_score = (min_success, avg_reward, -avg_collision)
+
+            if holdout_eval_count <= args.best_warmup_evals:
+                best_reason = (f"best skipped due to warmup "
+                               f"(eval {holdout_eval_count}/{args.best_warmup_evals})")
+                print(f"  --> {best_reason}: min={min_success:.1%}, "
+                      f"avg_reward={avg_reward:.3f}, collision={avg_collision:.1%}")
+            elif min_success < args.best_min_success_threshold:
+                best_reason = (f"best skipped due to threshold "
+                               f"(min_success={min_success:.1%} < {args.best_min_success_threshold:.1%})")
+                print(f"  --> {best_reason}")
+            elif current_score > best_holdout_score:
                 best_holdout_min_success = min_success
+                best_holdout_score = current_score
                 torch.save(policy.state_dict(), args.save_path)
+                is_best_checkpoint = 1
+                best_reason = ('best updated (priority: min_success, tie-break: avg_reward, '
+                               'then lower collision_rate)')
                 per_sc = {sc: f"{r['success_rate']:.0%}"
                           for sc, r in last_holdout_per_scenario.items()}
-                print(f"  --> New best generalist min={min_success:.1%} {per_sc}, "
+                print(f"  --> New best generalist min={min_success:.1%}, "
+                      f"avg_reward={avg_reward:.3f}, collision={avg_collision:.1%} {per_sc}, "
                       f"saved to {args.save_path}")
+            else:
+                best_reason = ('best not updated: score did not improve '
+                               '(priority: min_success, tie-break: avg_reward, lower collision_rate)')
+                print(f"  --> {best_reason}")
 
         # Per-episode CSV row (dynamic per-scenario holdout tail)
         ho_row = []
@@ -332,6 +360,7 @@ def train(args):
         csv_writer.writerow([
             episode, env.scenario, env.num_humans, env.human_vpref, step_count, f"{episode_reward:.4f}",
             int(info['success']), int(info['collision']), int(info['timeout']), f"{info['comfort']:.4f}",
+            is_best_checkpoint, best_reason,
         ] + ho_row)
         csv_file.flush()
 
@@ -444,6 +473,10 @@ if __name__ == '__main__':
     parser.add_argument('--holdout_scenario', type=str, default=None,
                         help='[Deprecated] Single-scenario alias for --holdout_scenarios. '
                              'If set, overrides --holdout_scenarios with a one-element list.')
+    parser.add_argument('--best_min_success_threshold', type=float, default=0.05,
+                        help='Minimum holdout min_success required before considering a new best checkpoint.')
+    parser.add_argument('--best_warmup_evals', type=int, default=3,
+                        help='Number of initial holdout evaluations used only for metric collection (no best save).')
 
     # Logging / checkpointing
     parser.add_argument('--log_freq', type=int, default=20)
