@@ -47,7 +47,7 @@ SCENARIO_HOLDOUT_CONFIG = {
 }
 
 
-def evaluate_holdout(env, policy, agent, device, n_episodes, scenario, base_seed):
+def evaluate_holdout(env, policy, agent, device, n_episodes, scenario, base_seed, human_dodge_robot):
     """Deterministic rollouts on a fixed holdout scenario.
 
     Used to track real generalization instead of the curriculum-window
@@ -61,11 +61,13 @@ def evaluate_holdout(env, policy, agent, device, n_episodes, scenario, base_seed
     prev_scenario = env.scenario
     prev_num_humans = env.num_humans
     prev_vpref = env.human_vpref
+    prev_human_dodge_robot = env.human_dodge_robot
 
     n_h, vpref = SCENARIO_HOLDOUT_CONFIG.get(scenario, (5, 0.50))
     env.scenario = scenario
     env.num_humans = n_h
     env.human_vpref = vpref
+    env.human_dodge_robot = human_dodge_robot
 
     successes = 0
     collisions = 0
@@ -99,6 +101,7 @@ def evaluate_holdout(env, policy, agent, device, n_episodes, scenario, base_seed
     env.scenario = prev_scenario
     env.num_humans = prev_num_humans
     env.human_vpref = prev_vpref
+    env.human_dodge_robot = prev_human_dodge_robot
 
     return {
         'success_rate': successes / n_episodes,
@@ -114,7 +117,7 @@ def train(args):
     print(f"Using device: {device} | Seed: {args.seed}")
 
     # 1. Create environment — start with easy scenario, curriculum will change it
-    env = CrowdSimEnv(num_humans=args.num_humans, scenario='easy', human_dodge_robot=False)
+    env = CrowdSimEnv(num_humans=args.num_humans, scenario='easy', human_dodge_robot=args.human_dodge_robot)
 
     # 2. Create SNCP policy and PPO agent
     policy = SNCPPolicy(robot_vpref=env.robot_vpref, robot_wmax=env.robot_wmax).to(device)
@@ -156,7 +159,7 @@ def train(args):
         holdout_cols += [f'holdout_{sc}_success', f'holdout_{sc}_collision',
                          f'holdout_{sc}_timeout', f'holdout_{sc}_reward']
     csv_writer.writerow([
-        'episode', 'scenario', 'num_humans', 'human_vpref', 'steps', 'reward',
+        'episode', 'scenario', 'num_humans', 'human_vpref', 'human_dodge_robot', 'steps', 'reward',
         'success', 'collision', 'timeout', 'comfort',
     ] + holdout_cols)
     print(f"CSV log: {log_path}")
@@ -192,6 +195,7 @@ def train(args):
     print(f"LR: {args.lr:.1e} -> {args.lr * args.lr_end_factor:.1e} over ~{total_updates} updates")
     print(f"Curriculum: " + " | ".join(
         f"{sc}<={thr} (N={n})" for thr, sc, _, n in curriculum))
+    print(f"human_dodge_robot: {args.human_dodge_robot}")
     print(f"Replay ratio: {args.curriculum_replay_ratio:.0%} of update windows "
           f"sample an earlier phase (anti-forgetting)")
     print(f"Holdout: {args.holdout_episodes} eps × {args.holdout_scenarios} every "
@@ -254,6 +258,7 @@ def train(args):
         # Re-apply the curriculum value so e.g. 'hard' phase actually uses 0.40
         # and pedestrians move at the intended monotone-ramp speed.
         env.human_vpref = target_vpref
+        env.human_dodge_robot = args.human_dodge_robot
         h_states = policy.init_hidden(batch_size=1, num_humans=env.num_humans, device=device)
 
         episode_reward = 0.0
@@ -309,6 +314,7 @@ def train(args):
                     n_episodes=args.holdout_episodes,
                     scenario=sc,
                     base_seed=args.seed + 10_000 + episode,
+                    human_dodge_robot=args.human_dodge_robot,
                 )
             ran_eval = True
 
@@ -330,7 +336,7 @@ def train(args):
             ho_row += [f"{r['success_rate']:.4f}", f"{r['collision_rate']:.4f}",
                        f"{r['timeout_rate']:.4f}", f"{r['avg_reward']:.4f}"]
         csv_writer.writerow([
-            episode, env.scenario, env.num_humans, env.human_vpref, step_count, f"{episode_reward:.4f}",
+            episode, env.scenario, env.num_humans, env.human_vpref, int(env.human_dodge_robot), step_count, f"{episode_reward:.4f}",
             int(info['success']), int(info['collision']), int(info['timeout']), f"{info['comfort']:.4f}",
         ] + ho_row)
         csv_file.flush()
@@ -390,6 +396,10 @@ if __name__ == '__main__':
     parser.add_argument('--scenario', type=str, default='easy',
                         help='Initial env scenario (curriculum overrides).')
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--human_dodge_robot', type=lambda x: str(x).lower() in {'1', 'true', 't', 'yes', 'y'},
+                        default=True,
+                        help='Whether humans proactively dodge the robot. Default: True. '
+                             'Used consistently in both training and holdout evaluation to avoid mismatch.')
 
     # PPO hyperparameters
     parser.add_argument('--lr', type=float, default=1e-4,
