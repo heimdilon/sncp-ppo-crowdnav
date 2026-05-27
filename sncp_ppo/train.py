@@ -132,6 +132,8 @@ def train(args):
         epochs=args.epochs,
         batch_size=args.batch_size,
         seq_len=args.seq_len,
+        min_seq_len_for_train=args.min_seq_len_for_train,
+        min_training_chunks=args.min_training_chunks,
         total_updates=total_updates,
         lr_end_factor=args.lr_end_factor,
     )
@@ -298,7 +300,14 @@ def train(args):
 
         # Periodic PPO update
         if episode % args.update_freq == 0:
-            agent.update(device)
+            current_steps = len(agent.memory.actions)
+            if current_steps < args.min_transitions_per_update:
+                print(
+                    f"[PPO] skip scheduled update @ep {episode}: "
+                    f"insufficient transitions ({current_steps} < {args.min_transitions_per_update})"
+                )
+            else:
+                agent.update(device)
 
         # Multi-scenario holdout evaluation
         ran_eval = False
@@ -406,8 +415,18 @@ if __name__ == '__main__':
                         help='Mini-batch size in number of BPTT subsequences.')
     parser.add_argument('--seq_len', type=int, default=16,
                         help='Subsequence length for BPTT through the LTC cells.')
-    parser.add_argument('--update_freq', type=int, default=5,
+    parser.add_argument('--update_freq', type=int, default=12,
                         help='Episodes between PPO updates.')
+    parser.add_argument('--min_transitions_per_update', type=int, default=0,
+                        help='Minimum rollout transitions required before running PPO update. '
+                             'If fewer transitions are collected in a scheduled window, '
+                             'the update is skipped.')
+    parser.add_argument('--min_seq_len_for_train', type=int, default=4,
+                        help='Minimum fragment length kept by subsequence extraction. '
+                             'Shorter fragments are dropped before BPTT training.')
+    parser.add_argument('--min_training_chunks', type=int, default=2,
+                        help='Minimum number of extracted subsequences required for PPO update. '
+                             'If fewer chunks are produced, update is skipped.')
     parser.add_argument('--curriculum_replay_ratio', type=float, default=0.0,
                         help='[EXPERIMENTAL — default off after v5 regression] '
                              'Fraction of PPO update windows that re-sample a '

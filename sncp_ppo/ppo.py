@@ -144,6 +144,7 @@ class PPOMemory:
 class PPOAgent:
     def __init__(self, policy, lr=1e-4, gamma=0.99, gae_lambda=0.95, clip_eps=0.2,
                  c1=0.5, c2=0.01, epochs=4, batch_size=64, seq_len=16,
+                 min_seq_len_for_train=4, min_training_chunks=2,
                  total_updates=None, lr_end_factor=0.1, target_kl=0.015,
                  normalize_returns=True):
         """
@@ -167,6 +168,8 @@ class PPOAgent:
         self.epochs = epochs
         self.batch_size = batch_size
         self.seq_len = seq_len
+        self.min_seq_len_for_train = min_seq_len_for_train
+        self.min_training_chunks = min_training_chunks
         self.target_kl = target_kl
         self.normalize_returns = normalize_returns
         self.return_rms = RunningMeanStd()
@@ -176,6 +179,8 @@ class PPOAgent:
         self.last_approx_kl = 0.0
         self.last_clip_frac = 0.0
         self.last_epochs_ran = 0
+        self.last_num_training_chunks = 0
+        self.last_rollout_steps = 0
 
         if total_updates is not None and total_updates > 0:
             self.scheduler = optim.lr_scheduler.LinearLR(
@@ -296,7 +301,7 @@ class PPOAgent:
                 end = min(start + self.seq_len, ep_end)
                 actual_len = end - start
                 
-                if actual_len < 4:  # Skip very short fragments
+                if actual_len < self.min_seq_len_for_train:
                     continue
                 
                 # Pad to seq_len if needed
@@ -362,13 +367,19 @@ class PPOAgent:
             for start in range(offset, ep_end, self.seq_len):
                 end = min(start + self.seq_len, ep_end)
                 actual_len = end - start
-                if actual_len >= 4:
+                if actual_len >= self.min_seq_len_for_train:
                     result['seq_lengths'].append(actual_len)
             offset = ep_end
         
         return result
 
     def update(self, device):
+        self.last_rollout_steps = len(self.memory.actions)
+        expected_chunks = int(sum(
+            (ep_len + self.seq_len - 1) // self.seq_len
+            for ep_len in self.memory.episode_lengths
+        ))
+
         # 1. Retrieve all trajectories
         obs, h_states, actions, old_log_probs, rewards, values, masks = self.memory.get_tensors(device)
 
@@ -399,10 +410,29 @@ class PPOAgent:
                                           advantages, returns, values, device)
 
         if seqs is None:
+            self.last_num_training_chunks = 0
+            print(
+                f"[PPO] update stats: rollout_steps={self.last_rollout_steps}, "
+                f"training_chunks=0/{expected_chunks}, min_seq_len={self.min_seq_len_for_train} "
+                "-> skip update: insufficient training chunks"
+            )
             self.memory.clear()
             return
 
         num_seqs = seqs['obs_rn'].shape[0]
+        self.last_num_training_chunks = num_seqs
+        print(
+            f"[PPO] update stats: rollout_steps={self.last_rollout_steps}, "
+            f"training_chunks={num_seqs}/{expected_chunks}, min_seq_len={self.min_seq_len_for_train}"
+        )
+        if num_seqs < self.min_training_chunks:
+            print(
+                f"[PPO] skip update: insufficient training chunks "
+                f"({num_seqs} < {self.min_training_chunks})"
+            )
+            self.memory.clear()
+            return
+
         S = self.seq_len
         num_humans = seqs['obs_se'].shape[2]
 
