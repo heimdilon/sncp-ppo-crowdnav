@@ -357,12 +357,24 @@ def train(args):
             r = last_holdout_per_scenario[sc]
             ho_row += [f"{r['success_rate']:.4f}", f"{r['collision_rate']:.4f}",
                        f"{r['timeout_rate']:.4f}", f"{r['avg_reward']:.4f}"]
-        csv_writer.writerow([
-            episode, env.scenario, env.num_humans, env.human_vpref, step_count, f"{episode_reward:.4f}",
-            int(info['success']), int(info['collision']), int(info['timeout']), f"{info['comfort']:.4f}",
-            is_best_checkpoint, best_reason,
-        ] + ho_row)
-        csv_file.flush()
+        # Best-effort CSV write. On Colab the log dir sometimes lives behind a
+        # FUSE mount (Drive) that can disconnect mid-run; if the underlying
+        # write/flush fails, drop this row rather than tearing down the whole
+        # training process. The model is still being saved to args.save_path
+        # via torch.save() on holdout-best, so the run is recoverable from
+        # checkpoints even without the CSV.
+        try:
+            csv_writer.writerow([
+                episode, env.scenario, env.num_humans, env.human_vpref, step_count, f"{episode_reward:.4f}",
+                int(info['success']), int(info['collision']), int(info['timeout']), f"{info['comfort']:.4f}",
+                is_best_checkpoint, best_reason,
+            ] + ho_row)
+            csv_file.flush()
+        except OSError as e:
+            # Only warn once per session to avoid flooding the terminal.
+            if not getattr(train, '_csv_io_warned', False):
+                print(f"  [warning] CSV log write failed ({e}); continuing without per-episode logging.")
+                train._csv_io_warned = True
 
         # Stdout summary on the same cadence as before
         if episode % args.log_freq == 0:
