@@ -36,14 +36,24 @@ def _obs_to_tensor(obs, device):
 #: e.g. holdout on 'hard' evaluates 5 fast pedestrians regardless of whether
 #: the trainer is still in the N=1 easy phase. Mirrors test_eval.py defaults
 #: for hard/extreme (5 humans, vpref=0.50).
+SCENARIO_VPREF = {
+    'easy': 0.15,
+    'easy_plus': 0.20,
+    'medium': 0.30,
+    'hard': 0.50,
+    'extreme': 0.50,
+    'circle': 0.50,
+    'random': 0.50,
+}
+
 SCENARIO_HOLDOUT_CONFIG = {
-    'easy':      (1, 0.15),
-    'easy_plus': (2, 0.20),
-    'medium':    (3, 0.30),
-    'hard':      (5, 0.50),
-    'extreme':   (5, 0.50),
-    'circle':    (5, 0.50),
-    'random':    (5, 0.50),
+    'easy':      (1, SCENARIO_VPREF['easy']),
+    'easy_plus': (2, SCENARIO_VPREF['easy_plus']),
+    'medium':    (3, SCENARIO_VPREF['medium']),
+    'hard':      (5, SCENARIO_VPREF['hard']),
+    'extreme':   (5, SCENARIO_VPREF['extreme']),
+    'circle':    (5, SCENARIO_VPREF['circle']),
+    'random':    (5, SCENARIO_VPREF['random']),
 }
 
 
@@ -180,18 +190,27 @@ def train(args):
     # out-of-distribution data. Five humans at vpref 0.50 on the (well-tested)
     # circle pattern is already a hard generalist target.
     curriculum = [
-        (args.curriculum_easy_until,       'easy',      0.15, 1),
-        (args.curriculum_easy_plus_until,  'easy_plus', 0.20, 2),
-        (args.curriculum_medium_until,     'medium',    0.30, 3),
-        (args.curriculum_hard_until,       'hard',      0.40, 4),
-        (args.episodes,                    'circle',    0.50, args.num_humans),
+        (args.curriculum_easy_until,       'easy',      SCENARIO_VPREF['easy'], 1),
+        (args.curriculum_easy_plus_until,  'easy_plus', SCENARIO_VPREF['easy_plus'], 2),
+        (args.curriculum_medium_until,     'medium',    SCENARIO_VPREF['medium'], 3),
+        (args.curriculum_hard_until,       'hard',      SCENARIO_VPREF['hard'], 4),
+        (args.episodes,                    'circle',    SCENARIO_VPREF['circle'], args.num_humans),
     ]
 
     print("\nStarting SNCP-PPO training with curriculum learning...")
     print(f"Episodes: {args.episodes} | Humans (final): {args.num_humans} | Seq len: {args.seq_len}")
     print(f"LR: {args.lr:.1e} -> {args.lr * args.lr_end_factor:.1e} over ~{total_updates} updates")
     print(f"Curriculum: " + " | ".join(
-        f"{sc}<={thr} (N={n})" for thr, sc, _, n in curriculum))
+        f"{sc}<={thr} (N={n}, vpref={vpref:.2f})" for thr, sc, vpref, n in curriculum))
+
+    # Guardrail: prevent train/holdout speed drift for identical scenario names.
+    curriculum_vpref_by_scenario = {sc: vpref for _, sc, vpref, _ in curriculum}
+    for sc, vpref in curriculum_vpref_by_scenario.items():
+        if sc in SCENARIO_HOLDOUT_CONFIG:
+            holdout_vpref = SCENARIO_HOLDOUT_CONFIG[sc][1]
+            assert math.isclose(vpref, holdout_vpref, rel_tol=0.0, abs_tol=1e-12), (
+                f"Speed mismatch for scenario '{sc}': curriculum={vpref:.2f}, holdout={holdout_vpref:.2f}"
+            )
     print(f"Replay ratio: {args.curriculum_replay_ratio:.0%} of update windows "
           f"sample an earlier phase (anti-forgetting)")
     print(f"Holdout: {args.holdout_episodes} eps × {args.holdout_scenarios} every "
@@ -250,9 +269,8 @@ def train(args):
             env.num_humans = target_num_humans
 
         obs, info = env.reset(seed=args.seed + episode)
-        # env.reset() resets human_vpref to the scenario default (e.g. 'hard' -> 0.50).
-        # Re-apply the curriculum value so e.g. 'hard' phase actually uses 0.40
-        # and pedestrians move at the intended monotone-ramp speed.
+        # env.reset() resets human_vpref to scenario defaults. Re-apply the
+        # chosen curriculum value to keep phase speed explicit and consistent.
         env.human_vpref = target_vpref
         h_states = policy.init_hidden(batch_size=1, num_humans=env.num_humans, device=device)
 
@@ -345,7 +363,7 @@ def train(args):
 
             replay_mark = "R" if window_is_replay else " "
             line = (f"Ep {episode:4d}/{args.episodes} "
-                    f"[{replay_mark} {env.scenario.upper():9s} {env.num_humans}h] | "
+                    f"[{replay_mark} {env.scenario.upper():9s} {env.num_humans}h vpref={env.human_vpref:.2f}] | "
                     f"Steps: {total_steps:7d} | Reward: {avg_reward:7.2f} | "
                     f"Success: {avg_success:5.1%} | Collision: {avg_collision:5.1%} | "
                     f"Comfort: {avg_comfort:6.2f}")
