@@ -147,7 +147,8 @@ def train(args):
     if os.path.exists('logs') and not os.path.isdir('logs'):
         os.remove('logs')
     os.makedirs('logs', exist_ok=True)
-    log_path = os.path.join('logs', f"training_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+    run_id = args.run_id or datetime.now().strftime('%Y%m%d_%H%M%S')
+    log_path = args.csv_path or os.path.join('logs', f"training_{run_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
     csv_file = open(log_path, 'w', newline='')
     csv_writer = csv.writer(csv_file)
     # Dynamic CSV header: one 4-tuple per holdout scenario
@@ -440,7 +441,7 @@ if __name__ == '__main__':
                         choices=['easy', 'easy_plus', 'medium', 'hard', 'extreme', 'circle', 'random'],
                         help='Scenarios for periodic holdout eval. Best checkpoint is saved '
                              'when min(success across these) improves — rewards generalists, '
-                             'not "100% on one, 0% on the other" specialists.')
+                             'not "100%% on one, 0%% on the other" specialists.')
     parser.add_argument('--holdout_scenario', type=str, default=None,
                         help='[Deprecated] Single-scenario alias for --holdout_scenarios. '
                              'If set, overrides --holdout_scenarios with a one-element list.')
@@ -448,6 +449,10 @@ if __name__ == '__main__':
     # Logging / checkpointing
     parser.add_argument('--log_freq', type=int, default=20)
     parser.add_argument('--save_path', type=str, default='checkpoints/sncp_ppo.pt')
+    parser.add_argument('--run_id', type=str, default=None,
+                        help='Optional external run id for unique log/checkpoint naming.')
+    parser.add_argument('--csv_path', type=str, default=None,
+                        help='Optional explicit CSV output path.')
 
     args = parser.parse_args()
 

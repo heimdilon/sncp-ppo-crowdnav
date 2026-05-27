@@ -51,7 +51,7 @@ python test_model.py      # policy forward pass
 ## Training
 
 ```bash
-python -m sncp_ppo.train \
+python train_wrapper.py --save_path checkpoints/sncp_ppo.pt -- \
     --episodes 1500 \
     --num_humans 5 \
     --seed 42 \
@@ -60,7 +60,7 @@ python -m sncp_ppo.train \
     --eval_freq 50 \
     --holdout_episodes 30 \
     --holdout_scenarios easy hard \
-    --save_path checkpoints/sncp_ppo.pt
+    # --save_path wrapper tarafından run_id ile benzersizleştirilir
 ```
 
 - 5-phase curriculum (1→2→3→4→5 pedestrians) with monotone speed ramp.
