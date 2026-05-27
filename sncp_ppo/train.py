@@ -129,11 +129,15 @@ def train(args):
         gamma=args.gamma,
         gae_lambda=args.gae_lambda,
         clip_eps=args.clip_eps,
+        c2=args.c2,
         epochs=args.epochs,
         batch_size=args.batch_size,
         seq_len=args.seq_len,
         total_updates=total_updates,
         lr_end_factor=args.lr_end_factor,
+        target_kl=args.target_kl,
+        entropy_c2_init=args.entropy_c2_init,
+        entropy_c2_final=args.entropy_c2_final,
     )
 
     # Defensive: if `checkpoints` exists as a *file* (e.g. left over from a
@@ -190,6 +194,9 @@ def train(args):
     print("\nStarting SNCP-PPO training with curriculum learning...")
     print(f"Episodes: {args.episodes} | Humans (final): {args.num_humans} | Seq len: {args.seq_len}")
     print(f"LR: {args.lr:.1e} -> {args.lr * args.lr_end_factor:.1e} over ~{total_updates} updates")
+    print(f"Active profile={args.profile} | update_freq={args.update_freq} | "
+          f"epochs={args.epochs}{' (adaptive<10%=>8)' if args.rescue_adaptive_epochs else ''} | "
+          f"c2={args.entropy_c2_init:.4f}->{args.entropy_c2_final:.4f} | target_kl={args.target_kl:.5f}")
     print(f"Curriculum: " + " | ".join(
         f"{sc}<={thr} (N={n})" for thr, sc, _, n in curriculum))
     print(f"Replay ratio: {args.curriculum_replay_ratio:.0%} of update windows "
@@ -298,6 +305,12 @@ def train(args):
 
         # Periodic PPO update
         if episode % args.update_freq == 0:
+            if args.rescue_adaptive_epochs:
+                update_window = min(args.update_freq, len(success_history))
+                recent_success = float(np.mean(success_history[-update_window:])) if update_window > 0 else 0.0
+                agent.epochs = 8 if recent_success < 0.10 else args.epochs
+            else:
+                agent.epochs = args.epochs
             agent.update(device)
 
         # Multi-scenario holdout evaluation
@@ -363,6 +376,7 @@ def train(args):
                 std = policy.actor_logstd.exp().squeeze().cpu().numpy()
             line += (f" | ent={agent.last_entropy:+.3f}"
                      f" kl={agent.last_approx_kl:.5f}"
+                     f"{'!KL_STOP' if agent.last_kl_early_stop else ''}"
                      f" std=[{std[0]:.3f},{std[1]:.3f}]"
                      f" rms={agent.return_rms.std:.2f}")
             print(line)
@@ -402,12 +416,26 @@ if __name__ == '__main__':
     parser.add_argument('--clip_eps', type=float, default=0.2)
     parser.add_argument('--epochs', type=int, default=4,
                         help='PPO optimization epochs per update (standard 4-10).')
+    parser.add_argument('--target_kl', type=float, default=0.015,
+                        help='KL early-stop target; rescue profile may increase this.')
+    parser.add_argument('--c2', type=float, default=0.01,
+                        help='Entropy bonus coefficient.')
+    parser.add_argument('--entropy_c2_init', type=float, default=None,
+                        help='Initial entropy bonus coefficient (for schedule).')
+    parser.add_argument('--entropy_c2_final', type=float, default=None,
+                        help='Final entropy bonus coefficient (for schedule).')
     parser.add_argument('--batch_size', type=int, default=16,
                         help='Mini-batch size in number of BPTT subsequences.')
     parser.add_argument('--seq_len', type=int, default=16,
                         help='Subsequence length for BPTT through the LTC cells.')
     parser.add_argument('--update_freq', type=int, default=5,
                         help='Episodes between PPO updates.')
+    parser.add_argument('--profile', type=str, default='default', choices=['default', 'rescue'],
+                        help='Training preset. rescue: low-success recovery hyperparameters.')
+    parser.add_argument('--rescue_update_freq', type=int, default=3, choices=[2, 3],
+                        help='When --profile rescue, use this update frequency trial (2 or 3).')
+    parser.add_argument('--rescue_adaptive_epochs', action='store_true',
+                        help='If set, use 8 PPO epochs when recent success < 10%%.')
     parser.add_argument('--curriculum_replay_ratio', type=float, default=0.0,
                         help='[EXPERIMENTAL — default off after v5 regression] '
                              'Fraction of PPO update windows that re-sample a '
@@ -456,6 +484,26 @@ if __name__ == '__main__':
         print(f"[deprecated] --holdout_scenario is deprecated, prefer --holdout_scenarios. "
               f"Promoting '{args.holdout_scenario}' to a single-element list.")
         args.holdout_scenarios = [args.holdout_scenario]
+
+    if args.profile == 'rescue':
+        args.update_freq = args.rescue_update_freq
+        if args.epochs == 4:
+            args.epochs = 8
+        if args.c2 == 0.01:
+            args.c2 = 0.02
+        if args.entropy_c2_init is None:
+            args.entropy_c2_init = 0.02
+        if args.entropy_c2_final is None:
+            args.entropy_c2_final = 0.01
+        if args.target_kl == 0.015:
+            args.target_kl = 0.02
+        if not args.rescue_adaptive_epochs:
+            args.rescue_adaptive_epochs = True
+    else:
+        if args.entropy_c2_init is None:
+            args.entropy_c2_init = args.c2
+        if args.entropy_c2_final is None:
+            args.entropy_c2_final = args.c2
 
     # Default curriculum thresholds derived from total episodes
     # 5-phase split: 10% / 25% / 50% / 75% / 100%

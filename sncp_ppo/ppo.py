@@ -145,7 +145,7 @@ class PPOAgent:
     def __init__(self, policy, lr=1e-4, gamma=0.99, gae_lambda=0.95, clip_eps=0.2,
                  c1=0.5, c2=0.01, epochs=4, batch_size=64, seq_len=16,
                  total_updates=None, lr_end_factor=0.1, target_kl=0.015,
-                 normalize_returns=True):
+                 normalize_returns=True, entropy_c2_init=None, entropy_c2_final=None):
         """
         total_updates: if given, attaches a LinearLR scheduler that decays the
             learning rate from `lr` to `lr * lr_end_factor` linearly across
@@ -164,11 +164,18 @@ class PPOAgent:
         self.clip_eps = clip_eps
         self.c1 = c1
         self.c2 = c2
+        self.base_c2 = c2
         self.epochs = epochs
+        self.base_epochs = epochs
         self.batch_size = batch_size
         self.seq_len = seq_len
         self.target_kl = target_kl
+        self.base_target_kl = target_kl
         self.normalize_returns = normalize_returns
+        self.entropy_c2_init = c2 if entropy_c2_init is None else entropy_c2_init
+        self.entropy_c2_final = c2 if entropy_c2_final is None else entropy_c2_final
+        self.update_count = 0
+        self.total_updates = total_updates if total_updates is not None and total_updates > 0 else None
         self.return_rms = RunningMeanStd()
         self.memory = PPOMemory()
         # Last-update diagnostics for logging from train.py
@@ -176,6 +183,7 @@ class PPOAgent:
         self.last_approx_kl = 0.0
         self.last_clip_frac = 0.0
         self.last_epochs_ran = 0
+        self.last_kl_early_stop = False
 
         if total_updates is not None and total_updates > 0:
             self.scheduler = optim.lr_scheduler.LinearLR(
@@ -369,6 +377,13 @@ class PPOAgent:
         return result
 
     def update(self, device):
+        # Optional entropy-coefficient scheduling (e.g. rescue profile:
+        # start higher exploration, then anneal back down).
+        if self.total_updates is not None and self.total_updates > 1:
+            progress = min(self.update_count / (self.total_updates - 1), 1.0)
+            self.c2 = self.entropy_c2_init + progress * (self.entropy_c2_final - self.entropy_c2_init)
+        else:
+            self.c2 = self.entropy_c2_final
         # 1. Retrieve all trajectories
         obs, h_states, actions, old_log_probs, rewards, values, masks = self.memory.get_tensors(device)
 
@@ -555,6 +570,8 @@ class PPOAgent:
         self.last_approx_kl = epoch_kl
         self.last_clip_frac = epoch_clip_frac
         self.last_epochs_ran = epochs_ran
+        self.last_kl_early_stop = kl_break
+        self.update_count += 1
 
         # Decay learning rate per update if a scheduler is attached
         if self.scheduler is not None:
