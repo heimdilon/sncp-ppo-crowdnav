@@ -153,10 +153,10 @@ def train(args):
     # Dynamic CSV header: one 4-tuple per holdout scenario
     holdout_cols = []
     for sc in args.holdout_scenarios:
-        holdout_cols += [f'holdout_{sc}_success', f'holdout_{sc}_collision',
+        holdout_cols += [f'holdout_{sc}_vpref', f'holdout_{sc}_success', f'holdout_{sc}_collision',
                          f'holdout_{sc}_timeout', f'holdout_{sc}_reward']
     csv_writer.writerow([
-        'episode', 'scenario', 'num_humans', 'human_vpref', 'steps', 'reward',
+        'episode', 'scenario', 'num_humans', 'human_vpref', 'phase_vpref', 'steps', 'reward',
         'success', 'collision', 'timeout', 'comfort',
     ] + holdout_cols)
     print(f"CSV log: {log_path}")
@@ -183,7 +183,7 @@ def train(args):
         (args.curriculum_easy_until,       'easy',      0.15, 1),
         (args.curriculum_easy_plus_until,  'easy_plus', 0.20, 2),
         (args.curriculum_medium_until,     'medium',    0.30, 3),
-        (args.curriculum_hard_until,       'hard',      0.40, 4),
+        (args.curriculum_hard_until,       'hard',      args.hard_vpref_train, 4),
         (args.episodes,                    'circle',    0.50, args.num_humans),
     ]
 
@@ -196,6 +196,10 @@ def train(args):
           f"sample an earlier phase (anti-forgetting)")
     print(f"Holdout: {args.holdout_episodes} eps × {args.holdout_scenarios} every "
           f"{args.eval_freq} eps (best ckpt = min(success))")
+    hard_holdout_vpref = SCENARIO_HOLDOUT_CONFIG['hard'][1]
+    print(f"Hard vpref (train vs holdout): {args.hard_vpref_train:.2f} vs {hard_holdout_vpref:.2f}")
+    if not math.isclose(args.hard_vpref_train, hard_holdout_vpref, rel_tol=0.0, abs_tol=1e-9):
+        print("[warning] hard vpref mismatch: training hard phase differs from canonical holdout hard vpref.")
     print("-" * 90)
 
     # Align env to first curriculum phase
@@ -251,7 +255,7 @@ def train(args):
 
         obs, info = env.reset(seed=args.seed + episode)
         # env.reset() resets human_vpref to the scenario default (e.g. 'hard' -> 0.50).
-        # Re-apply the curriculum value so e.g. 'hard' phase actually uses 0.40
+        # Re-apply the curriculum value so the hard phase uses --hard_vpref_train (default 0.50)
         # and pedestrians move at the intended monotone-ramp speed.
         env.human_vpref = target_vpref
         h_states = policy.init_hidden(batch_size=1, num_humans=env.num_humans, device=device)
@@ -327,10 +331,11 @@ def train(args):
         ho_row = []
         for sc in args.holdout_scenarios:
             r = last_holdout_per_scenario[sc]
-            ho_row += [f"{r['success_rate']:.4f}", f"{r['collision_rate']:.4f}",
+            canonical_vpref = SCENARIO_HOLDOUT_CONFIG.get(sc, (5, 0.50))[1]
+            ho_row += [f"{canonical_vpref:.2f}", f"{r['success_rate']:.4f}", f"{r['collision_rate']:.4f}",
                        f"{r['timeout_rate']:.4f}", f"{r['avg_reward']:.4f}"]
         csv_writer.writerow([
-            episode, env.scenario, env.num_humans, env.human_vpref, step_count, f"{episode_reward:.4f}",
+            episode, env.scenario, env.num_humans, env.human_vpref, target_vpref, step_count, f"{episode_reward:.4f}",
             int(info['success']), int(info['collision']), int(info['timeout']), f"{info['comfort']:.4f}",
         ] + ho_row)
         csv_file.flush()
@@ -429,6 +434,9 @@ if __name__ == '__main__':
                         help='Episodes <= this run medium (N=3). Default: 50%% of total.')
     parser.add_argument('--curriculum_hard_until', type=int, default=None,
                         help='Episodes <= this run hard (N=4). Default: 75%% of total. Rest run extreme (N=5).')
+
+    parser.add_argument('--hard_vpref_train', type=float, default=0.50,
+                        help='Human vpref used during hard curriculum phase (canonical default: 0.50).')
 
     # Holdout evaluation
     parser.add_argument('--eval_freq', type=int, default=50,
