@@ -315,13 +315,18 @@ def train(args):
             # Generalist metric: min success across all holdout scenarios.
             # Refuses to crown "100% on easy, 0% on hard" as a 50% best.
             min_success = min(r['success_rate'] for r in last_holdout_per_scenario.values())
-            if min_success > best_holdout_min_success:
+            if (min_success > best_holdout_min_success and
+                    min_success >= args.min_generalist_success_for_save):
                 best_holdout_min_success = min_success
                 torch.save(policy.state_dict(), args.save_path)
                 per_sc = {sc: f"{r['success_rate']:.0%}"
                           for sc, r in last_holdout_per_scenario.items()}
                 print(f"  --> New best generalist min={min_success:.1%} {per_sc}, "
                       f"saved to {args.save_path}")
+            else:
+                print(f"  --> Best not updated: min={min_success:.1%}, "
+                      f"best={best_holdout_min_success:.1%}, "
+                      f"threshold={args.min_generalist_success_for_save:.1%}")
 
         # Per-episode CSV row (dynamic per-scenario holdout tail)
         ho_row = []
@@ -441,6 +446,9 @@ if __name__ == '__main__':
                         help='Scenarios for periodic holdout eval. Best checkpoint is saved '
                              'when min(success across these) improves — rewards generalists, '
                              'not "100% on one, 0% on the other" specialists.')
+    parser.add_argument('--min_generalist_success_for_save', type=float, default=0.05,
+                        help='Minimum min-success across holdout scenarios required '
+                             'before saving a new "best" checkpoint.')
     parser.add_argument('--holdout_scenario', type=str, default=None,
                         help='[Deprecated] Single-scenario alias for --holdout_scenarios. '
                              'If set, overrides --holdout_scenarios with a one-element list.')
