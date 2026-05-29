@@ -7,11 +7,15 @@ import matplotlib.patches as patches
 class CrowdSimEnv(gym.Env):
     metadata = {'render.modes': ['human', 'rgb_array']}
 
-    def __init__(self, num_humans=5, time_step=0.25, max_time=60.0, scenario='circle', human_dodge_robot=False):
+    def __init__(self, num_humans=5, time_step=0.25, max_time=60.0, scenario='circle', human_dodge_robot=False, randomize_layout=True):
         super(CrowdSimEnv, self).__init__()
-        
+
         self.scenario = scenario  # 'easy', 'medium', 'hard', 'extreme', 'circle', 'random'
         self.human_dodge_robot = human_dodge_robot
+        # When True (default), robot start/goal and pedestrian spawns are
+        # randomized every reset (circle-crossing with random antipodal points).
+        # When False, the legacy fixed (0,-4)->(0,4) scene is reproduced exactly.
+        self.randomize_layout = randomize_layout
         self.num_humans = num_humans
         self.time_step = time_step
         self.max_time = max_time
@@ -59,14 +63,27 @@ class CrowdSimEnv(gym.Env):
         super().reset(seed=seed)
         self.current_time = 0.0
         
-        # Initialize robot: start at bottom, target at top
-        self.robot_px = 0.0
-        self.robot_py = -4.0
+        # Robot start/goal. With randomize_layout (default) the robot spawns at
+        # a random angle on a circle of radius R with an antipodal goal and a
+        # RANDOM heading, so the policy must generalise over geometry (and learn
+        # to turn toward the goal) instead of memorising the fixed
+        # (0,-4)->(0,4) scene. randomize_layout=False reproduces it exactly.
+        R = 4.0
         self.robot_vx = 0.0
         self.robot_vy = 0.0
-        self.robot_theta = np.pi / 2.0  # facing North
-        self.robot_gx = 0.0
-        self.robot_gy = 4.0
+        if self.randomize_layout:
+            theta_r = self.np_random.uniform(0.0, 2.0 * np.pi)
+            self.robot_px = R * np.cos(theta_r)
+            self.robot_py = R * np.sin(theta_r)
+            self.robot_gx = -self.robot_px
+            self.robot_gy = -self.robot_py
+            self.robot_theta = self.np_random.uniform(-np.pi, np.pi)  # random heading
+        else:
+            self.robot_px = 0.0
+            self.robot_py = -4.0
+            self.robot_theta = np.pi / 2.0  # facing North
+            self.robot_gx = 0.0
+            self.robot_gy = 4.0
         
         # Initialize humans array (fixed size)
         self.humans_px = np.zeros(self.num_humans)
@@ -101,47 +118,65 @@ class CrowdSimEnv(gym.Env):
         
         if scenario_type == 'circle':
             radius = 4.0
-            # Spawn humans on a circle, but for each i check that the resulting
-            # position is at least min_safe away from the robot start (0,-4)
-            # and the goal (0,+4). If it isn't, shift the angle by π/N so the
-            # spawn lands mid-segment instead.
-            #
-            # History: the old i·2π/N placement put human 1 on the goal and
-            # human 3 on the robot at N=4 → 100% collision on step 1 through
-            # the entire HARD phase. A previous fix used (i+0.5)·2π/N globally,
-            # which fixed N=4 but BROKE N=2: it pushed human 0 to (0,+4) and
-            # human 1 to (0,-4) → same 1-step collision in EASY_PLUS. The
-            # per-spawn safety check handles every N correctly.
             min_safe = self.robot_radius + self.human_radius + 0.5  # 1.1 m
-            for i in range(self.num_humans):
-                angle = i * 2.0 * np.pi / self.num_humans
-                px = radius * np.cos(angle)
-                py = radius * np.sin(angle)
-                d_robot = np.hypot(px - self.robot_px, py - self.robot_py)
-                d_goal = np.hypot(px - self.robot_gx, py - self.robot_gy)
-                if d_robot < min_safe or d_goal < min_safe:
-                    angle = (i + 0.5) * 2.0 * np.pi / self.num_humans
-                angle += np.random.uniform(-0.1, 0.1)
-                self.humans_px[i] = radius * np.cos(angle)
-                self.humans_py[i] = radius * np.sin(angle)
-                self.humans_gx[i] = -radius * np.cos(angle)
-                self.humans_gy[i] = -radius * np.sin(angle)
-                dx = self.humans_gx[i] - self.humans_px[i]
-                dy = self.humans_gy[i] - self.humans_py[i]
-                self.humans_theta[i] = np.arctan2(dy, dx)
+            if self.randomize_layout:
+                # Random circle-crossing: each pedestrian gets a random angle on
+                # the circle with an antipodal goal, rejection-sampled to stay at
+                # least min_safe from BOTH the robot start and goal so no episode
+                # begins in collision. This is the variety the fixed i·2π/N
+                # placement lacked — a fresh geometry every episode.
+                for i in range(self.num_humans):
+                    px, py = self.robot_px, self.robot_py
+                    for _ in range(100):
+                        angle = self.np_random.uniform(0.0, 2.0 * np.pi)
+                        px = radius * np.cos(angle)
+                        py = radius * np.sin(angle)
+                        d_robot = np.hypot(px - self.robot_px, py - self.robot_py)
+                        d_goal = np.hypot(px - self.robot_gx, py - self.robot_gy)
+                        if d_robot >= min_safe and d_goal >= min_safe:
+                            break
+                    self.humans_px[i] = px
+                    self.humans_py[i] = py
+                    self.humans_gx[i] = -px
+                    self.humans_gy[i] = -py
+                    dx = self.humans_gx[i] - self.humans_px[i]
+                    dy = self.humans_gy[i] - self.humans_py[i]
+                    self.humans_theta[i] = np.arctan2(dy, dx)
+            else:
+                # Legacy deterministic placement (angles i·2π/N + tiny jitter),
+                # kept for reproducibility of the old fixed scene. The per-spawn
+                # safety check shifts an angle by π/N if it would land on the
+                # robot start or goal (prevents the historical N=2/N=4 step-1
+                # collisions that plagued earlier EASY_PLUS/HARD phases).
+                for i in range(self.num_humans):
+                    angle = i * 2.0 * np.pi / self.num_humans
+                    px = radius * np.cos(angle)
+                    py = radius * np.sin(angle)
+                    d_robot = np.hypot(px - self.robot_px, py - self.robot_py)
+                    d_goal = np.hypot(px - self.robot_gx, py - self.robot_gy)
+                    if d_robot < min_safe or d_goal < min_safe:
+                        angle = (i + 0.5) * 2.0 * np.pi / self.num_humans
+                    angle += self.np_random.uniform(-0.1, 0.1)
+                    self.humans_px[i] = radius * np.cos(angle)
+                    self.humans_py[i] = radius * np.sin(angle)
+                    self.humans_gx[i] = -radius * np.cos(angle)
+                    self.humans_gy[i] = -radius * np.sin(angle)
+                    dx = self.humans_gx[i] - self.humans_px[i]
+                    dy = self.humans_gy[i] - self.humans_py[i]
+                    self.humans_theta[i] = np.arctan2(dy, dx)
         else: # random
             for i in range(self.num_humans):
                 while True:
-                    px = np.random.uniform(-5.0, 5.0)
-                    py = np.random.uniform(-5.0, 5.0)
+                    px = self.np_random.uniform(-5.0, 5.0)
+                    py = self.np_random.uniform(-5.0, 5.0)
                     dist_to_robot = np.hypot(px - self.robot_px, py - self.robot_py)
                     if dist_to_robot > 1.5:
                         if i == 0 or np.min(np.hypot(px - self.humans_px[:i], py - self.humans_py[:i])) > 1.0:
                             self.humans_px[i] = px
                             self.humans_py[i] = py
                             break
-                self.humans_gx[i] = -px + np.random.uniform(-1.0, 1.0)
-                self.humans_gy[i] = -py + np.random.uniform(-1.0, 1.0)
+                self.humans_gx[i] = -px + self.np_random.uniform(-1.0, 1.0)
+                self.humans_gy[i] = -py + self.np_random.uniform(-1.0, 1.0)
                 dx = self.humans_gx[i] - self.humans_px[i]
                 dy = self.humans_gy[i] - self.humans_py[i]
                 self.humans_theta[i] = np.arctan2(dy, dx)
