@@ -12,7 +12,7 @@ def test_model():
     # Create fake observations (updated for local-frame, dim=7)
     obs = {
         'robot_node': torch.randn(batch_size, 7),
-        'spatial_edges': torch.randn(batch_size, num_humans, 2),
+        'spatial_edges': torch.randn(batch_size, num_humans, 4),
         'temporal_edges': torch.randn(batch_size, 2)
     }
     

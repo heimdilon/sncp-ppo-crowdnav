@@ -38,7 +38,8 @@ class SNCPPolicy(nn.Module):
         
         # 3. Spatial Edge Encoder (LTC size 32 -> project to 256)
         self.spatial_wiring = FullyConnected(units=32)
-        self.spatial_ltc = LTC(input_size=2, units=self.spatial_wiring)
+        # input_size=4: [dx_local, dy_local, rel_vx_local, rel_vy_local] per human
+        self.spatial_ltc = LTC(input_size=4, units=self.spatial_wiring)
         self.spatial_proj = nn.Linear(32, 256)
         
         # 4. Attention Pooling weights
@@ -114,8 +115,9 @@ class SNCPPolicy(nn.Module):
         """
         Forward pass of the SNCP model.
         Args:
-            obs: dict containing 'robot_node' (B,7), 'spatial_edges' (B,H,2),
-                 'temporal_edges' (B,2). All in robot-local frame.
+            obs: dict containing 'robot_node' (B,7), 'spatial_edges' (B,H,4)
+                 = [pos_local, rel_vel_local], 'temporal_edges' (B,2). All in
+                 robot-local frame.
             hidden_states: dict with 'temporal_edge', 'spatial_edge', 'node' LTC states
         Returns:
             mu: actor mean [batch_size, 2] — scaled to (v in [0, vpref], w in [-wmax, wmax])
@@ -124,7 +126,7 @@ class SNCPPolicy(nn.Module):
             new_hidden_states: updated LTC hidden states
         """
         robot_node = obs['robot_node']        # [batch_size, 7]
-        spatial_edges = obs['spatial_edges']  # [batch_size, num_humans, 2]
+        spatial_edges = obs['spatial_edges']  # [batch_size, num_humans, 4]
         temporal_edges = obs['temporal_edges']# [batch_size, 2]
         
         batch_size = robot_node.shape[0]
@@ -140,7 +142,7 @@ class SNCPPolicy(nn.Module):
         m_rr = self.temporal_proj(m_rr_seq.squeeze(1))
         
         # 3. Spatial Edge Encoding (LTC)
-        spatial_input = spatial_edges.reshape(batch_size * num_humans, 1, 2)
+        spatial_input = spatial_edges.reshape(batch_size * num_humans, 1, 4)
         h_spat = hidden_states['spatial_edge']
         if h_spat.dim() == 3:
             h_spat_flat = h_spat.reshape(batch_size * num_humans, -1)

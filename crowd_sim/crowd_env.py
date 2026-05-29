@@ -49,11 +49,12 @@ class CrowdSimEnv(gym.Env):
         # ALL observations are in the robot's LOCAL coordinate frame:
         #   - Robot faces along +x axis in local frame
         #   - robot_node: [dg_local_x, dg_local_y, v_linear, dist_to_goal, vpref, radius, w_angular] (7,)
-        #   - spatial_edges: [dx_local, dy_local] for each human (num_humans, 2)
+        #   - spatial_edges: [dx_local, dy_local, rel_vx_local, rel_vy_local]
+        #     for each human (num_humans, 4) — position AND relative velocity
         #   - temporal_edges: [v_linear, w_angular] in local frame (2,)
         self.observation_space = spaces.Dict({
             'robot_node': spaces.Box(low=-np.inf, high=np.inf, shape=(7,), dtype=np.float32),
-            'spatial_edges': spaces.Box(low=-np.inf, high=np.inf, shape=(self.num_humans, 2), dtype=np.float32),
+            'spatial_edges': spaces.Box(low=-np.inf, high=np.inf, shape=(self.num_humans, 4), dtype=np.float32),
             'temporal_edges': spaces.Box(low=-np.inf, high=np.inf, shape=(2,), dtype=np.float32)
         })
         
@@ -220,14 +221,22 @@ class CrowdSimEnv(gym.Env):
             w_angular
         ], dtype=np.float32)
         
-        # Spatial edges: human positions relative to robot, in robot's local frame
-        spatial_edges = np.zeros((self.num_humans, 2), dtype=np.float32)
+        # Spatial edges: per-pedestrian local-frame position AND relative
+        # velocity (pedestrian - robot), rotated into the robot's local frame.
+        # Layout per row: [dx_local, dy_local, rel_vx_local, rel_vy_local].
+        # Relative velocity gives the policy a direct "approach" signal instead
+        # of having to infer pedestrian motion from position history via the LTC.
+        spatial_edges = np.zeros((self.num_humans, 4), dtype=np.float32)
         for i in range(self.num_humans):
             dx_global = self.humans_px[i] - self.robot_px
             dy_global = self.humans_py[i] - self.robot_py
-            # Rotate to local frame
+            dvx_global = self.humans_vx[i] - self.robot_vx
+            dvy_global = self.humans_vy[i] - self.robot_vy
+            # Rotate both position and relative velocity to the local frame
             spatial_edges[i, 0] = dx_global * cos_t + dy_global * sin_t
             spatial_edges[i, 1] = -dx_global * sin_t + dy_global * cos_t
+            spatial_edges[i, 2] = dvx_global * cos_t + dvy_global * sin_t
+            spatial_edges[i, 3] = -dvx_global * sin_t + dvy_global * cos_t
             
         # Temporal edges: robot velocity in local frame = [v_linear, w_angular]
         temporal_edges = np.array([v_linear, w_angular], dtype=np.float32)

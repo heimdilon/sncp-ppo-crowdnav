@@ -521,8 +521,10 @@ if __name__ == '__main__':
     # Holdout evaluation
     parser.add_argument('--eval_freq', type=int, default=50,
                         help='Episodes between holdout evaluations.')
-    parser.add_argument('--holdout_episodes', type=int, default=30,
-                        help='Episodes per holdout evaluation per scenario (higher = lower variance).')
+    parser.add_argument('--holdout_episodes', type=int, default=50,
+                        help='Episodes per holdout evaluation per scenario (higher = lower variance). '
+                             'Raised 30->50: at 30 the best-checkpoint metric was noisy '
+                             '(v7 "50%" holdout was really 38% on 100-ep eval).')
     parser.add_argument('--holdout_scenarios', type=str, nargs='+',
                         default=['easy', 'hard'],
                         choices=['easy', 'easy_plus', 'medium', 'hard', 'extreme', 'circle', 'random'],
