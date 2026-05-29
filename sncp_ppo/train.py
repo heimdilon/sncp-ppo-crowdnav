@@ -3,7 +3,9 @@ import csv
 import math
 import os
 import random
-from datetime import datetime
+import time
+from collections import deque
+from datetime import datetime, timedelta
 
 import numpy as np
 import torch
@@ -29,6 +31,34 @@ def _obs_to_tensor(obs, device):
         'spatial_edges': torch.tensor(obs['spatial_edges'], dtype=torch.float32, device=device).unsqueeze(0),
         'temporal_edges': torch.tensor(obs['temporal_edges'], dtype=torch.float32, device=device).unsqueeze(0),
     }
+
+
+def _fmt_duration(seconds):
+    """Human-readable wall-clock duration.
+
+    Drops seconds once we're at the hour scale (where they're just noise):
+    '38s', '1m 15s', '45m 12s', '1h 2m', '5h 12m'.
+    """
+    s = int(seconds)
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    if h > 0:
+        return f"{h}h {m}m"
+    if m > 0:
+        return f"{m}m {sec}s"
+    return f"{sec}s"
+
+
+def _eta_seconds(recent_ep_times, remaining_episodes):
+    """Estimate remaining wall-clock time from a moving window of episode
+    durations. Uses the mean of `recent_ep_times` (the last N episodes) so the
+    estimate tracks the *current* curriculum phase's speed rather than the
+    whole-run average — important here because per-episode cost grows as the
+    curriculum ramps N=1 -> N=5. Returns 0.0 when there are no samples yet."""
+    if not recent_ep_times:
+        return 0.0
+    avg = sum(recent_ep_times) / len(recent_ep_times)
+    return avg * remaining_episodes
 
 
 #: Canonical (num_humans, human_vpref) per scenario name — what each scenario
@@ -207,12 +237,15 @@ def train(args):
     )
 
     total_steps = 0
+    train_start = time.perf_counter()
+    recent_ep_times = deque(maxlen=50)  # last-N episode wall-clock times for ETA
     # Persist the chosen phase across an entire PPO update window so a single
     # rollout buffer stays single-N (avoids shape mismatches in _extract_subsequences).
     window_phase = curriculum[0]
     window_is_replay = False
 
     for episode in range(1, args.episodes + 1):
+        iter_start = time.perf_counter()
         # At the start of every update window, pick this window's phase.
         # With prob (1 - replay_ratio) use the current curriculum phase;
         # otherwise sample a uniformly-random *earlier* phase as replay.
@@ -406,6 +439,15 @@ def train(args):
                      f" kl={agent.last_approx_kl:.5f}"
                      f" std=[{std[0]:.3f},{std[1]:.3f}]"
                      f" rms={agent.return_rms.std:.2f}")
+            # Live progress: elapsed wall-clock + moving-average ETA + clock
+            # time of the projected finish (uses the last <=50 episodes, so the
+            # estimate tracks the current curriculum phase's pace).
+            elapsed = time.perf_counter() - train_start
+            eta = _eta_seconds(list(recent_ep_times), args.episodes - episode)
+            line += f" | elapsed {_fmt_duration(elapsed)}"
+            if eta > 0:
+                finish = (datetime.now() + timedelta(seconds=eta)).strftime('%H:%M')
+                line += f" | eta {_fmt_duration(eta)} | ~{finish} biter"
             print(line)
 
         # Periodic checkpoints
@@ -413,10 +455,15 @@ def train(args):
             periodic_path = args.save_path.replace('.pt', f'_ep{episode}.pt')
             torch.save(policy.state_dict(), periodic_path)
 
+        # Record this iteration's wall-clock time (rollout + update + any
+        # holdout eval) for the moving-average ETA shown on log lines.
+        recent_ep_times.append(time.perf_counter() - iter_start)
+
     # Final save
     torch.save(policy.state_dict(), args.save_path.replace('.pt', '_final.pt'))
     csv_file.close()
     print("\nTraining completed!")
+    print(f"Total time: {_fmt_duration(time.perf_counter() - train_start)}")
     print(f"Best generalist (min across {args.holdout_scenarios}): {best_holdout_min_success:.1%}")
     print(f"CSV log saved to: {log_path}")
 
