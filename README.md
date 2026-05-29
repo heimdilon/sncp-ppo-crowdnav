@@ -8,8 +8,31 @@ nearby pedestrians.
 
 > **Want to train/eval without a local GPU?** Open
 > [`sncp_ppo_colab.ipynb`](sncp_ppo_colab.ipynb) in Google Colab (badge above) —
-> end-to-end setup, smoke tests, full 1500-episode training, evaluation, and
+> end-to-end setup, smoke tests, full 3000-episode training, evaluation, and
 > trajectory visualization, all in one notebook.
+
+## Architecture
+
+![SNCP-PPO architecture](demo/architecture.png)
+
+The policy (`sncp_ppo/models.py::SNCPPolicy`) maps three robot-local observation
+streams to a continuous action through three parallel encoders, attention
+pooling, and an LTC fusion core:
+
+- **Inputs** — `robot_node` (7), `spatial_edges` (H×2, one per pedestrian),
+  `temporal_edges` (2 = the robot's own `[v, w]`)
+- **Encoders** — a Robot MLP (7→64→128) plus two LTC recurrent encoders
+  (temporal + per-pedestrian spatial, each 2→32→256)
+- **Attention** — pedestrians (Q) are scored against the robot's motion state
+  (K) and pooled into `u_att`
+- **Fusion** — a Node LTC fuses `concat[v_m, m_rr, u_att]` (640→32→256) into the
+  shared trunk `sf`
+- **Heads** — Actor μ → `[v∈[0, 0.26], w∈[-1.8, 1.8]]` and Critic → V(s)
+
+The three LTC hidden states are carried across timesteps (trained via BPTT), so
+the policy infers pedestrian *motion* over time — the observation deliberately
+omits pedestrian velocity. Regenerate the diagram with
+`python visualize_architecture.py --output demo/architecture.png`.
 
 ## Project layout
 
@@ -28,6 +51,7 @@ nearby pedestrians.
 ├── visualize_trajectory.py        Single trajectory PNG plot
 ├── visualize_trajectory_gif.py    Single trajectory animated GIF
 ├── visualize_all_scenarios_gif.py All scenarios (easy/medium/hard/extreme) GIFs
+├── visualize_architecture.py      Policy architecture diagram (PNG)
 ├── requirements.txt
 └── README.md
 ```
@@ -52,7 +76,7 @@ python test_model.py      # policy forward pass
 
 ```bash
 python -m sncp_ppo.train \
-    --episodes 1500 \
+    --episodes 3000 \
     --num_humans 5 \
     --seed 42 \
     --lr 1e-4 \
@@ -84,6 +108,55 @@ python test_eval.py \
 ```
 
 `num_humans` must match what the policy was trained with for fair comparison.
+
+## Results — v6 (3000-episode run)
+
+Trained for 3000 episodes (5-phase curriculum, `seed=42`, ~2h40m on a Colab T4).
+The shipped checkpoint (`checkpoints/sncp_ppo_v6_colab.pt`) is the generalist
+that maximised `min(success)` across the easy + hard holdouts.
+
+**Final evaluation** (100 deterministic episodes per scenario, `seed=100`):
+
+| Scenario  | Pedestrians | Success | Collision | Timeout | Avg reward |
+|-----------|:-----------:|:-------:|:---------:|:-------:|:----------:|
+| easy      | 1 | **100%** | 0%  | 0% | 85.2 |
+| easy_plus | 2 | **100%** | 0%  | 0% | 85.7 |
+| medium    | 3 | **100%** | 0%  | 0% | 86.4 |
+| hard      | 5 | **86%**  | 14% | 0% | 75.4 |
+| extreme\* | 5 | 26%      | 74% | 0% | 13.6 |
+
+<sub>\*`extreme` uses random spawns; the curriculum trains only on circle-pattern
+spawns, so this row is the out-of-distribution generalisation floor, not an
+in-distribution target.</sub>
+
+- **Catastrophic forgetting solved:** unlike v3 (which collapsed to ~6% on the
+  1-pedestrian case after training on dense crowds), v6 holds **100%** on
+  easy/easy_plus/medium while reaching **86%** on the 5-pedestrian hard scenario
+  — achieved *without* curriculum replay, via longer training plus the
+  `min(success)` best-checkpoint metric.
+- **Timeout = 0% everywhere:** the policy never stalls; failures are collisions
+  in dense traffic, not hesitation.
+
+### Learning curve
+
+![Training curves](demo/learning_curves_v6.png)
+
+Holdout-easy (green) locks to 100% by ~ep 300 and never drifts — the forgetting
+fix in action. Holdout-hard (red) is high-variance (the policy oscillates rather
+than settling), but the best-checkpoint metric (black dashed) is a monotonic
+staircase that captures the peaks.
+
+### Sample trajectories
+
+Robot (green) navigating to its goal (★) through Social-Force pedestrians; shaded
+ellipses are per-pedestrian comfort zones.
+
+| Easy (N=1) | Hard (N=5) | Extreme (N=5, random) |
+|:----------:|:----------:|:---------------------:|
+| ![easy](demo/traj_easy.png) | ![hard](demo/traj_hard.png) | ![extreme](demo/traj_extreme.png) |
+
+Animated versions of the dense scenarios live in [`demo/`](demo/)
+(`hard_trajectory.gif`, `extreme_trajectory.gif`).
 
 ## Visualization
 

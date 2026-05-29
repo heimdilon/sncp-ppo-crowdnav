@@ -45,5 +45,8 @@ gerekli olabilecek makaleler/
 *.tmp
 *.bak
 
+# --- Project: Colab download staging (local only) ---
+colabout/
+
 # --- Jupyter ---
 .ipynb_checkpoints/

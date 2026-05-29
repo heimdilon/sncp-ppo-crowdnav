@@ -113,7 +113,8 @@ def run_and_visualize(model_path='checkpoints/sncp_ppo.pt', output_image='trajec
     ax.add_patch(r_circle)
     
     ax.grid(True, linestyle=':', alpha=0.6)
-    ax.set_title("Robot & Pedestrian Trajectories (Circle Crossing)", fontsize=14, fontweight='bold')
+    ax.set_title(f"Robot & Pedestrian Trajectories — {scenario.capitalize()} (N={num_humans})",
+                 fontsize=14, fontweight='bold')
     ax.set_xlabel("X Position (meters)")
     ax.set_ylabel("Y Position (meters)")
     ax.legend(loc='upper left')
