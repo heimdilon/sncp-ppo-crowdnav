@@ -164,6 +164,7 @@ def train(args):
         seq_len=args.seq_len,
         total_updates=total_updates,
         lr_end_factor=args.lr_end_factor,
+        target_kl=args.target_kl,
     )
 
     # Defensive: if `checkpoints` exists as a *file* (e.g. left over from a
@@ -488,6 +489,10 @@ if __name__ == '__main__':
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--gae_lambda', type=float, default=0.95)
     parser.add_argument('--clip_eps', type=float, default=0.2)
+    parser.add_argument('--target_kl', type=float, default=0.015,
+                        help='Approx-KL early-stop threshold for PPO update epochs '
+                             '(an epoch breaks once approx_kl > 1.5x this). Lower = '
+                             'more conservative updates / steadier convergence. v9 uses 0.01.')
     parser.add_argument('--epochs', type=int, default=4,
                         help='PPO optimization epochs per update (standard 4-10).')
     parser.add_argument('--batch_size', type=int, default=16,
