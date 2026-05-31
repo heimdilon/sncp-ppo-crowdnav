@@ -88,6 +88,25 @@ class VectorizedRolloutBuffer:
         self.dones.append(torch.as_tensor(dones, dtype=torch.float32).detach().clone())
         self.masks.append(torch.as_tensor(masks, dtype=torch.float32).detach().clone())
 
+    def finish(self, last_values, last_dones):
+        """Finalize the rollout: build the (N, T) bootstrap tensor and mark the
+        horizon end as a done boundary so GAE cuts there.
+
+        last_values: (N,) V(s_next) after the final stored step, per env.
+        last_dones:  (N,) 1.0 if the env was *terminated* exactly on the final
+                     stored step (then its horizon-end bootstrap is 0).
+
+        Mid-rollout terminations (mask=0) and truncations are handled by GAE via
+        the dones mask + in-buffer values[t+1]; finish only supplies the missing
+        successor value at the horizon end.
+        """
+        N, T = self.N, self.T
+        boot = torch.zeros(N, T)
+        last_mask = 1.0 - last_dones.float()   # 0 if terminated at horizon end
+        boot[:, T - 1] = last_values.float() * last_mask
+        self.dones[T - 1] = torch.ones(N)      # force horizon-end done for GAE cut
+        self.bootstrap_values = boot
+
     def get_tensors(self, device):
         def stack(lst):
             return torch.stack(lst, dim=1).to(device)  # (N, T, ...)
