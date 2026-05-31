@@ -81,18 +81,18 @@ class VectorizedRolloutBuffer:
         # tensor is (N, T, H*units) and indexes cleanly per-env in later tasks.
         h_sp = hidden['spatial_edge'].detach().clone()
         self.h_spatial.append(h_sp.reshape(self.N, -1))
-        self.actions.append(torch.as_tensor(actions).detach().clone())
-        self.log_probs.append(torch.as_tensor(log_probs).detach().clone())
-        self.rewards.append(torch.as_tensor(rewards, dtype=torch.float32).clone())
-        self.values.append(torch.as_tensor(values, dtype=torch.float32).clone())
-        self.dones.append(torch.as_tensor(dones, dtype=torch.float32).clone())
-        self.masks.append(torch.as_tensor(masks, dtype=torch.float32).clone())
+        self.actions.append(torch.as_tensor(actions, dtype=torch.float32).detach().clone())
+        self.log_probs.append(torch.as_tensor(log_probs, dtype=torch.float32).detach().clone())
+        self.rewards.append(torch.as_tensor(rewards, dtype=torch.float32).detach().clone())
+        self.values.append(torch.as_tensor(values, dtype=torch.float32).detach().clone())
+        self.dones.append(torch.as_tensor(dones, dtype=torch.float32).detach().clone())
+        self.masks.append(torch.as_tensor(masks, dtype=torch.float32).detach().clone())
 
     def get_tensors(self, device):
         def stack(lst):
             return torch.stack(lst, dim=1).to(device)  # (N, T, ...)
         bootstrap = self.bootstrap_values if self.bootstrap_values is not None \
-            else torch.zeros(self.N, self.T)
+            else torch.zeros(self.N, self.T, device=device)
         return {
             'obs': {
                 'robot_node': stack(self.obs_robot_node),

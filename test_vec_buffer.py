@@ -31,3 +31,6 @@ def test_buffer_accumulates_NT_shapes():
     assert data['obs']['spatial_edges'].shape == (N, T, H, 4)
     assert data['obs']['robot_node'].shape == (N, T, 7)
     assert data['dones'].shape == (N, T)
+    assert data['h_temporal'].shape == (N, T, 32)
+    assert data['h_node'].shape == (N, T, 32)
+    assert data['h_spatial'].shape == (N, T, H * 32)
