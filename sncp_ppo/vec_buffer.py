@@ -129,7 +129,11 @@ class VectorizedRolloutBuffer:
         boot = torch.zeros(N, T, device=last_values.device)
         last_mask = 1.0 - last_dones                     # 0 if terminated at horizon end
         boot[:, T - 1] = last_values * last_mask
-        self.dones[T - 1] = torch.ones(N)                # force horizon-end done for GAE cut
+        # Match the device of the already-stored dones so torch.stack in
+        # get_tensors doesn't hit a CPU/CUDA mismatch (unit tests run on CPU, so
+        # this only bites on GPU — caught by the vectorized smoke test).
+        done_device = self.dones[-1].device if self.dones else last_values.device
+        self.dones[T - 1] = torch.ones(N, device=done_device)                # force horizon-end done for GAE cut
         self.bootstrap_values = boot
 
     def get_tensors(self, device):
