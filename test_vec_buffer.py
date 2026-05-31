@@ -65,3 +65,23 @@ def test_finish_sets_bootstrap_and_horizon_done():
     assert torch.allclose(data['bootstrap_values'][0, T - 1], torch.tensor(9.0))
     # env0 terminated at t=1 -> bootstrap there is 0
     assert torch.allclose(data['bootstrap_values'][0, 1], torch.tensor(0.0))
+
+
+def test_finish_bootstrap_on_last_values_device():
+    N, T, H = 2, 3, 5
+    buf = VectorizedRolloutBuffer(num_envs=N, horizon=T)
+    for t in range(T):
+        obs = {'robot_node': torch.zeros(N, 7),
+               'spatial_edges': torch.zeros(N, H, 4),
+               'temporal_edges': torch.zeros(N, 2)}
+        buf.store(obs=obs,
+                  hidden={'temporal_edge': torch.zeros(N, 32),
+                          'spatial_edge': torch.zeros(N * H, 32),
+                          'node': torch.zeros(N, 32)},
+                  actions=torch.zeros(N, 2), log_probs=torch.zeros(N),
+                  rewards=torch.zeros(N), values=torch.zeros(N),
+                  dones=torch.zeros(N), masks=torch.ones(N))
+    last_v = torch.tensor([5.0, 6.0])
+    buf.finish(last_values=last_v, last_dones=torch.zeros(N))
+    assert buf.bootstrap_values.device == last_v.device
+    assert torch.allclose(buf.bootstrap_values[:, T - 1], last_v)

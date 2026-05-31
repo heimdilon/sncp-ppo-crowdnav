@@ -101,10 +101,12 @@ class VectorizedRolloutBuffer:
         successor value at the horizon end.
         """
         N, T = self.N, self.T
-        boot = torch.zeros(N, T)
-        last_mask = 1.0 - last_dones.float()   # 0 if terminated at horizon end
-        boot[:, T - 1] = last_values.float() * last_mask
-        self.dones[T - 1] = torch.ones(N)      # force horizon-end done for GAE cut
+        last_values = torch.as_tensor(last_values, dtype=torch.float32)
+        last_dones = torch.as_tensor(last_dones, dtype=torch.float32)
+        boot = torch.zeros(N, T, device=last_values.device)
+        last_mask = 1.0 - last_dones                     # 0 if terminated at horizon end
+        boot[:, T - 1] = last_values * last_mask
+        self.dones[T - 1] = torch.ones(N)                # force horizon-end done for GAE cut
         self.bootstrap_values = boot
 
     def get_tensors(self, device):
