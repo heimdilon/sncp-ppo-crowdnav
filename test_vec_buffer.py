@@ -1,5 +1,5 @@
 import torch
-from sncp_ppo.vec_buffer import VectorizedRolloutBuffer
+from sncp_ppo.vec_buffer import VectorizedRolloutBuffer, reset_hidden_where_done
 
 
 def _hidden(N, H, units=32):
@@ -85,3 +85,24 @@ def test_finish_bootstrap_on_last_values_device():
     buf.finish(last_values=last_v, last_dones=torch.zeros(N))
     assert buf.bootstrap_values.device == last_v.device
     assert torch.allclose(buf.bootstrap_values[:, T - 1], last_v)
+
+
+def test_reset_hidden_where_done():
+    from sncp_ppo.vec_buffer import reset_hidden_where_done
+    N, H, U = 3, 5, 32
+    hidden = {
+        'temporal_edge': torch.ones(N, U),
+        'spatial_edge': torch.ones(N * H, U),
+        'node': torch.ones(N, U),
+    }
+    dones = torch.tensor([0.0, 1.0, 0.0])  # only env 1 finished
+    out = reset_hidden_where_done(hidden, dones, num_humans=H)
+    # env 1 zeroed, envs 0 and 2 untouched
+    assert torch.all(out['temporal_edge'][1] == 0)
+    assert torch.all(out['node'][1] == 0)
+    assert torch.all(out['temporal_edge'][0] == 1)
+    assert torch.all(out['temporal_edge'][2] == 1)
+    # spatial: env 1 occupies rows [H:2H]
+    assert torch.all(out['spatial_edge'][H:2 * H] == 0)
+    assert torch.all(out['spatial_edge'][0:H] == 1)
+    assert torch.all(out['spatial_edge'][2 * H:3 * H] == 1)

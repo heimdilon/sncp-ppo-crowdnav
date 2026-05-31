@@ -42,6 +42,29 @@ def compute_gae_vectorized(rewards, values, dones, bootstrap_values,
     return advantages, returns
 
 
+def reset_hidden_where_done(hidden, dones, num_humans):
+    """Zero the LTC hidden state of envs that just finished an episode.
+
+    SyncVectorEnv auto-resets a done env, so its next observation is already the
+    new episode's first step. The recurrent hidden must be cleared for those env
+    rows or the new episode inherits stale memory (a silent correctness bug).
+
+    hidden: dict with 'temporal_edge' (N,U), 'spatial_edge' (N*H,U), 'node' (N,U).
+    dones:  (N,) 1.0 where the env finished this step.
+    """
+    N = dones.shape[0]
+    keep = (dones < 0.5).float()                  # (N,) 1.0 to keep, 0.0 to zero
+    keep_col = keep.view(N, 1)
+    new = {
+        'temporal_edge': hidden['temporal_edge'] * keep_col,
+        'node': hidden['node'] * keep_col,
+    }
+    # spatial is (N*H, U): expand keep per env across its H rows
+    keep_spat = keep.repeat_interleave(num_humans).view(N * num_humans, 1)
+    new['spatial_edge'] = hidden['spatial_edge'] * keep_spat
+    return new
+
+
 class VectorizedRolloutBuffer:
     """Fixed (num_envs, horizon) rollout storage for vectorized PPO.
 
