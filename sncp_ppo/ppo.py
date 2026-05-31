@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
+from sncp_ppo.vec_buffer import compute_gae_vectorized
 
 
 class RunningMeanStd:
@@ -562,3 +563,154 @@ class PPOAgent:
 
         # Clear memory buffer after updating
         self.memory.clear()
+
+
+    def update_vectorized(self, buffer, device):
+        """PPO update from a VectorizedRolloutBuffer (N envs x T steps).
+
+        Reuses the same surrogate/value/KL/RMS machinery as update(), but the
+        advantages come from the done-masked vectorized GAE and BPTT windows are
+        cut so they never span an env or an episode boundary.
+        """
+        data = buffer.get_tensors(device)
+        N, T = data['rewards'].shape
+        num_humans = data['obs']['spatial_edges'].shape[2]
+
+        advantages, returns = compute_gae_vectorized(
+            data['rewards'], data['values'], data['dones'],
+            data['bootstrap_values'], self.gamma, self.gae_lambda,
+        )
+
+        values = data['values']
+        if self.normalize_returns:
+            self.return_rms.update(returns.detach().cpu().numpy())
+            ret_std = self.return_rms.std
+            returns = returns / ret_std
+            values = values / ret_std
+
+        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
+        windows = []  # (n, start, length) -- never spans an env or episode boundary
+        for n in range(N):
+            seg_start = 0
+            for t in range(T):
+                is_boundary = data['dones'][n, t] > 0.5
+                if is_boundary or t == T - 1:
+                    seg_end = t + 1
+                    s = seg_start
+                    while s < seg_end:
+                        e = min(s + self.seq_len, seg_end)
+                        if e - s >= 4:
+                            windows.append((n, s, e - s))
+                        s = e
+                    seg_start = seg_end
+        if not windows:
+            return
+
+        S = self.seq_len
+        num_win = len(windows)
+
+        rn = torch.zeros(num_win, S, 7, device=device)
+        se = torch.zeros(num_win, S, num_humans, 4, device=device)
+        te = torch.zeros(num_win, S, 2, device=device)
+        act = torch.zeros(num_win, S, 2, device=device)
+        olp = torch.zeros(num_win, S, device=device)
+        adv = torch.zeros(num_win, S, device=device)
+        ret = torch.zeros(num_win, S, device=device)
+        ov = torch.zeros(num_win, S, device=device)
+        h_te = torch.zeros(num_win, data['h_temporal'].shape[-1], device=device)
+        h_no = torch.zeros(num_win, data['h_node'].shape[-1], device=device)
+        h_sp = torch.zeros(num_win, num_humans, data['h_spatial'].shape[-1] // num_humans, device=device)
+        lengths = []
+        for i, (n, st, L) in enumerate(windows):
+            rn[i, :L] = data['obs']['robot_node'][n, st:st + L]
+            se[i, :L] = data['obs']['spatial_edges'][n, st:st + L]
+            te[i, :L] = data['obs']['temporal_edges'][n, st:st + L]
+            act[i, :L] = data['actions'][n, st:st + L]
+            olp[i, :L] = data['log_probs'][n, st:st + L]
+            adv[i, :L] = advantages[n, st:st + L]
+            ret[i, :L] = returns[n, st:st + L]
+            ov[i, :L] = values[n, st:st + L]
+            h_te[i] = data['h_temporal'][n, st]
+            h_no[i] = data['h_node'][n, st]
+            h_sp[i] = data['h_spatial'][n, st].reshape(num_humans, -1)
+            lengths.append(L)
+
+        epoch_kl = epoch_ent = epoch_clip = 0.0
+        epochs_ran = 0
+        for epoch in range(self.epochs):
+            perm = torch.randperm(num_win)
+            batch_kls, batch_ents, batch_clips = [], [], []
+            for bs in range(0, num_win, self.batch_size):
+                bi = perm[bs:bs + self.batch_size]
+                B = len(bi)
+                b_rn, b_se, b_te = rn[bi], se[bi], te[bi]
+                b_act, b_olp = act[bi], olp[bi]
+                b_adv, b_ret, b_ov = adv[bi], ret[bi], ov[bi]
+                b_len = [lengths[j] for j in bi.tolist()]
+                valid = torch.zeros(B, S, device=device)
+                for k, L in enumerate(b_len):
+                    valid[k, :L] = 1.0
+
+                h_temp = h_te[bi].clone()
+                h_node = h_no[bi].clone()
+                h_spat = h_sp[bi].reshape(B * num_humans, -1).clone()
+
+                mus, stds, vals = [], [], []
+                for t in range(S):
+                    step_obs = {'robot_node': b_rn[:, t],
+                                'spatial_edges': b_se[:, t],
+                                'temporal_edges': b_te[:, t]}
+                    step_h = {'temporal_edge': h_temp, 'spatial_edge': h_spat, 'node': h_node}
+                    mu, std, val, nh = self.policy(step_obs, step_h)
+                    mus.append(mu); stds.append(std); vals.append(val)
+                    h_temp = nh['temporal_edge']; h_node = nh['node']
+                    hs = nh['spatial_edge']
+                    h_spat = hs.reshape(B * num_humans, -1) if hs.dim() == 3 else hs
+
+                all_mu = torch.stack(mus, dim=1)
+                all_std = torch.stack(stds, dim=1)
+                all_val = torch.stack(vals, dim=1).squeeze(-1)
+
+                dist = torch.distributions.Normal(all_mu, all_std)
+                new_lp = dist.log_prob(b_act).sum(-1)
+                entropy = dist.entropy().sum(-1)
+                ratio = torch.exp(new_lp - b_olp)
+                surr1 = ratio * b_adv
+                surr2 = torch.clamp(ratio, 1 - self.clip_eps, 1 + self.clip_eps) * b_adv
+                actor_loss = -(torch.min(surr1, surr2) * valid).sum() / valid.sum()
+
+                with torch.no_grad():
+                    lr_ = new_lp - b_olp
+                    approx_kl = (((torch.exp(lr_) - 1) - lr_) * valid).sum() / valid.sum()
+                    ent_mean = (entropy * valid).sum() / valid.sum()
+                    clip_frac = (((ratio - 1).abs() > self.clip_eps).float() * valid).sum() / valid.sum()
+                    batch_kls.append(approx_kl.item()); batch_ents.append(ent_mean.item()); batch_clips.append(clip_frac.item())
+
+                v_clipped = b_ov + torch.clamp(all_val - b_ov, -self.clip_eps, self.clip_eps)
+                vl_u = (all_val - b_ret).pow(2)
+                vl_c = (v_clipped - b_ret).pow(2)
+                critic_loss = (torch.max(vl_u, vl_c) * valid).sum() / valid.sum()
+
+                entropy_loss = -(entropy * valid).sum() / valid.sum()
+                loss = actor_loss + self.c1 * critic_loss + self.c2 * entropy_loss
+
+                self.optimizer.zero_grad()
+                loss.backward()
+                nn.utils.clip_grad_norm_(self.policy.parameters(), max_norm=0.5)
+                self.optimizer.step()
+
+            epochs_ran = epoch + 1
+            if batch_kls:
+                epoch_kl = float(np.mean(batch_kls))
+                epoch_ent = float(np.mean(batch_ents))
+                epoch_clip = float(np.mean(batch_clips))
+            if self.target_kl is not None and epoch_kl > 1.5 * self.target_kl:
+                break
+
+        self.last_entropy = epoch_ent
+        self.last_approx_kl = epoch_kl
+        self.last_clip_frac = epoch_clip
+        self.last_epochs_ran = epochs_ran
+        if self.scheduler is not None:
+            self.scheduler.step()

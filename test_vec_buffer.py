@@ -106,3 +106,35 @@ def test_reset_hidden_where_done():
     assert torch.all(out['spatial_edge'][H:2 * H] == 0)
     assert torch.all(out['spatial_edge'][0:H] == 1)
     assert torch.all(out['spatial_edge'][2 * H:3 * H] == 1)
+
+
+def test_update_vectorized_runs_and_steps_optimizer():
+    """update_vectorized should consume an (N,T) buffer, run without error, and
+    actually change policy parameters (a gradient step happened)."""
+    from sncp_ppo.ppo import PPOAgent
+    from sncp_ppo.models import SNCPPolicy
+    torch.manual_seed(0)
+    N, T, H = 4, 32, 5
+    policy = SNCPPolicy()
+    agent = PPOAgent(policy=policy, seq_len=16, batch_size=8, epochs=2)
+    buf = VectorizedRolloutBuffer(num_envs=N, horizon=T)
+    for t in range(T):
+        obs = {'robot_node': torch.randn(N, 7),
+               'spatial_edges': torch.randn(N, H, 4),
+               'temporal_edges': torch.randn(N, 2)}
+        dones = torch.zeros(N)
+        if t == 15:
+            dones[0] = 1.0  # env 0 finishes mid-rollout
+        buf.store(obs=obs,
+                  hidden=policy.init_hidden(N, H, torch.device('cpu')),
+                  actions=torch.randn(N, 2), log_probs=torch.randn(N),
+                  rewards=torch.randn(N), values=torch.randn(N),
+                  dones=dones, masks=1.0 - dones)
+    buf.finish(last_values=torch.randn(N), last_dones=torch.zeros(N))
+
+    before = [p.clone() for p in policy.parameters()]
+    agent.update_vectorized(buf, torch.device('cpu'))
+    after = list(policy.parameters())
+    changed = any(not torch.equal(b, a) for b, a in zip(before, after))
+    assert changed, "optimizer did not update any parameter"
+    assert isinstance(agent.last_approx_kl, float)
