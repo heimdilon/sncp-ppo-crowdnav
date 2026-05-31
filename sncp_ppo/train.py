@@ -138,6 +138,15 @@ def evaluate_holdout(env, policy, agent, device, n_episodes, scenario, base_seed
     }
 
 
+def make_env(num_humans, scenario, seed):
+    """Factory for a single CrowdSimEnv, used by SyncVectorEnv."""
+    def _thunk():
+        env = CrowdSimEnv(num_humans=num_humans, scenario=scenario)
+        env.reset(seed=seed)
+        return env
+    return _thunk
+
+
 def train(args):
     set_seed(args.seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -244,6 +253,10 @@ def train(args):
     # rollout buffer stays single-N (avoids shape mismatches in _extract_subsequences).
     window_phase = curriculum[0]
     window_is_replay = False
+
+    if args.num_envs > 1:
+        _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, csv_file)
+        return
 
     for episode in range(1, args.episodes + 1):
         iter_start = time.perf_counter()
@@ -469,6 +482,82 @@ def train(args):
     print(f"CSV log saved to: {log_path}")
 
 
+def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, csv_file):
+    """Vectorized fixed-horizon rollout path (N envs x T steps per PPO update).
+
+    Uses gymnasium.vector.SyncVectorEnv. On every step, done envs are auto-reset
+    by the vector env and their LTC hidden rows are zeroed via
+    reset_hidden_where_done so a new episode never starts with stale memory.
+    This first version trains on a fixed 'circle' scenario (no curriculum, no
+    holdout eval yet) -- it is the data-throughput path; curriculum/holdout in
+    the vectorized loop are scoped as follow-up work.
+    """
+    import gymnasium as gym
+    from sncp_ppo.vec_buffer import VectorizedRolloutBuffer, reset_hidden_where_done
+
+    N, T = args.num_envs, args.horizon
+    H = args.num_humans
+    envs = gym.vector.SyncVectorEnv(
+        [make_env(H, 'circle', args.seed + i) for i in range(N)]
+    )
+    obs_np, _ = envs.reset(seed=args.seed)
+    h = policy.init_hidden(batch_size=N, num_humans=H, device=device)
+
+    total_steps = 0
+    print(f"\nVectorized training: {N} envs x {T} steps = {N * T} transitions/update")
+    print("-" * 90)
+
+    def to_tensor(o):
+        return {
+            'robot_node': torch.tensor(o['robot_node'], dtype=torch.float32, device=device),
+            'spatial_edges': torch.tensor(o['spatial_edges'], dtype=torch.float32, device=device),
+            'temporal_edges': torch.tensor(o['temporal_edges'], dtype=torch.float32, device=device),
+        }
+
+    target_updates = args.episodes
+    update_idx = 0
+    while update_idx < target_updates:
+        buf = VectorizedRolloutBuffer(num_envs=N, horizon=T)
+        for t in range(T):
+            obs_t = to_tensor(obs_np)
+            with torch.no_grad():
+                mu, std, value, h_next = policy(obs_t, h)
+                dist = torch.distributions.Normal(mu, std)
+                action = dist.sample()
+                log_prob = dist.log_prob(action).sum(-1)
+            act_np = action.cpu().numpy()
+            act_np[:, 0] = np.clip(act_np[:, 0], 0.0, env.robot_vpref)
+            act_np[:, 1] = np.clip(act_np[:, 1], -env.robot_wmax, env.robot_wmax)
+            next_obs, reward, term, trunc, info = envs.step(act_np)
+            done = np.logical_or(term, trunc)
+            done_t = torch.tensor(done, dtype=torch.float32, device=device)
+            reward_t = torch.tensor(reward, dtype=torch.float32, device=device)
+            mask_t = torch.tensor(1.0 - term.astype('float32'), device=device)
+            buf.store(obs=obs_t, hidden=h, actions=action, log_probs=log_prob,
+                      rewards=reward_t, values=value.squeeze(-1),
+                      dones=done_t, masks=mask_t)
+            obs_np = next_obs
+            h = reset_hidden_where_done(h_next, done_t, H)
+            total_steps += N
+
+        with torch.no_grad():
+            last_v = policy(to_tensor(obs_np), h)[2].squeeze(-1)
+        buf.finish(last_values=last_v, last_dones=torch.zeros(N, device=device))
+        agent.update_vectorized(buf, device)
+        update_idx += 1
+
+        if update_idx % 10 == 0:
+            with torch.no_grad():
+                stdv = policy.actor_logstd.exp().squeeze().cpu().numpy()
+            print(f"Update {update_idx}/{target_updates} | steps {total_steps:8d} | "
+                  f"ent={agent.last_entropy:+.3f} kl={agent.last_approx_kl:.5f} "
+                  f"std=[{stdv[0]:.3f},{stdv[1]:.3f}] rms={agent.return_rms.std:.2f}")
+
+    torch.save(policy.state_dict(), args.save_path.replace('.pt', '_final.pt'))
+    csv_file.close()
+    print("\nVectorized training completed!")
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Train SNCP-PPO with curriculum + holdout eval.')
 
@@ -547,6 +636,12 @@ if __name__ == '__main__':
     # Logging / checkpointing
     parser.add_argument('--log_freq', type=int, default=20)
     parser.add_argument('--save_path', type=str, default='checkpoints/sncp_ppo.pt')
+
+    parser.add_argument('--num_envs', type=int, default=1,
+                        help='Parallel envs. 1 = legacy single-env path; '
+                             '>1 = vectorized fixed-horizon rollout.')
+    parser.add_argument('--horizon', type=int, default=128,
+                        help='Steps per env per PPO update in vectorized mode.')
 
     args = parser.parse_args()
 
