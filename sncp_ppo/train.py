@@ -482,30 +482,47 @@ def train(args):
     print(f"CSV log saved to: {log_path}")
 
 
-def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, csv_file):
-    """Vectorized fixed-horizon rollout path (N envs x T steps per PPO update).
+def step_to_phase(steps_seen, total_steps, final_num_humans):
+    """Map an env-step count to a curriculum phase.
 
-    Uses gymnasium.vector.SyncVectorEnv. On every step, done envs are auto-reset
-    by the vector env and their LTC hidden rows are zeroed via
-    reset_hidden_where_done so a new episode never starts with stale memory.
-    This first version trains on a fixed 'circle' scenario (no curriculum, no
-    holdout eval yet) -- it is the data-throughput path; curriculum/holdout in
-    the vectorized loop are scoped as follow-up work.
+    Boundaries are inclusive fractions of total_steps: 10/25/50/75%, matching
+    the single-env curriculum. The final phase uses final_num_humans.
+    """
+    frac = steps_seen / max(1, total_steps)
+    if frac <= 0.10:
+        return ('easy', 1, 0.15)
+    if frac <= 0.25:
+        return ('easy_plus', 2, 0.20)
+    if frac <= 0.50:
+        return ('medium', 3, 0.30)
+    if frac <= 0.75:
+        return ('hard', 4, 0.40)
+    return ('circle', final_num_humans, 0.50)
+
+
+def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, csv_file):
+    """Vectorized rollout with step-budgeted curriculum and holdout eval.
+
+    All parallel envs share num_humans so observations batch cleanly. At phase
+    boundaries, envs are recreated between PPO updates and recurrent state is
+    reinitialized for the new human count.
     """
     import gymnasium as gym
     from sncp_ppo.vec_buffer import VectorizedRolloutBuffer, reset_hidden_where_done
 
     N, T = args.num_envs, args.horizon
-    H = args.num_humans
-    envs = gym.vector.SyncVectorEnv(
-        [make_env(H, 'circle', args.seed + i) for i in range(N)]
-    )
-    obs_np, _ = envs.reset(seed=args.seed)
-    h = policy.init_hidden(batch_size=N, num_humans=H, device=device)
 
-    total_steps = 0
-    print(f"\nVectorized training: {N} envs x {T} steps = {N * T} transitions/update")
-    print("-" * 90)
+    def set_envs_vpref(envs, vpref):
+        for sub_env in envs.envs:
+            sub_env.unwrapped.human_vpref = vpref
+
+    def build_envs(num_humans, scenario, vpref):
+        envs = gym.vector.SyncVectorEnv(
+            [make_env(num_humans, scenario, args.seed + i) for i in range(N)]
+        )
+        obs, _ = envs.reset(seed=args.seed)
+        set_envs_vpref(envs, vpref)
+        return envs, obs
 
     def to_tensor(o):
         return {
@@ -514,9 +531,38 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
             'temporal_edges': torch.tensor(o['temporal_edges'], dtype=torch.float32, device=device),
         }
 
-    target_updates = args.episodes
+    nan_result = {'success_rate': float('nan'), 'collision_rate': float('nan'),
+                  'timeout_rate': float('nan'), 'avg_reward': float('nan')}
+    last_holdout_per_scenario = {sc: dict(nan_result) for sc in args.holdout_scenarios}
+    best_holdout_min_success = -1.0
+    best_holdout_score = (-1.0, -float('inf'), -float('inf'))
+    holdout_eval_count = 0
+    eval_env = CrowdSimEnv(num_humans=args.num_humans, scenario='circle')
+
+    scenario, H, vpref = step_to_phase(0, args.total_steps, args.num_humans)
+    envs, obs_np = build_envs(H, scenario, vpref)
+    h = policy.init_hidden(batch_size=N, num_humans=H, device=device)
+
+    total_steps = 0
     update_idx = 0
-    while update_idx < target_updates:
+    print(f"\nVectorized training: {N} envs x {T} steps = {N * T} transitions/update")
+    print(f"Curriculum by step budget: total={args.total_steps}, phases 10/25/50/75%")
+    print(f"Holdout every {args.eval_freq_updates} updates on {args.holdout_scenarios}")
+    print(f"Note: --episodes is ignored in vectorized mode; --total_steps controls run length.")
+    print("-" * 90)
+
+    while total_steps < args.total_steps:
+        next_scenario, next_H, next_vpref = step_to_phase(
+            total_steps, args.total_steps, args.num_humans,
+        )
+        if next_H != H or next_scenario != scenario:
+            print(f"\n  [Curriculum shift @ step {total_steps}] "
+                  f"{scenario}/{H}h -> {next_scenario}/{next_H}h")
+            envs.close()
+            scenario, H, vpref = next_scenario, next_H, next_vpref
+            envs, obs_np = build_envs(H, scenario, vpref)
+            h = policy.init_hidden(batch_size=N, num_humans=H, device=device)
+
         buf = VectorizedRolloutBuffer(num_envs=N, horizon=T)
         for t in range(T):
             obs_t = to_tensor(obs_np)
@@ -530,6 +576,7 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
             act_np[:, 1] = np.clip(act_np[:, 1], -env.robot_wmax, env.robot_wmax)
             next_obs, reward, term, trunc, info = envs.step(act_np)
             done = np.logical_or(term, trunc)
+            set_envs_vpref(envs, vpref)
             done_t = torch.tensor(done, dtype=torch.float32, device=device)
             reward_t = torch.tensor(reward, dtype=torch.float32, device=device)
             mask_t = torch.tensor(1.0 - term.astype('float32'), device=device)
@@ -546,16 +593,79 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
         agent.update_vectorized(buf, device)
         update_idx += 1
 
+        is_best_checkpoint = 0
+        best_reason = ''
+        if args.eval_freq_updates > 0 and update_idx % args.eval_freq_updates == 0:
+            for sc in args.holdout_scenarios:
+                last_holdout_per_scenario[sc] = evaluate_holdout(
+                    eval_env, policy, agent, device,
+                    n_episodes=args.holdout_episodes,
+                    scenario=sc,
+                    base_seed=args.seed + 10_000 + total_steps,
+                )
+            holdout_eval_count += 1
+
+            min_success = min(r['success_rate'] for r in last_holdout_per_scenario.values())
+            avg_reward = float(np.mean([r['avg_reward'] for r in last_holdout_per_scenario.values()]))
+            avg_collision = float(np.mean([r['collision_rate'] for r in last_holdout_per_scenario.values()]))
+            current_score = (min_success, avg_reward, -avg_collision)
+
+            if holdout_eval_count <= args.best_warmup_evals:
+                best_reason = (f"best skipped due to warmup "
+                               f"(eval {holdout_eval_count}/{args.best_warmup_evals})")
+                print(f"  --> {best_reason}: min={min_success:.1%}, "
+                      f"avg_reward={avg_reward:.3f}, collision={avg_collision:.1%}")
+            elif min_success < args.best_min_success_threshold:
+                best_reason = (f"best skipped due to threshold "
+                               f"(min_success={min_success:.1%} < {args.best_min_success_threshold:.1%})")
+                print(f"  --> {best_reason}")
+            elif current_score > best_holdout_score:
+                best_holdout_min_success = min_success
+                best_holdout_score = current_score
+                torch.save(policy.state_dict(), args.save_path)
+                is_best_checkpoint = 1
+                best_reason = ('best updated (priority: min_success, tie-break: avg_reward, '
+                               'then lower collision_rate)')
+                per_sc = {sc: f"{r['success_rate']:.0%}"
+                          for sc, r in last_holdout_per_scenario.items()}
+                print(f"  --> New best generalist min={min_success:.1%}, "
+                      f"avg_reward={avg_reward:.3f}, collision={avg_collision:.1%} {per_sc}, "
+                      f"saved to {args.save_path}")
+            else:
+                best_reason = ('best not updated: score did not improve '
+                               '(priority: min_success, tie-break: avg_reward, lower collision_rate)')
+                print(f"  --> {best_reason}")
+
+        ho_row = []
+        for sc in args.holdout_scenarios:
+            r = last_holdout_per_scenario[sc]
+            ho_row += [f"{r['success_rate']:.4f}", f"{r['collision_rate']:.4f}",
+                       f"{r['timeout_rate']:.4f}", f"{r['avg_reward']:.4f}"]
+        try:
+            csv_writer.writerow([
+                total_steps, scenario, H, vpref, T,
+                '', '', '', '', '',
+                is_best_checkpoint, best_reason,
+            ] + ho_row)
+            csv_file.flush()
+        except OSError as e:
+            if not getattr(_train_vectorized, '_csv_io_warned', False):
+                print(f"  [warning] CSV log write failed ({e}); continuing without per-update logging.")
+                _train_vectorized._csv_io_warned = True
+
         if update_idx % 10 == 0:
             with torch.no_grad():
                 stdv = policy.actor_logstd.exp().squeeze().cpu().numpy()
-            print(f"Update {update_idx}/{target_updates} | steps {total_steps:8d} | "
+            print(f"Update {update_idx} | step {total_steps}/{args.total_steps} [{scenario} {H}h] | "
                   f"ent={agent.last_entropy:+.3f} kl={agent.last_approx_kl:.5f} "
                   f"std=[{stdv[0]:.3f},{stdv[1]:.3f}] rms={agent.return_rms.std:.2f}")
 
+    envs.close()
     torch.save(policy.state_dict(), args.save_path.replace('.pt', '_final.pt'))
     csv_file.close()
     print("\nVectorized training completed!")
+    print(f"Best generalist (min across {args.holdout_scenarios}): {best_holdout_min_success:.1%}")
+    print(f"CSV log saved to: {log_path}")
 
 
 if __name__ == '__main__':
@@ -618,13 +728,13 @@ if __name__ == '__main__':
     parser.add_argument('--holdout_episodes', type=int, default=50,
                         help='Episodes per holdout evaluation per scenario (higher = lower variance). '
                              'Raised 30->50: at 30 the best-checkpoint metric was noisy '
-                             '(v7 "50%" holdout was really 38% on 100-ep eval).')
+                             '(v7 "50%%" holdout was really 38%% on 100-ep eval).')
     parser.add_argument('--holdout_scenarios', type=str, nargs='+',
                         default=['easy', 'hard'],
                         choices=['easy', 'easy_plus', 'medium', 'hard', 'extreme', 'circle', 'random'],
                         help='Scenarios for periodic holdout eval. Best checkpoint is saved '
                              'when min(success across these) improves — rewards generalists, '
-                             'not "100% on one, 0% on the other" specialists.')
+                             'not "100%% on one, 0%% on the other" specialists.')
     parser.add_argument('--holdout_scenario', type=str, default=None,
                         help='[Deprecated] Single-scenario alias for --holdout_scenarios. '
                              'If set, overrides --holdout_scenarios with a one-element list.')
@@ -642,6 +752,11 @@ if __name__ == '__main__':
                              '>1 = vectorized fixed-horizon rollout.')
     parser.add_argument('--horizon', type=int, default=128,
                         help='Steps per env per PPO update in vectorized mode.')
+    parser.add_argument('--total_steps', type=int, default=2_000_000,
+                        help='Env-step budget (vectorized mode): drives curriculum '
+                             'phase boundaries (10/25/50/75%%) and total run length.')
+    parser.add_argument('--eval_freq_updates', type=int, default=20,
+                        help='Holdout evaluation cadence in PPO updates (vectorized mode).')
 
     args = parser.parse_args()
 
