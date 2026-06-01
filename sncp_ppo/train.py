@@ -482,6 +482,24 @@ def train(args):
     print(f"CSV log saved to: {log_path}")
 
 
+def step_to_phase(steps_seen, total_steps, final_num_humans):
+    """Map an env-step count to a curriculum phase.
+
+    Boundaries are inclusive fractions of total_steps: 10/25/50/75%, matching
+    the single-env curriculum. The final phase uses final_num_humans.
+    """
+    frac = steps_seen / max(1, total_steps)
+    if frac <= 0.10:
+        return ('easy', 1, 0.15)
+    if frac <= 0.25:
+        return ('easy_plus', 2, 0.20)
+    if frac <= 0.50:
+        return ('medium', 3, 0.30)
+    if frac <= 0.75:
+        return ('hard', 4, 0.40)
+    return ('circle', final_num_humans, 0.50)
+
+
 def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, csv_file):
     """Vectorized fixed-horizon rollout path (N envs x T steps per PPO update).
 
