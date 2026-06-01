@@ -1,4 +1,7 @@
 from sncp_ppo.train import step_to_phase
+import os
+import subprocess
+import sys
 
 
 def test_step_to_phase_boundaries():
@@ -16,3 +19,16 @@ def test_step_to_phase_boundaries():
     assert step_to_phase(751, total, 5) == ('circle', 5, 0.50)
     assert step_to_phase(1000, total, 5) == ('circle', 5, 0.50)
     assert step_to_phase(99999, total, 5) == ('circle', 5, 0.50)
+
+
+def test_vectorized_cli_args_are_listed_in_help():
+    result = subprocess.run(
+        [sys.executable, '-m', 'sncp_ppo.train', '--help'],
+        check=True,
+        capture_output=True,
+        env={**os.environ, 'PYTHONIOENCODING': 'utf-8'},
+        text=True,
+    )
+
+    assert '--total_steps' in result.stdout
+    assert '--eval_freq_updates' in result.stdout

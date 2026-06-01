@@ -636,13 +636,13 @@ if __name__ == '__main__':
     parser.add_argument('--holdout_episodes', type=int, default=50,
                         help='Episodes per holdout evaluation per scenario (higher = lower variance). '
                              'Raised 30->50: at 30 the best-checkpoint metric was noisy '
-                             '(v7 "50%" holdout was really 38% on 100-ep eval).')
+                             '(v7 "50%%" holdout was really 38%% on 100-ep eval).')
     parser.add_argument('--holdout_scenarios', type=str, nargs='+',
                         default=['easy', 'hard'],
                         choices=['easy', 'easy_plus', 'medium', 'hard', 'extreme', 'circle', 'random'],
                         help='Scenarios for periodic holdout eval. Best checkpoint is saved '
                              'when min(success across these) improves — rewards generalists, '
-                             'not "100% on one, 0% on the other" specialists.')
+                             'not "100%% on one, 0%% on the other" specialists.')
     parser.add_argument('--holdout_scenario', type=str, default=None,
                         help='[Deprecated] Single-scenario alias for --holdout_scenarios. '
                              'If set, overrides --holdout_scenarios with a one-element list.')
@@ -660,6 +660,11 @@ if __name__ == '__main__':
                              '>1 = vectorized fixed-horizon rollout.')
     parser.add_argument('--horizon', type=int, default=128,
                         help='Steps per env per PPO update in vectorized mode.')
+    parser.add_argument('--total_steps', type=int, default=2_000_000,
+                        help='Env-step budget (vectorized mode): drives curriculum '
+                             'phase boundaries (10/25/50/75%%) and total run length.')
+    parser.add_argument('--eval_freq_updates', type=int, default=20,
+                        help='Holdout evaluation cadence in PPO updates (vectorized mode).')
 
     args = parser.parse_args()
 
