@@ -611,7 +611,9 @@ class PPOAgent:
         num_win = len(windows)
 
         rn = torch.zeros(num_win, S, 7, device=device)
-        se = torch.zeros(num_win, S, num_humans, 4, device=device)
+        # spatial dim = 6 (pos + rel_vel + goal_dir); must match crowd_env
+        # _get_obs spatial_edges width and models.SNCPPolicy spatial_ltc input.
+        se = torch.zeros(num_win, S, num_humans, 6, device=device)
         te = torch.zeros(num_win, S, 2, device=device)
         act = torch.zeros(num_win, S, 2, device=device)
         olp = torch.zeros(num_win, S, device=device)

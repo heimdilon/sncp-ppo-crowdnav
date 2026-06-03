@@ -16,7 +16,7 @@ def test_buffer_accumulates_NT_shapes():
     for t in range(T):
         obs = {
             'robot_node': torch.zeros(N, 7),
-            'spatial_edges': torch.zeros(N, H, 4),
+            'spatial_edges': torch.zeros(N, H, 6),
             'temporal_edges': torch.zeros(N, 2),
         }
         buf.store(
@@ -28,7 +28,7 @@ def test_buffer_accumulates_NT_shapes():
     data = buf.get_tensors(torch.device('cpu'))
     assert data['rewards'].shape == (N, T)
     assert data['actions'].shape == (N, T, 2)
-    assert data['obs']['spatial_edges'].shape == (N, T, H, 4)
+    assert data['obs']['spatial_edges'].shape == (N, T, H, 6)
     assert data['obs']['robot_node'].shape == (N, T, 7)
     assert data['dones'].shape == (N, T)
     assert data['h_temporal'].shape == (N, T, 32)
@@ -44,7 +44,7 @@ def test_finish_sets_bootstrap_and_horizon_done():
     mask_seq = [torch.tensor([1., 1.]), torch.tensor([0., 1.]), torch.tensor([1., 1.])]
     for t in range(T):
         obs = {'robot_node': torch.zeros(N, 7),
-               'spatial_edges': torch.zeros(N, H, 4),
+               'spatial_edges': torch.zeros(N, H, 6),
                'temporal_edges': torch.zeros(N, 2)}
         buf.store(obs=obs,
                   hidden={'temporal_edge': torch.zeros(N, 32),
@@ -72,7 +72,7 @@ def test_finish_bootstrap_on_last_values_device():
     buf = VectorizedRolloutBuffer(num_envs=N, horizon=T)
     for t in range(T):
         obs = {'robot_node': torch.zeros(N, 7),
-               'spatial_edges': torch.zeros(N, H, 4),
+               'spatial_edges': torch.zeros(N, H, 6),
                'temporal_edges': torch.zeros(N, 2)}
         buf.store(obs=obs,
                   hidden={'temporal_edge': torch.zeros(N, 32),
@@ -120,7 +120,7 @@ def test_update_vectorized_runs_and_steps_optimizer():
     buf = VectorizedRolloutBuffer(num_envs=N, horizon=T)
     for t in range(T):
         obs = {'robot_node': torch.randn(N, 7),
-               'spatial_edges': torch.randn(N, H, 4),
+               'spatial_edges': torch.randn(N, H, 6),
                'temporal_edges': torch.randn(N, 2)}
         dones = torch.zeros(N)
         if t == 15:
