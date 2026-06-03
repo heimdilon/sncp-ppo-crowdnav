@@ -388,8 +388,19 @@ def train(args):
             elif current_score > best_holdout_score:
                 best_holdout_min_success = min_success
                 best_holdout_score = current_score
-                torch.save(policy.state_dict(), args.save_path)
-                is_best_checkpoint = 1
+                # I/O-robust best save (Drive FUSE can die mid-run -> Errno 107).
+                try:
+                    torch.save(policy.state_dict(), args.save_path)
+                    is_best_checkpoint = 1
+                except OSError as e:
+                    fallback = os.path.join('/content', os.path.basename(args.save_path))
+                    try:
+                        torch.save(policy.state_dict(), fallback)
+                        is_best_checkpoint = 1
+                        print(f"  [warning] best save to {args.save_path} failed ({e}); "
+                              f"saved to {fallback} instead.")
+                    except OSError as e2:
+                        print(f"  [error] best save failed on both paths ({e2}); skipping.")
                 best_reason = ('best updated (priority: min_success, tie-break: avg_reward, '
                                'then lower collision_rate)')
                 per_sc = {sc: f"{r['success_rate']:.0%}"
@@ -608,7 +619,13 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
 
         with torch.no_grad():
             last_v = policy(to_tensor(obs_np), h)[2].squeeze(-1)
-        buf.finish(last_values=last_v, last_dones=torch.zeros(N, device=device))
+        # last_dones = whether each env *terminated* on the final rollout step
+        # (term from the last loop iteration). Passing zeros (the old bug) gave a
+        # terminated-at-horizon env a nonzero bootstrap V(auto-reset_s0), biasing
+        # its return upward — and with timeout=0% in this env, episodes terminate
+        # frequently right at the horizon. last_dones=term zeros that bootstrap.
+        last_dones = torch.tensor(term.astype('float32'), device=device)
+        buf.finish(last_values=last_v, last_dones=last_dones)
         agent.update_vectorized(buf, device)
         update_idx += 1
 
@@ -641,8 +658,19 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
             elif current_score > best_holdout_score:
                 best_holdout_min_success = min_success
                 best_holdout_score = current_score
-                torch.save(policy.state_dict(), args.save_path)
-                is_best_checkpoint = 1
+                # I/O-robust best save (Drive FUSE can die mid-run -> Errno 107).
+                try:
+                    torch.save(policy.state_dict(), args.save_path)
+                    is_best_checkpoint = 1
+                except OSError as e:
+                    fallback = os.path.join('/content', os.path.basename(args.save_path))
+                    try:
+                        torch.save(policy.state_dict(), fallback)
+                        is_best_checkpoint = 1
+                        print(f"  [warning] best save to {args.save_path} failed ({e}); "
+                              f"saved to {fallback} instead.")
+                    except OSError as e2:
+                        print(f"  [error] best save failed on both paths ({e2}); skipping.")
                 best_reason = ('best updated (priority: min_success, tie-break: avg_reward, '
                                'then lower collision_rate)')
                 per_sc = {sc: f"{r['success_rate']:.0%}"
@@ -680,8 +708,26 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
                   f"std=[{stdv[0]:.3f},{stdv[1]:.3f}] rms={agent.return_rms.std:.2f}")
 
     envs.close()
-    torch.save(policy.state_dict(), args.save_path.replace('.pt', '_final.pt'))
-    csv_file.close()
+    # I/O-robust final save: on Colab the save dir may sit behind a Drive FUSE
+    # mount that can die mid-run (Errno 107). A bare torch.save would then crash
+    # and lose the final checkpoint. Try the configured path; on OSError fall
+    # back to a local /content path so hours of compute aren't lost.
+    final_path = args.save_path.replace('.pt', '_final.pt')
+    try:
+        torch.save(policy.state_dict(), final_path)
+    except OSError as e:
+        fallback = os.path.join('/content', os.path.basename(final_path))
+        try:
+            torch.save(policy.state_dict(), fallback)
+            print(f"  [warning] final save to {final_path} failed ({e}); "
+                  f"saved to {fallback} instead.")
+        except OSError as e2:
+            print(f"  [error] final save failed on both paths ({e2}); "
+                  f"best checkpoint (if any) may still be on disk.")
+    try:
+        csv_file.close()
+    except OSError:
+        pass
     print("\nVectorized training completed!")
     print(f"Best generalist (min across {args.holdout_scenarios}): {best_holdout_min_success:.1%}")
     print(f"CSV log saved to: {log_path}")
