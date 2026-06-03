@@ -157,11 +157,15 @@ def train(args):
 
     # 2. Create SNCP policy and PPO agent
     policy = SNCPPolicy(robot_vpref=env.robot_vpref, robot_wmax=env.robot_wmax).to(device)
-    # Estimate total scheduled PPO updates:
-    #   periodic = episodes // update_freq
-    #   plus one forced-flush update at each curriculum-phase boundary (~5)
-    # Over-estimating is harmless: LinearLR clamps at end_factor after total_iters.
-    total_updates = args.episodes // args.update_freq + 5
+    # Scheduled PPO updates for the LR scheduler. Vectorized mode does one
+    # update per fixed-horizon rollout (total_steps // (num_envs*horizon)),
+    # which is very different from the single-env episodes//update_freq. Using
+    # the wrong one (the v11 bug) collapses the LR to its floor partway through.
+    total_updates = compute_total_updates(
+        num_envs=args.num_envs, episodes=args.episodes,
+        update_freq=args.update_freq, total_steps=args.total_steps,
+        horizon=args.horizon,
+    )
     agent = PPOAgent(
         policy=policy,
         lr=args.lr,
@@ -480,6 +484,21 @@ def train(args):
     print(f"Total time: {_fmt_duration(time.perf_counter() - train_start)}")
     print(f"Best generalist (min across {args.holdout_scenarios}): {best_holdout_min_success:.1%}")
     print(f"CSV log saved to: {log_path}")
+
+
+def compute_total_updates(num_envs, episodes, update_freq, total_steps, horizon):
+    """Number of PPO updates the LR scheduler should decay over.
+
+    Single-env (num_envs == 1): one update every `update_freq` episodes, plus a
+    forced-flush update at each of the ~5 curriculum-phase boundaries.
+    Vectorized (num_envs > 1): one update per fixed-horizon rollout, i.e.
+    total_steps // (num_envs * horizon). The v11 bug used the single-env formula
+    in vectorized mode, so LR hit its floor at ~1/3 of the run and HARD/CIRCLE
+    trained at the floor lr.
+    """
+    if num_envs > 1:
+        return total_steps // (num_envs * horizon)
+    return episodes // update_freq + 5
 
 
 def step_to_phase(steps_seen, total_steps, final_num_humans):

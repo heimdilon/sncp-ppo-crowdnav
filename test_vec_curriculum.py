@@ -88,3 +88,26 @@ def test_vectorized_runs_with_curriculum_holdout_and_saves(tmp_path):
     assert rows[-1][12] != 'nan'
     assert rows[-1][16] != 'nan'
     assert save_path.exists() or os.path.exists(str(save_path).replace('.pt', '_final.pt'))
+
+
+def test_compute_total_updates_vectorized_vs_single():
+    """LR scheduler horizon must match the ACTUAL number of PPO updates.
+
+    Single-env: episodes // update_freq (+ phase-boundary flushes).
+    Vectorized: total_steps // (num_envs * horizon).
+    The v11 bug used the single-env formula in vectorized mode, so the LR
+    decayed to its floor at ~1/3 of the run and HARD/CIRCLE trained at ~0 lr.
+    """
+    from sncp_ppo.train import compute_total_updates
+
+    # single-env: 1500 episodes, update_freq 5 -> 300 (+5 boundary flushes)
+    assert compute_total_updates(num_envs=1, episodes=1500, update_freq=5,
+                                 total_steps=2_000_000, horizon=128) == 305
+
+    # vectorized: 2,000,000 steps / (16*128=2048) = 976 updates
+    assert compute_total_updates(num_envs=16, episodes=1500, update_freq=5,
+                                 total_steps=2_000_000, horizon=128) == 976
+
+    # vectorized with different geometry: 8 envs * 64 = 512 -> 12000/512 = 23
+    assert compute_total_updates(num_envs=8, episodes=50, update_freq=5,
+                                 total_steps=12000, horizon=64) == 23
