@@ -38,8 +38,8 @@ class SNCPPolicy(nn.Module):
         
         # 3. Spatial Edge Encoder (LTC size 32 -> project to 256)
         self.spatial_wiring = FullyConnected(units=32)
-        # input_size=4: [dx_local, dy_local, rel_vx_local, rel_vy_local] per human
-        self.spatial_ltc = LTC(input_size=4, units=self.spatial_wiring)
+        # input_size=6: [dx, dy, rel_vx, rel_vy, goal_dir_x, goal_dir_y] per human
+        self.spatial_ltc = LTC(input_size=6, units=self.spatial_wiring)
         self.spatial_proj = nn.Linear(32, 256)
         
         # 4. Attention Pooling weights
@@ -142,7 +142,7 @@ class SNCPPolicy(nn.Module):
         m_rr = self.temporal_proj(m_rr_seq.squeeze(1))
         
         # 3. Spatial Edge Encoding (LTC)
-        spatial_input = spatial_edges.reshape(batch_size * num_humans, 1, 4)
+        spatial_input = spatial_edges.reshape(batch_size * num_humans, 1, 6)
         h_spat = hidden_states['spatial_edge']
         if h_spat.dim() == 3:
             h_spat_flat = h_spat.reshape(batch_size * num_humans, -1)

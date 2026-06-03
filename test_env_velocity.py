@@ -33,10 +33,13 @@ def test_position_part_unchanged():
 
 
 def test_initial_velocity_is_zero():
-    """At reset both robot and pedestrians are stationary -> rel velocity ~ 0."""
+    """At reset both robot and pedestrians are stationary -> rel velocity ~ 0.
+
+    Velocity is columns 2:4 specifically (cols 4:6 are the goal-direction unit
+    vector, which is NOT zero at reset)."""
     env = CrowdSimEnv(num_humans=5, scenario='hard')
     obs, _ = env.reset(seed=1)
-    vel = obs['spatial_edges'][:, 2:]
+    vel = obs['spatial_edges'][:, 2:4]
     assert np.allclose(vel, 0.0, atol=1e-6)
 
 
@@ -46,7 +49,7 @@ def test_velocity_nonzero_after_motion():
     env = CrowdSimEnv(num_humans=5, scenario='hard', randomize_layout=False)
     env.reset(seed=1)
     obs, *_ = env.step(np.array([0.26, 0.0], dtype=np.float32))  # full forward
-    vel = obs['spatial_edges'][:, 2:]
+    vel = obs['spatial_edges'][:, 2:4]  # velocity cols only (4:6 = goal_dir)
     assert np.any(np.abs(vel) > 1e-3)
 
 
@@ -57,7 +60,7 @@ def test_model_accepts_4dim_spatial():
     h = policy.init_hidden(batch_size=2, num_humans=5, device=torch.device('cpu'))
     obs = {
         'robot_node': torch.randn(2, 7),
-        'spatial_edges': torch.randn(2, 5, 4),   # 4-dim per pedestrian
+        'spatial_edges': torch.randn(2, 5, 6),   # 6-dim per pedestrian (v12: + goal_dir)
         'temporal_edges': torch.randn(2, 2),
     }
     mu, std, value, _ = policy(obs, h)
