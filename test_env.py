@@ -14,7 +14,7 @@ def test_environment():
     
     # Check shape values (updated for local-frame observations)
     assert obs['robot_node'].shape == (7,), f"Expected (7,), got {obs['robot_node'].shape}"
-    assert obs['spatial_edges'].shape == (5, 4)
+    assert obs['spatial_edges'].shape == (5, 6)
     assert obs['temporal_edges'].shape == (2,)
     
     print("\nRunning test steps...")

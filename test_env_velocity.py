@@ -14,9 +14,11 @@ from sncp_ppo.models import SNCPPolicy
 # --- environment: observation shape & content -------------------------------
 
 def test_spatial_edges_has_4_dims():
+    # Layout grew to 6 in v12 (pos + rel_vel + goal_dir); the velocity columns
+    # (2-3) this file checks are unchanged. Name kept for history.
     env = CrowdSimEnv(num_humans=5, scenario='hard')
     obs, _ = env.reset(seed=1)
-    assert obs['spatial_edges'].shape == (5, 4)
+    assert obs['spatial_edges'].shape == (5, 6)
 
 
 def test_position_part_unchanged():
