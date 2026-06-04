@@ -152,8 +152,13 @@ def train(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device} | Seed: {args.seed}")
 
-    # 1. Create environment — start with easy scenario, curriculum will change it
-    env = CrowdSimEnv(num_humans=args.num_humans, scenario='easy', human_dodge_robot=False)
+    # 1. Create environment — start with easy scenario, curriculum will change it.
+    # human_dodge_robot inherits the env default (True): pedestrians reciprocally
+    # avoid the robot, matching the paper's ORCA regime. Non-reactive ("invisible
+    # robot") pedestrians were the root cause of the v11/v12/v13 ~30% collision
+    # ceiling — a slow (0.26 m/s) robot cannot unilaterally dodge faster
+    # (0.5 m/s) pedestrians that walk straight through it.
+    env = CrowdSimEnv(num_humans=args.num_humans, scenario='easy')
 
     # 2. Create SNCP policy and PPO agent
     policy = SNCPPolicy(robot_vpref=env.robot_vpref, robot_wmax=env.robot_wmax).to(device)
