@@ -7,7 +7,7 @@ import matplotlib.patches as patches
 class CrowdSimEnv(gym.Env):
     metadata = {'render.modes': ['human', 'rgb_array']}
 
-    def __init__(self, num_humans=5, time_step=0.25, max_time=60.0, scenario='circle', human_dodge_robot=False, randomize_layout=True):
+    def __init__(self, num_humans=5, time_step=0.25, max_time=35.0, scenario='circle', human_dodge_robot=False, randomize_layout=True):
         super(CrowdSimEnv, self).__init__()
 
         self.scenario = scenario  # 'easy', 'medium', 'hard', 'extreme', 'circle', 'random'
