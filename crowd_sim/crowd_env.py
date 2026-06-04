@@ -372,10 +372,10 @@ class CrowdSimEnv(gym.Env):
         # well under the maximum per-step approach reward (~0.33 at v_max),
         # preventing the "rotate toward goal but don't move" equilibrium.
         if reached_goal:
-            r_g = 50.0
+            r_g = 20.0
         else:
             prev_dist_to_goal = np.hypot(prev_rx - self.robot_gx, prev_ry - self.robot_gy)
-            r_g = 5.0 * (prev_dist_to_goal - dist_to_goal)
+            r_g = 2.0 * (prev_dist_to_goal - dist_to_goal)
 
             angle_to_goal = np.arctan2(self.robot_gy - self.robot_py, self.robot_gx - self.robot_px)
             angle_diff = angle_to_goal - self.robot_theta
@@ -387,18 +387,17 @@ class CrowdSimEnv(gym.Env):
         # goal reward was reduced 100 → 50; ratio collision/goal stays similar
         # so the agent's risk/reward tradeoff is unchanged.
         if collision:
-            r_c = -25.0
+            r_c = -20.0
         else:
             r_c = 0.0
             
-        # 3. Comfort penalty (Eq. 20) — averaged over num_humans
-        # I_sp is a SUM over humans with per-human cap 10/d_hr; without the /N
-        # division, total comfort cost scales linearly with crowd size and shocks
-        # the value function whenever the curriculum changes num_humans.
-        # Dividing by N makes the per-step social cost roughly phase-invariant
-        # while keeping the documented -0.5 per-person coefficient.
+        # 3. Comfort penalty (paper Eq 20): r_s = -2 * I_sp. I_sp is the social
+        # pressure index summed over humans (per-human cap 10/d_hr), already a
+        # normalized 0..1 quantity. The -2 coefficient matches the source paper;
+        # the earlier -0.5/N was ~20x weaker at N=5 and let the robot ignore
+        # social proximity (it never braked into crowds).
         I_sp = self._compute_social_pressure()
-        r_s = -0.5 * I_sp / max(1, self.num_humans)
+        r_s = -2.0 * I_sp
         
         # 4. Standstill penalty removed. Even the softened -0.05 / v<0.03
         # version was sampling-driven (negative Normal samples clip to 0 and
