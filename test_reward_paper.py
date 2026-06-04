@@ -47,6 +47,11 @@ def test_comfort_is_minus_2_times_Isp_no_divide_by_N(monkeypatch):
     assert not np.isclose(info['comfort'], -0.5 * 0.5 / 5)
 
 
-def test_max_time_default_is_35():
+def test_max_time_default_is_50():
+    # 50s (200 steps, ~13m reach) gives the randomly-oriented robot room to turn
+    # toward the goal + traverse ~8m + maneuver around pedestrians. 35s was too
+    # tight (timeout-dominant: robot never reached the goal, so it never saw the
+    # +20 signal and couldn't learn). Paper's 12.5s is for a 1.0 m/s robot; ours
+    # is 0.26 m/s, so the time budget must be larger.
     env = CrowdSimEnv()
-    assert env.max_time == 35.0
+    assert env.max_time == 50.0
