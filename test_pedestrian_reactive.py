@@ -23,26 +23,20 @@ def _closest_approach(env, steps=12):
     return min_d
 
 
-def test_pedestrians_react_to_robot_by_default():
-    """The env default makes pedestrians avoid the robot (a COOPERATIVE-crowd
-    assumption). Training (make_env), the holdout eval, and test_eval all
-    construct the env WITHOUT passing this flag, so they inherit the default;
-    this test locks it to True for the project's chosen setting.
-
-    NOTE: this DEVIATES from the source paper, which uses CrowdNav's
-    invisible-robot ORCA (pedestrians ignore the robot). We chose the cooperative
-    setting because the target TurtleBot3 (0.26 m/s) is too slow for the
-    invisible-robot setting — see train.py. Results are therefore NOT directly
-    comparable to the paper's invisible-robot numbers."""
-    env = CrowdSimEnv(num_humans=1, scenario='hard')
-    assert env.human_dodge_robot is True
+def test_pedestrians_ignore_robot_by_default():
+    """v15: the default is NON-reactive ('invisible robot', the paper's CrowdNav
+    regime) so the robot must actively avoid. Training (make_env), the holdout
+    eval, and test_eval all inherit this default. Reactivity stays available via
+    the flag for the cooperative-crowd experiments (v14)."""
+    assert CrowdSimEnv(num_humans=1, scenario='hard').human_dodge_robot is False
+    assert CrowdSimEnv(num_humans=1, scenario='hard', human_dodge_robot=True).human_dodge_robot is True
 
 
 def test_reactive_pedestrians_keep_more_clearance():
-    """With reactivity ON (default), a pedestrian on a collision course keeps a
-    larger closest-approach distance than with it OFF — proof the avoidance
-    force is actually applied, not just a flag toggled."""
-    reactive = CrowdSimEnv(num_humans=1, scenario='hard')  # default -> reactive
+    """With reactivity ON (explicit flag), a pedestrian on a collision course
+    keeps a larger closest-approach distance than with it OFF — proof the
+    avoidance force is actually applied, not just a flag toggled."""
+    reactive = CrowdSimEnv(num_humans=1, scenario='hard', human_dodge_robot=True)
     nonreactive = CrowdSimEnv(num_humans=1, scenario='hard', human_dodge_robot=False)
     d_reactive = _closest_approach(reactive)
     d_nonreactive = _closest_approach(nonreactive)

@@ -7,7 +7,7 @@ import matplotlib.patches as patches
 class CrowdSimEnv(gym.Env):
     metadata = {'render.modes': ['human', 'rgb_array']}
 
-    def __init__(self, num_humans=5, time_step=0.25, max_time=50.0, scenario='circle', human_dodge_robot=True, randomize_layout=True):
+    def __init__(self, num_humans=5, time_step=0.25, max_time=50.0, scenario='circle', human_dodge_robot=False, randomize_layout=True):
         super(CrowdSimEnv, self).__init__()
 
         self.scenario = scenario  # 'easy', 'medium', 'hard', 'extreme', 'circle', 'random'
@@ -375,7 +375,7 @@ class CrowdSimEnv(gym.Env):
             r_g = 20.0
         else:
             prev_dist_to_goal = np.hypot(prev_rx - self.robot_gx, prev_ry - self.robot_gy)
-            r_g = 2.0 * (prev_dist_to_goal - dist_to_goal)
+            r_g = 1.0 * (prev_dist_to_goal - dist_to_goal)
 
             angle_to_goal = np.arctan2(self.robot_gy - self.robot_py, self.robot_gx - self.robot_px)
             angle_diff = angle_to_goal - self.robot_theta
@@ -397,7 +397,7 @@ class CrowdSimEnv(gym.Env):
         # the earlier -0.5/N was ~20x weaker at N=5 and let the robot ignore
         # social proximity (it never braked into crowds).
         I_sp = self._compute_social_pressure()
-        r_s = -2.0 * I_sp
+        r_s = -6.0 * I_sp
         
         # 4. Standstill penalty removed. Even the softened -0.05 / v<0.03
         # version was sampling-driven (negative Normal samples clip to 0 and

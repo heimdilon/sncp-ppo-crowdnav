@@ -31,8 +31,9 @@ def test_collision_penalty_is_minus_20(monkeypatch):
     assert np.isclose(reward, -20.0, atol=1.0), f"collision penalty not ~-20: {reward}"
 
 
-def test_comfort_is_minus_2_times_Isp_no_divide_by_N(monkeypatch):
-    """Comfort penalty = -2.0 * I_sp (paper Eq 20), with NO division by N."""
+def test_comfort_is_minus_6_times_Isp(monkeypatch):
+    """Comfort penalty = -6.0 * I_sp (v15: strengthened from -2 to teach social
+    distance in the non-reactive crowd)."""
     env = CrowdSimEnv(num_humans=5, scenario='hard')
     env.reset(seed=1)
     # Force a known social-pressure value and a non-terminal, non-colliding step.
@@ -41,10 +42,29 @@ def test_comfort_is_minus_2_times_Isp_no_divide_by_N(monkeypatch):
     env.humans_px[:] = 100.0
     env.humans_py[:] = 100.0
     _, reward, terminated, truncated, info = env.step(np.array([0.0, 0.0], dtype=np.float32))
-    # comfort component reported in info
-    assert np.isclose(info['comfort'], -2.0 * 0.5), f"comfort not -2*I_sp: {info['comfort']}"
-    # Confirm it is NOT the old -0.5*I_sp/N = -0.05 value
-    assert not np.isclose(info['comfort'], -0.5 * 0.5 / 5)
+    assert np.isclose(info['comfort'], -6.0 * 0.5), f"comfort not -6*I_sp: {info['comfort']}"
+    # Confirm it is NOT the old -2*I_sp value
+    assert not np.isclose(info['comfort'], -2.0 * 0.5)
+
+
+def test_approach_coefficient_is_1():
+    """Dense approach shaping = 1.0 * delta-distance (v15: halved from 2.0 so
+    detours around people are not over-penalized vs the straight line)."""
+    env = CrowdSimEnv(num_humans=1, scenario='easy')
+    env.reset(seed=2)
+    # Push the only human far away so comfort ~0 and isolate the approach term.
+    env.humans_px[:] = 100.0
+    env.humans_py[:] = 100.0
+    # Place the goal 1 m ahead (+x), robot heading +x, drive at vpref.
+    env.robot_gx, env.robot_gy = env.robot_px + 1.0, env.robot_py
+    env.robot_theta = 0.0
+    prev = np.hypot(env.robot_px - env.robot_gx, env.robot_py - env.robot_gy)
+    _, reward, *_ = env.step(np.array([env.robot_vpref, 0.0], dtype=np.float32))
+    moved = prev - np.hypot(env.robot_px - env.robot_gx, env.robot_py - env.robot_gy)
+    assert moved > 0, "robot did not move toward goal"
+    # reward ~= 1.0*moved (minus tiny orientation/comfort). ~1x, not ~2x.
+    assert reward < 1.6 * moved, f"approach looks like 2x ({reward} vs moved {moved})"
+    assert reward > 0.5 * moved
 
 
 def test_max_time_default_is_50():
