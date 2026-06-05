@@ -98,23 +98,26 @@ class CrowdSimEnv(gym.Env):
         # Determine scenario parameters based on difficulty level
         # NB: human_vpref is also overwritten externally by the curriculum loop
         # (train.py); these defaults only apply when reset() is called directly.
+        # v15: pedestrian speeds capped at robot parity (<=0.26 m/s) so a slow
+        # TurtleBot3 can feasibly avoid a NON-reactive crowd. (v14 used 0.15-0.50;
+        # at 0.5 the robot was 2x slower and could not unilaterally dodge.)
         if self.scenario == 'easy':
-            self.human_vpref = 0.15
+            self.human_vpref = 0.13
             scenario_type = 'circle'
         elif self.scenario == 'easy_plus':
-            self.human_vpref = 0.20
+            self.human_vpref = 0.18
             scenario_type = 'circle'
         elif self.scenario == 'medium':
-            self.human_vpref = 0.30
+            self.human_vpref = 0.22
             scenario_type = 'circle'
         elif self.scenario == 'hard':
-            self.human_vpref = 0.50
+            self.human_vpref = 0.26
             scenario_type = 'circle'
         elif self.scenario == 'extreme':
-            self.human_vpref = 0.50
+            self.human_vpref = 0.26
             scenario_type = 'random'
         else:
-            self.human_vpref = 0.50
+            self.human_vpref = 0.26
             scenario_type = self.scenario
         
         if scenario_type == 'circle':
