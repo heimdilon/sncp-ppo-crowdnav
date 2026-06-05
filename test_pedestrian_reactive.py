@@ -24,13 +24,16 @@ def _closest_approach(env, steps=12):
 
 
 def test_pedestrians_react_to_robot_by_default():
-    """The env default must make pedestrians avoid the robot (the paper's ORCA
-    regime, where robot and pedestrians SHARE collision avoidance). Training
-    (make_env), the holdout eval, and test_eval all construct the env WITHOUT
-    passing this flag, so they inherit the default — it must be True, otherwise
-    the robot faces non-reactive ("invisible robot") pedestrians, a strictly
-    harder task than the paper's and the root cause of the v11/v12/v13 collision
-    ceiling (~30%)."""
+    """The env default makes pedestrians avoid the robot (a COOPERATIVE-crowd
+    assumption). Training (make_env), the holdout eval, and test_eval all
+    construct the env WITHOUT passing this flag, so they inherit the default;
+    this test locks it to True for the project's chosen setting.
+
+    NOTE: this DEVIATES from the source paper, which uses CrowdNav's
+    invisible-robot ORCA (pedestrians ignore the robot). We chose the cooperative
+    setting because the target TurtleBot3 (0.26 m/s) is too slow for the
+    invisible-robot setting — see train.py. Results are therefore NOT directly
+    comparable to the paper's invisible-robot numbers."""
     env = CrowdSimEnv(num_humans=1, scenario='hard')
     assert env.human_dodge_robot is True
 

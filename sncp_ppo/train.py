@@ -154,10 +154,15 @@ def train(args):
 
     # 1. Create environment — start with easy scenario, curriculum will change it.
     # human_dodge_robot inherits the env default (True): pedestrians reciprocally
-    # avoid the robot, matching the paper's ORCA regime. Non-reactive ("invisible
-    # robot") pedestrians were the root cause of the v11/v12/v13 ~30% collision
-    # ceiling — a slow (0.26 m/s) robot cannot unilaterally dodge faster
-    # (0.5 m/s) pedestrians that walk straight through it.
+    # avoid the robot — a COOPERATIVE-crowd assumption.
+    # NOTE: this DEVIATES from the source paper, which uses CrowdNav's
+    # invisible-robot ORCA (pedestrians ignore the robot and never yield). We
+    # deviate deliberately: this project targets a real TurtleBot3 (0.26 m/s),
+    # ~2x slower than the pedestrians, which makes the invisible-robot setting
+    # physically near-unsolvable. The true gap vs the paper's ~94% is robot
+    # SPEED (ours 0.26 vs the paper's 1.0 m/s), not pedestrian reactivity.
+    # => v14's high success is on an EASIER, cooperative task and is NOT directly
+    # comparable to the paper's invisible-robot results.
     env = CrowdSimEnv(num_humans=args.num_humans, scenario='easy')
 
     # 2. Create SNCP policy and PPO agent
