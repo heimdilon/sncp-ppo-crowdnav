@@ -6,24 +6,25 @@ import sys
 
 import torch
 
-from sncp_ppo.train import _train_vectorized, step_to_phase
+from sncp_ppo.train import _train_vectorized, step_to_phase, SCENARIO_HOLDOUT_CONFIG
 
 
 def test_step_to_phase_boundaries():
     total = 1000
+    final = 10  # v15 final density
 
-    assert step_to_phase(0, total, 5) == ('easy', 1, 0.15)
-    assert step_to_phase(99, total, 5) == ('easy', 1, 0.15)
-    assert step_to_phase(100, total, 5) == ('easy', 1, 0.15)
-    assert step_to_phase(101, total, 5) == ('easy_plus', 2, 0.20)
-    assert step_to_phase(250, total, 5) == ('easy_plus', 2, 0.20)
-    assert step_to_phase(251, total, 5) == ('medium', 3, 0.30)
-    assert step_to_phase(500, total, 5) == ('medium', 3, 0.30)
-    assert step_to_phase(501, total, 5) == ('hard', 4, 0.40)
-    assert step_to_phase(750, total, 5) == ('hard', 4, 0.40)
-    assert step_to_phase(751, total, 5) == ('circle', 5, 0.50)
-    assert step_to_phase(1000, total, 5) == ('circle', 5, 0.50)
-    assert step_to_phase(99999, total, 5) == ('circle', 5, 0.50)
+    assert step_to_phase(0, total, final) == ('easy', 1, 0.13)
+    assert step_to_phase(99, total, final) == ('easy', 1, 0.13)
+    assert step_to_phase(100, total, final) == ('easy', 1, 0.13)
+    assert step_to_phase(101, total, final) == ('easy_plus', 3, 0.18)
+    assert step_to_phase(250, total, final) == ('easy_plus', 3, 0.18)
+    assert step_to_phase(251, total, final) == ('medium', 5, 0.22)
+    assert step_to_phase(500, total, final) == ('medium', 5, 0.22)
+    assert step_to_phase(501, total, final) == ('hard', 8, 0.24)
+    assert step_to_phase(750, total, final) == ('hard', 8, 0.24)
+    assert step_to_phase(751, total, final) == ('circle', final, 0.26)
+    assert step_to_phase(1000, total, final) == ('circle', final, 0.26)
+    assert step_to_phase(99999, total, final) == ('circle', final, 0.26)
 
 
 def test_vectorized_cli_args_are_listed_in_help():
@@ -111,3 +112,24 @@ def test_compute_total_updates_vectorized_vs_single():
     # vectorized with different geometry: 8 envs * 64 = 512 -> 12000/512 = 23
     assert compute_total_updates(num_envs=8, episodes=50, update_freq=5,
                                  total_steps=12000, horizon=64) == 23
+
+
+def test_curriculum_ramps_to_final_humans_with_parity_speed():
+    """v15: density is monotonic and reaches final_num_humans; every phase speed
+    is <= 0.26 (robot parity), so non-reactive avoidance stays feasible."""
+    final = 10
+    phases = [step_to_phase(int(f * 1000), 1000, final)
+              for f in (0.0, 0.2, 0.4, 0.6, 0.9)]
+    humans = [p[1] for p in phases]
+    speeds = [p[2] for p in phases]
+    assert humans == sorted(humans), f"density not monotonic: {humans}"
+    assert humans[-1] == final, f"final phase N != {final}: {humans[-1]}"
+    assert max(speeds) <= 0.26 + 1e-9, f"a phase exceeds parity: {speeds}"
+
+
+def test_holdout_config_is_parity_and_has_highdensity():
+    """v15: every holdout speed is <= 0.26, and a high-density (N>=10) holdout
+    scenario exists to monitor the real target during training."""
+    for name, (n, v) in SCENARIO_HOLDOUT_CONFIG.items():
+        assert v <= 0.26 + 1e-9, f"{name} holdout speed {v} > parity"
+    assert SCENARIO_HOLDOUT_CONFIG['circle'][0] >= 10, "no high-density holdout"

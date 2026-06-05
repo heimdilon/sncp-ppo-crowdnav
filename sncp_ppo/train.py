@@ -67,13 +67,13 @@ def _eta_seconds(recent_ep_times, remaining_episodes):
 #: the trainer is still in the N=1 easy phase. Mirrors test_eval.py defaults
 #: for hard/extreme (5 humans, vpref=0.50).
 SCENARIO_HOLDOUT_CONFIG = {
-    'easy':      (1, 0.15),
-    'easy_plus': (2, 0.20),
-    'medium':    (3, 0.30),
-    'hard':      (5, 0.50),
-    'extreme':   (5, 0.50),
-    'circle':    (5, 0.50),
-    'random':    (5, 0.50),
+    'easy':      (1, 0.13),
+    'easy_plus': (3, 0.18),
+    'medium':    (5, 0.22),
+    'hard':      (5, 0.26),
+    'extreme':   (10, 0.26),
+    'circle':    (10, 0.26),
+    'random':    (10, 0.26),
 }
 
 
@@ -526,14 +526,14 @@ def step_to_phase(steps_seen, total_steps, final_num_humans):
     """
     frac = steps_seen / max(1, total_steps)
     if frac <= 0.10:
-        return ('easy', 1, 0.15)
+        return ('easy', 1, 0.13)
     if frac <= 0.25:
-        return ('easy_plus', 2, 0.20)
+        return ('easy_plus', 3, 0.18)
     if frac <= 0.50:
-        return ('medium', 3, 0.30)
+        return ('medium', 5, 0.22)
     if frac <= 0.75:
-        return ('hard', 4, 0.40)
-    return ('circle', final_num_humans, 0.50)
+        return ('hard', 8, 0.24)
+    return ('circle', final_num_humans, 0.26)
 
 
 def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, csv_file):
