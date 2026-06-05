@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from ncps.torch import LTC
-from ncps.wirings import FullyConnected
+from ncps.wirings import AutoNCP
 
 
 def _orthogonal_linear(layer, gain):
@@ -31,25 +31,36 @@ class SNCPPolicy(nn.Module):
             nn.ReLU()
         )
         
-        # 2. Temporal Edge Encoder (LTC size 32 -> project to 256)
-        self.temporal_wiring = FullyConnected(units=32)
+        # 2. Temporal Edge Encoder — TRUE sparse NCP (AutoNCP), not a dense LTC.
+        # The paper (Ao et al. 2026) claims Neural Circuit Policies but omits the
+        # wiring parameters; we choose them for our problem. AutoNCP(units, motor)
+        # builds the ~90%-sparse sensory->inter->command->motor C. elegans circuit.
+        # The LTC output is the MOTOR-neuron subset (output_dim), then projected to
+        # 256. Seeded so the random topology is reproducible (the sparsity masks
+        # are persisted inside the checkpoint's state_dict).
+        self.temporal_wiring = AutoNCP(units=32, output_size=16, seed=48201)
         self.temporal_ltc = LTC(input_size=2, units=self.temporal_wiring)
-        self.temporal_proj = nn.Linear(32, 256)
-        
-        # 3. Spatial Edge Encoder (LTC size 32 -> project to 256)
-        self.spatial_wiring = FullyConnected(units=32)
-        # input_size=6: [dx, dy, rel_vx, rel_vy, goal_dir_x, goal_dir_y] per human
+        self.temporal_proj = nn.Linear(self.temporal_wiring.output_dim, 256)
+
+        # 3. Spatial Edge Encoder — sparse NCP. input_size=6:
+        # [dx, dy, rel_vx, rel_vy, goal_dir_x, goal_dir_y] per human. Sized a bit
+        # larger (48 units / 24 motor) since this encoder carries the crowd signal.
+        self.spatial_wiring = AutoNCP(units=48, output_size=24, seed=48202)
         self.spatial_ltc = LTC(input_size=6, units=self.spatial_wiring)
-        self.spatial_proj = nn.Linear(32, 256)
+        self.spatial_proj = nn.Linear(self.spatial_wiring.output_dim, 256)
         
         # 4. Attention Pooling weights
         self.W_q = nn.Linear(256, 64)
         self.W_k = nn.Linear(256, 64)
         
-        # 5. Node NCP Encoder (LTC size 32 -> project to 256)
-        self.node_wiring = FullyConnected(units=32)
+        # 5. Node NCP Encoder — sparse NCP fusing robot(128)+temporal(256)+
+        # attention(256)=640 dims. Sized up to 128 units / 48 motor so the
+        # inter-neuron layer (=60) that first absorbs the 640 fused inputs stays
+        # WIDER than the old dense-32 bottleneck (the 640->32 squeeze the user
+        # flagged as the capacity ceiling).
+        self.node_wiring = AutoNCP(units=128, output_size=48, seed=48203)
         self.node_ltc = LTC(input_size=640, units=self.node_wiring)
-        self.node_proj = nn.Linear(32, 256)
+        self.node_proj = nn.Linear(self.node_wiring.output_dim, 256)
         
         # 6. Actor & Critic Heads
         self.actor_mu = nn.Sequential(
