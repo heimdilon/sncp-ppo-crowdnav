@@ -33,7 +33,9 @@ success rate.
   0.26 m/s; cap pedestrian speed at ≤0.26 m/s so a slow robot can feasibly avoid
   non-reactive pedestrians. (The paper used speed parity at 1.0/1.0; we use
   parity at our hardware scale.)
-- **Scope: FULL social-nav** — extend the density curriculum to N=10–20.
+- **Scope: FULL social-nav, reached in two de-risked steps** — v15 ramps density
+  to N=10; v16 extends to N=15–20 once v15 validates that real avoidance emerges
+  (no freezing, nav-time rises). Going straight to N=20 risks a confounded stall.
 - **Unchanged:** NCP architecture (v14), spatio-temporal observation,
   PPO/vectorized infrastructure, goal +20, collision −20.
 
@@ -54,7 +56,7 @@ success rate.
 | Goal arrival | +20 | +20 | keep (paper) |
 | Collision | −20 | −20 | keep; now an ACTIVE signal (non-reactive → real collisions) |
 | Approach shaping | 2·Δd | **1·Δd** | halve so detours around people are not over-penalized vs the straight line |
-| Social distance | −2·I_sp | **−10·I_sp** (start; tune −8…−12) | make personal-space intrusion bite → keep distance, not just avoid contact |
+| Social distance | −2·I_sp | **−6·I_sp** (conservative start; tune UP to −8/−10 if it still grazes, DOWN if it freezes) | make personal-space intrusion bite → keep distance. Started conservative: non-reactivity already forces collision-avoidance (−20 now active), and a frozen robot is the costlier failure to recover from than a robot that merely grazes too close (which the I_sp diagnostic reveals → raise the coefficient). |
 | Orientation | small (kept) | small (kept) | unchanged |
 | Anti-freeze | none | small per-step time cost (≈−0.01/step) **only if** run 1 shows freezing | prevent the robot waiting indefinitely |
 
@@ -62,18 +64,18 @@ These are starting values; the social/approach balance will be tuned
 empirically (expect 1–2 iterations).
 
 ### 3. Curriculum (`sncp_ppo/train.py`, vectorized path)
-- Density phases (N): **1 → 3 → 5 → 10 → 15 → 20** (final `num_humans = 20`).
-- Speeds (parity, m/s): **0.13 → 0.16 → 0.20 → 0.23 → 0.25 → 0.26**.
-- Step budget: **~2.5–3M** (more phases + harder); phase boundaries spread
-  across the budget.
-- Holdout: add a high-density scenario (N=10 and/or N=20) alongside easy/hard,
-  to monitor the real target during training.
+- **v15 (this run): density phases 1 → 3 → 5 → 10** (final `num_humans = 10`).
+  Speeds (parity, m/s): **0.13 → 0.18 → 0.22 → 0.26**.
+- **v16 (follow-up, after v15 validates real avoidance): extend to 15 → 20.**
+- Step budget: **~2.5M** for v15; phase boundaries spread across the budget.
+- Holdout: add a high-density scenario (N=10) alongside easy/hard, to monitor the
+  real target during training.
 - Keep anti-forgetting replay if present.
 
 ### 4. Success criteria
 **Quantitative:**
-- N≤5: success >90%, collision <10%.
-- N=10–20: success >70% (stretch: approach the paper's ~94% at parity).
+- v15 (target up to N=10): N≤5 success >90% / collision <10%; N=10 success >70%.
+- v16 (after extension): N=15–20 success >60–70% (stretch: paper's ~94% at parity).
 
 **Behavioral (the real proof, vs v14 beeline):**
 - Nav-time **increases** with density (not the constant ~121.5) → detours.
@@ -101,7 +103,7 @@ empirically (expect 1–2 iterations).
 
 ### 7. Tests (TDD)
 - `crowd_env`: default `human_dodge_robot is False`; pedestrian speed cap ≤0.26;
-  reward terms (approach 1·Δd, comfort −10·I_sp, collision −20, goal +20).
+  reward terms (approach 1·Δd, comfort −6·I_sp, collision −20, goal +20).
 - Repurpose `test_pedestrian_reactive.py`: its current tests assert the default
   is reactive (True) — now inverted. Change to assert the **non-reactive
   default** and that reactivity remains available as an explicit option.
@@ -110,8 +112,10 @@ empirically (expect 1–2 iterations).
 - Full regression green.
 
 ### 8. Versioning
-- **v15** (fresh retrain). Architecture is unchanged from v14, so checkpoints are
-  load-compatible; we retrain fresh because env + reward changed.
+- **v15** (fresh retrain): non-reactive + reward redesign + parity speed,
+  curriculum to N=10. **v16**: extend curriculum to N=15–20 (after v15 validates
+  real avoidance). Architecture unchanged from v14 (checkpoints load-compatible);
+  retrain fresh because env + reward changed.
 
 ## Out of scope
 - Robot speed changes (staying at 0.26 m/s hardware).
