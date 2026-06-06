@@ -24,5 +24,11 @@
     "circle": 0.0
   },
   "collapse_delta": -0.36,
-  "collapse_detected": true
+  "collapse_detected": true,
+  "final_std_linear": null,
+  "final_std_angular": null,
+  "max_std_linear": null,
+  "max_std_angular": null,
+  "std_linear_delta": null,
+  "std_angular_delta": null
 }

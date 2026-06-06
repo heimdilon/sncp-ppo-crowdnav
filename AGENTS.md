@@ -212,6 +212,9 @@ CrowdSimEnv(num_humans=5, time_step=0.25, max_time=50.0, scenario='circle',
   store the **un-clipped** Normal sample + its log-prob (env gets the clipped action) to preserve the ratio
   identity; per-step recurrent hidden states stored and re-fed during updates (BPTT over `seq_len`
   subsequences); KL early-stop (`target_kl`, default 0.01); return RMS normalization; clipped value loss.
+- **Training CSV diagnostics (v16+):** rows include `is_replay_update`, `entropy`, `approx_kl`,
+  `std_linear`, `std_angular`, and `return_rms_std` so replay fraction and policy-std drift are auditable
+  from the CSV, not only from stdout.
 - Robust saves: `torch.save` wrapped in try/except with a `/content` fallback (Colab disconnect safety).
   A `_final.pt` variant may also be written.
 
@@ -375,9 +378,9 @@ Goal: sustain the v15 N=5 peak all the way to N=10 and lift the ceiling. In prio
    `SAVE_PATH='checkpoints/sncp_ppo_v16.pt'` and `--curriculum_replay_ratio 0.20`. Notebook cell-17 now
    runs `evaluate_policy_report.py` for the hard-scenario N=1/3/5/8/10 sweep and trajectory artifacts,
    then `compare_policy_reports.py` against the committed `eval_v15/` baseline.
-   Local verification: `71 passed`; replay smoke exited 0 and logged replay phase shifts; report smoke
-   loaded v15 and wrote sweep artifacts; comparison smoke produced the expected v15-vs-v15 `warn`;
-   v15 training-log diagnostics detect the known late collapse.
+   Local verification: `71 passed`; replay smoke exited 0 and logged replay phase shifts plus PPO
+   diagnostics columns; report smoke loaded v15 and wrote sweep artifacts; comparison smoke produced the
+   expected v15-vs-v15 `warn`; v15 training-log diagnostics detect the known late collapse.
    **Pending:** Colab A100 run, density sweep, trajectories, nav-time/I_sp comparison vs v15.
 2. **Tame the over-conservative detour** (26% timeout at N=1; ~187 steps vs the 200 cap). Options: comfort
    −6 → −5, or `max_time` 50 → 60 s, or a mild efficiency term. Tune carefully (freezing risk).

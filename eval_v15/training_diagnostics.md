@@ -18,6 +18,15 @@ Final min success: 0.0%
 Collapse delta: -36.0%
 Collapse detected: yes
 
+## PPO Stability
+
+Final std linear: not logged
+Final std angular: not logged
+Max std linear: not logged
+Max std angular: not logged
+Std linear delta: not logged
+Std angular delta: not logged
+
 ## Per-Scenario Success
 
 | Scenario | Best | Final | Delta |

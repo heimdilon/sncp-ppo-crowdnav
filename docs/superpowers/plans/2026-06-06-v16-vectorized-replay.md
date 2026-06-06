@@ -439,6 +439,8 @@ $env:PYTHONPATH='C:\tmp\codex-pydeps'
 This writes `eval_v16/density_sweep.csv`, `eval_v16/density_sweep.json`,
 `eval_v16/density_sweep.png`, `eval_v16/report.md`, `eval_v16/comparison_vs_v15.md`,
 `eval_v16/training_diagnostics.md/json`, and N=5/N=10 trajectory PNGs.
+The v16 training CSV also stores `is_replay_update`, entropy, approx-KL, policy stds, and return RMS,
+so `training_diagnostics.md` can audit replay fraction and policy-std drift directly from the CSV.
 
 - [ ] **Step 2: Inspect trajectory plots**
 

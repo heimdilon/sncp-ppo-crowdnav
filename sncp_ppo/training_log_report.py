@@ -26,6 +26,12 @@ class TrainingLogSummary:
     final_success_by_scenario: dict[str, float]
     collapse_delta: float
     collapse_detected: bool
+    final_std_linear: float | None
+    final_std_angular: float | None
+    max_std_linear: float | None
+    max_std_angular: float | None
+    std_linear_delta: float | None
+    std_angular_delta: float | None
 
 
 def _parse_float(value: str | None) -> float:
@@ -70,6 +76,32 @@ def _row_is_replay(row: dict[str, str]) -> bool | None:
     return bool(int(float(value)))
 
 
+def _std_diagnostics(rows: Sequence[dict[str, str]]) -> tuple[float | None, ...]:
+    values = []
+    for row in rows:
+        std_linear = _parse_float(row.get("std_linear"))
+        std_angular = _parse_float(row.get("std_angular"))
+        if math.isnan(std_linear) or math.isnan(std_angular):
+            continue
+        values.append((std_linear, std_angular))
+
+    if not values:
+        return (None, None, None, None, None, None)
+
+    first_linear, first_angular = values[0]
+    final_linear, final_angular = values[-1]
+    max_linear = max(item[0] for item in values)
+    max_angular = max(item[1] for item in values)
+    return (
+        final_linear,
+        final_angular,
+        max_linear,
+        max_angular,
+        final_linear - first_linear,
+        final_angular - first_angular,
+    )
+
+
 def analyze_training_log(
     csv_path: str | Path,
     *,
@@ -108,6 +140,14 @@ def analyze_training_log(
     observed_replay_ratio = None
     if replay_values:
         observed_replay_ratio = sum(replay_values) / len(replay_values)
+    (
+        final_std_linear,
+        final_std_angular,
+        max_std_linear,
+        max_std_angular,
+        std_linear_delta,
+        std_angular_delta,
+    ) = _std_diagnostics(rows)
 
     return TrainingLogSummary(
         csv_path=str(csv_path),
@@ -124,6 +164,12 @@ def analyze_training_log(
         final_success_by_scenario=final_successes,
         collapse_delta=collapse_delta,
         collapse_detected=collapse_delta <= -collapse_threshold,
+        final_std_linear=final_std_linear,
+        final_std_angular=final_std_angular,
+        max_std_linear=max_std_linear,
+        max_std_angular=max_std_angular,
+        std_linear_delta=std_linear_delta,
+        std_angular_delta=std_angular_delta,
     )
 
 
@@ -135,6 +181,10 @@ def write_training_diagnostic_json(summary: TrainingLogSummary, path: str | Path
 
 def _format_rate(value: float) -> str:
     return f"{value:.1%}"
+
+
+def _format_optional_float(value: float | None) -> str:
+    return "not logged" if value is None else f"{value:.3f}"
 
 
 def write_training_diagnostic_report(summary: TrainingLogSummary, path: str | Path) -> None:
@@ -165,6 +215,15 @@ def write_training_diagnostic_report(summary: TrainingLogSummary, path: str | Pa
         f"Final min success: {_format_rate(summary.final_min_success)}",
         f"Collapse delta: {summary.collapse_delta:+.1%}",
         f"Collapse detected: {'yes' if summary.collapse_detected else 'no'}",
+        "",
+        "## PPO Stability",
+        "",
+        f"Final std linear: {_format_optional_float(summary.final_std_linear)}",
+        f"Final std angular: {_format_optional_float(summary.final_std_angular)}",
+        f"Max std linear: {_format_optional_float(summary.max_std_linear)}",
+        f"Max std angular: {_format_optional_float(summary.max_std_angular)}",
+        f"Std linear delta: {_format_optional_float(summary.std_linear_delta)}",
+        f"Std angular delta: {_format_optional_float(summary.std_angular_delta)}",
         "",
         "## Per-Scenario Success",
         "",

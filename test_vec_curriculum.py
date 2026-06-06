@@ -12,6 +12,7 @@ from sncp_ppo.train import _train_vectorized, step_to_phase, SCENARIO_HOLDOUT_CO
 VECTOR_LOG_HEADER = [
     'episode', 'scenario', 'num_humans', 'human_vpref', 'is_replay_update',
     'steps', 'reward', 'success', 'collision', 'timeout', 'comfort',
+    'entropy', 'approx_kl', 'std_linear', 'std_angular', 'return_rms_std',
     'is_best_checkpoint', 'best_reason',
     'holdout_easy_success', 'holdout_easy_collision', 'holdout_easy_timeout',
     'holdout_easy_reward', 'holdout_hard_success', 'holdout_hard_collision',
@@ -21,6 +22,16 @@ VECTOR_LOG_HEADER = [
 
 def _write_vector_log_header(csv_writer):
     csv_writer.writerow(VECTOR_LOG_HEADER)
+
+
+def _assert_finite_update_diagnostics(row):
+    for key in ['entropy', 'approx_kl', 'std_linear', 'std_angular', 'return_rms_std']:
+        assert row[key] not in ('', None), f"{key} missing from CSV row"
+        value = float(row[key])
+        assert value == value, f"{key} is NaN"
+    assert float(row['std_linear']) > 0.0
+    assert float(row['std_angular']) > 0.0
+    assert float(row['return_rms_std']) > 0.0
 
 
 def test_step_to_phase_boundaries():
@@ -104,6 +115,7 @@ def test_vectorized_runs_with_curriculum_holdout_and_saves(tmp_path):
     assert rows[-1]['is_best_checkpoint'] == '1'
     assert rows[-1]['holdout_easy_success'] != 'nan'
     assert rows[-1]['holdout_hard_success'] != 'nan'
+    _assert_finite_update_diagnostics(rows[-1])
     assert save_path.exists() or os.path.exists(str(save_path).replace('.pt', '_final.pt'))
 
 
@@ -254,3 +266,5 @@ def test_vectorized_replay_updates_are_logged(tmp_path):
 
     assert any(row['is_replay_update'] == '1' for row in rows)
     assert any(row['is_replay_update'] == '0' for row in rows)
+    for row in rows:
+        _assert_finite_update_diagnostics(row)

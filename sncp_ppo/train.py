@@ -138,6 +138,28 @@ def evaluate_holdout(env, policy, agent, device, n_episodes, scenario, base_seed
     }
 
 
+UPDATE_DIAGNOSTIC_COLUMNS = [
+    'entropy',
+    'approx_kl',
+    'std_linear',
+    'std_angular',
+    'return_rms_std',
+]
+
+
+def update_diagnostic_row(policy, agent):
+    """Return PPO stability diagnostics for CSV logging."""
+    with torch.no_grad():
+        std = policy.actor_logstd.exp().squeeze().detach().cpu().numpy()
+    return [
+        f"{float(agent.last_entropy):.6f}",
+        f"{float(agent.last_approx_kl):.8f}",
+        f"{float(std[0]):.6f}",
+        f"{float(std[1]):.6f}",
+        f"{float(agent.return_rms.std):.6f}",
+    ]
+
+
 def make_env(num_humans, scenario, seed):
     """Factory for a single CrowdSimEnv, used by SyncVectorEnv."""
     def _thunk():
@@ -208,6 +230,7 @@ def train(args):
     csv_writer.writerow([
         'episode', 'scenario', 'num_humans', 'human_vpref', 'is_replay_update',
         'steps', 'reward', 'success', 'collision', 'timeout', 'comfort',
+        *UPDATE_DIAGNOSTIC_COLUMNS,
         'is_best_checkpoint', 'best_reason',
     ] + holdout_cols)
     print(f"CSV log: {log_path}")
@@ -436,6 +459,7 @@ def train(args):
                 episode, env.scenario, env.num_humans, env.human_vpref, int(window_is_replay),
                 step_count, f"{episode_reward:.4f}",
                 int(info['success']), int(info['collision']), int(info['timeout']), f"{info['comfort']:.4f}",
+                *update_diagnostic_row(policy, agent),
                 is_best_checkpoint, best_reason,
             ] + ho_row)
             csv_file.flush()
@@ -744,6 +768,7 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
             csv_writer.writerow([
                 total_steps, scenario, H, vpref, int(is_replay_update), T,
                 '', '', '', '', '',
+                *update_diagnostic_row(policy, agent),
                 is_best_checkpoint, best_reason,
             ] + ho_row)
             csv_file.flush()

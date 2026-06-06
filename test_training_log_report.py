@@ -20,6 +20,11 @@ def _write_csv(path, rows):
         "collision",
         "timeout",
         "comfort",
+        "entropy",
+        "approx_kl",
+        "std_linear",
+        "std_angular",
+        "return_rms_std",
         "is_best_checkpoint",
         "best_reason",
         "holdout_easy_success",
@@ -52,6 +57,8 @@ def test_analyze_training_log_detects_holdout_collapse_and_replay_fraction(tmp_p
                 "num_humans": 1,
                 "human_vpref": 0.13,
                 "is_replay_update": 0,
+                "std_linear": 0.10,
+                "std_angular": 0.20,
                 "holdout_easy_success": "nan",
                 "holdout_hard_success": "nan",
                 "holdout_circle_success": "nan",
@@ -62,6 +69,8 @@ def test_analyze_training_log_detects_holdout_collapse_and_replay_fraction(tmp_p
                 "num_humans": 5,
                 "human_vpref": 0.22,
                 "is_replay_update": 0,
+                "std_linear": 0.11,
+                "std_angular": 0.21,
                 "is_best_checkpoint": 1,
                 "best_reason": "best updated",
                 "holdout_easy_success": 0.40,
@@ -74,6 +83,8 @@ def test_analyze_training_log_detects_holdout_collapse_and_replay_fraction(tmp_p
                 "num_humans": 8,
                 "human_vpref": 0.24,
                 "is_replay_update": 1,
+                "std_linear": 0.12,
+                "std_angular": 0.35,
                 "is_best_checkpoint": 1,
                 "best_reason": "best updated",
                 "holdout_easy_success": 0.60,
@@ -86,6 +97,8 @@ def test_analyze_training_log_detects_holdout_collapse_and_replay_fraction(tmp_p
                 "num_humans": 10,
                 "human_vpref": 0.26,
                 "is_replay_update": 0,
+                "std_linear": 0.16,
+                "std_angular": 0.50,
                 "is_best_checkpoint": 0,
                 "holdout_easy_success": 0.10,
                 "holdout_hard_success": 0.00,
@@ -111,6 +124,10 @@ def test_analyze_training_log_detects_holdout_collapse_and_replay_fraction(tmp_p
     assert summary.final_min_success == 0.0
     assert summary.collapse_delta == -0.40
     assert summary.collapse_detected is True
+    assert summary.final_std_linear == 0.16
+    assert summary.final_std_angular == 0.50
+    assert summary.max_std_angular == 0.50
+    assert summary.std_angular_delta == 0.30
 
 
 def test_analyze_training_log_handles_old_logs_without_replay_column(tmp_path):
@@ -131,6 +148,8 @@ def test_analyze_training_log_handles_old_logs_without_replay_column(tmp_path):
     summary = analyze_training_log(csv_path)
 
     assert summary.observed_replay_ratio is None
+    assert summary.final_std_linear is None
+    assert summary.final_std_angular is None
     assert summary.best_min_success == 0.4
     assert summary.final_min_success == 0.1
     assert summary.collapse_detected is True
@@ -147,6 +166,8 @@ def test_training_diagnostic_writers_include_best_final_and_collapse(tmp_path):
                 "num_humans": 8,
                 "human_vpref": 0.24,
                 "is_replay_update": 1,
+                "std_linear": 0.10,
+                "std_angular": 0.20,
                 "is_best_checkpoint": 1,
                 "best_reason": "best updated",
                 "holdout_easy_success": 0.50,
@@ -159,6 +180,8 @@ def test_training_diagnostic_writers_include_best_final_and_collapse(tmp_path):
                 "num_humans": 10,
                 "human_vpref": 0.26,
                 "is_replay_update": 0,
+                "std_linear": 0.15,
+                "std_angular": 0.45,
                 "is_best_checkpoint": 0,
                 "holdout_easy_success": 0.10,
                 "holdout_hard_success": 0.00,
@@ -176,11 +199,13 @@ def test_training_diagnostic_writers_include_best_final_and_collapse(tmp_path):
     data = json.loads(json_path.read_text(encoding="utf-8"))
     assert data["best_step"] == 100
     assert data["collapse_detected"] is True
+    assert data["final_std_angular"] == 0.45
 
     report = report_path.read_text(encoding="utf-8")
     assert "Collapse detected: yes" in report
     assert "Best min success: 30.0%" in report
     assert "Final min success: 0.0%" in report
+    assert "Final std angular: 0.450" in report
 
 
 def test_training_log_cli_writes_json_and_markdown(tmp_path, capsys):
@@ -196,6 +221,8 @@ def test_training_log_cli_writes_json_and_markdown(tmp_path, capsys):
                 "num_humans": 8,
                 "human_vpref": 0.24,
                 "is_replay_update": 1,
+                "std_linear": 0.11,
+                "std_angular": 0.22,
                 "is_best_checkpoint": 1,
                 "best_reason": "best updated",
                 "holdout_easy_success": 0.60,
@@ -208,6 +235,8 @@ def test_training_log_cli_writes_json_and_markdown(tmp_path, capsys):
                 "num_humans": 10,
                 "human_vpref": 0.26,
                 "is_replay_update": 0,
+                "std_linear": 0.16,
+                "std_angular": 0.47,
                 "is_best_checkpoint": 0,
                 "holdout_easy_success": 0.10,
                 "holdout_hard_success": 0.00,
