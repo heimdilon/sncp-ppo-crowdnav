@@ -254,6 +254,8 @@ honestly: real hardware speed + the chosen pedestrian model.
    `--total_steps`, `--holdout_scenarios`, `--curriculum_replay_ratio` there. Current = v16
    (num_humans 10, total_steps 2.5M, replay 0.20, holdout `easy hard circle`).
 3. cell-17: evaluation (loads the saved best checkpoint, density sweep).
+4. See `docs/superpowers/plans/2026-06-06-v16-colab-runbook.md` for the exact post-run artifact
+   sequence and verdict gates.
 
 **Local eval / viz (fast, inference only):**
 ```bash
@@ -407,6 +409,7 @@ Then re-evaluate with the §9 criteria (nav-time, I_sp, trajectories, density sw
   This file (AGENTS.md) is the **portable, version-controlled summary**; the auto-memory is the **private,
   detailed log**. Keep them consistent.
 - **In-repo design docs:** `docs/superpowers/specs/` (e.g. `2026-06-05-v15-social-navigation-design.md`) and
-  `docs/superpowers/plans/` (e.g. `2026-06-05-v15-social-navigation.md`) — the spec + step-by-step plan for v15.
+  `docs/superpowers/plans/` (e.g. `2026-06-05-v15-social-navigation.md`,
+  `2026-06-06-v16-colab-runbook.md`) — specs, step-by-step plans, and the current Colab handoff.
 - **Paper:** `s12369-026-01389-9.pdf` (repo root, git-ignored).
 - **README.md:** user-facing but **stale (v6-era)** — update pending; trust AGENTS.md/code/memory for current values.

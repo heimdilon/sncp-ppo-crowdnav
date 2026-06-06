@@ -425,6 +425,8 @@ Expected: `main` pushed so Colab can pull.
 - Modify after results: `AGENTS.md`
 - Modify after results: `~/.claude/projects/C--Users-kor-a-Desktop-deneme/memory/sncp-paper-vs-impl.md`
 
+Use `docs/superpowers/plans/2026-06-06-v16-colab-runbook.md` as the operator checklist.
+
 - [ ] **Step 1: Evaluate v16 checkpoint**
 
 Run the v16 notebook eval cell or local equivalents:
