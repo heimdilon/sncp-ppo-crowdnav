@@ -431,20 +431,16 @@ Run the v16 notebook eval cell or local equivalents:
 
 ```powershell
 $env:PYTHONPATH='C:\tmp\codex-pydeps'
-& 'C:\Users\kor_a\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' test_eval.py --checkpoint checkpoints/sncp_ppo_v16.pt --num_humans 1 --scenario hard --n_episodes 50 --seed 100
-& 'C:\Users\kor_a\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' test_eval.py --checkpoint checkpoints/sncp_ppo_v16.pt --num_humans 3 --scenario hard --n_episodes 50 --seed 100
-& 'C:\Users\kor_a\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' test_eval.py --checkpoint checkpoints/sncp_ppo_v16.pt --num_humans 5 --scenario hard --n_episodes 50 --seed 100
-& 'C:\Users\kor_a\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' test_eval.py --checkpoint checkpoints/sncp_ppo_v16.pt --num_humans 8 --scenario hard --n_episodes 50 --seed 100
-& 'C:\Users\kor_a\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' test_eval.py --checkpoint checkpoints/sncp_ppo_v16.pt --num_humans 10 --scenario hard --n_episodes 50 --seed 100
+& 'C:\Users\kor_a\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' evaluate_policy_report.py --checkpoint checkpoints/sncp_ppo_v16.pt --output_dir eval_v16 --densities 1 3 5 8 10 --scenario hard --n_episodes 50 --seed 100 --trajectory_densities 5 10
 ```
 
-- [ ] **Step 2: Generate trajectory plots**
+This writes `eval_v16/density_sweep.csv`, `eval_v16/density_sweep.json`,
+`eval_v16/density_sweep.png`, `eval_v16/report.md`, and N=5/N=10 trajectory PNGs.
 
-```powershell
-$env:PYTHONPATH='C:\tmp\codex-pydeps'
-& 'C:\Users\kor_a\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' visualize_trajectory.py --checkpoint checkpoints/sncp_ppo_v16.pt --num_humans 5 --scenario hard --seed 100 --output traj_v16_hard_n5.png
-& 'C:\Users\kor_a\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' visualize_trajectory.py --checkpoint checkpoints/sncp_ppo_v16.pt --num_humans 10 --scenario hard --seed 100 --output traj_v16_hard_n10.png
-```
+- [ ] **Step 2: Inspect trajectory plots**
+
+Open the generated N=5/N=10 trajectory PNGs and verify the path routes around clusters rather than
+through them. Generate GIFs only if the static plots are ambiguous.
 
 - [ ] **Step 3: Compare against v15 gates**
 

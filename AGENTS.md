@@ -251,10 +251,14 @@ honestly: real hardware speed + the chosen pedestrian model.
 
 **Local eval / viz (fast, inference only):**
 ```bash
+python evaluate_policy_report.py --checkpoint checkpoints/sncp_ppo_v16.pt --output_dir eval_v16 --densities 1 3 5 8 10 --scenario hard --n_episodes 50 --seed 100 --trajectory_densities 5 10
 python test_eval.py --checkpoint <ckpt>.pt --num_humans 5 --scenario hard --n_episodes 50 --seed 100
 python visualize_trajectory.py --checkpoint <ckpt>.pt --num_humans 5 --scenario hard --seed 100 --output traj.png
 python visualize_trajectory_gif.py --checkpoint <ckpt>.pt --num_humans 10 --scenario hard --seed 100 --output anim.gif
 ```
+- `evaluate_policy_report.py` is the preferred v16 post-run command: it holds `scenario=hard` fixed,
+  sweeps density N=1/3/5/8/10, writes `density_sweep.csv/json/png` + `report.md`, and generates
+  N=5/N=10 trajectory PNGs. Use this before judging success so nav-time and `I_sp` are visible.
 - **Checkpoint naming:** `checkpoints/sncp_ppo_v<N>.pt`. Bump the version for each experiment so prior
   results are preserved (v13, v14, v15, …). Downloaded checkpoints often land at repo root or `colabout/`.
 - `test_eval.py --num_humans` must match the intended density; scenario sets speed + layout.
@@ -304,7 +308,7 @@ success collapsing toward 0 with rising timeout. If seen, lower the comfort coef
 
 ---
 
-## 11. Tests (`pytest`, ~57 passing)
+## 11. Tests (`pytest`, ~62 passing)
 
 | File | Covers |
 |---|---|
@@ -320,6 +324,7 @@ success collapsing toward 0 with rising timeout. If seen, lower the comfort coef
 | `test_vec_curriculum.py` | `step_to_phase` boundaries/values, parity, N=10 holdout, vectorized replay selection/logging, vectorized run smoke, `compute_total_updates` |
 | `test_vec_gae.py`, `test_vec_buffer.py` | GAE + buffer correctness |
 | `test_train_eta.py` | training ETA output |
+| `test_eval_report.py` | density-sweep report aggregation, artifact writing, nav-time plot, and CLI argument wiring |
 | `test_eval.py` | (CLI eval script, not a pytest module) |
 
 Run all: `python -m pytest -q`. After any reward/curriculum/default change, **update the tests that
@@ -357,9 +362,11 @@ Goal: sustain the v15 N=5 peak all the way to N=10 and lift the ceiling. In prio
 1. **Run v16 replay experiment (code pushed in commit `87896bb`).** The vectorized path now has
    `select_vectorized_phase(...)`: with replay enabled, a fraction of update windows samples a uniformly
    random earlier phase while the whole rollout remains single-density. Notebook cell-14 is set to
-   `SAVE_PATH='checkpoints/sncp_ppo_v16.pt'` and `--curriculum_replay_ratio 0.20`. Local verification:
-   `57 passed`; short CLI smoke exited 0 and logged replay phase shifts. **Pending:** Colab A100 run,
-   density sweep, trajectories, nav-time/I_sp comparison vs v15.
+   `SAVE_PATH='checkpoints/sncp_ppo_v16.pt'` and `--curriculum_replay_ratio 0.20`. Notebook cell-17 now
+   runs `evaluate_policy_report.py` for the hard-scenario N=1/3/5/8/10 sweep and trajectory artifacts.
+   Local verification: `62 passed`; replay smoke exited 0 and logged replay phase shifts; report smoke
+   loaded v15 and wrote sweep artifacts. **Pending:** Colab A100 run, density sweep, trajectories,
+   nav-time/I_sp comparison vs v15.
 2. **Tame the over-conservative detour** (26% timeout at N=1; ~187 steps vs the 200 cap). Options: comfort
    −6 → −5, or `max_time` 50 → 60 s, or a mild efficiency term. Tune carefully (freezing risk).
 3. **Lift high-N** (46% collision at N=10): more N=10 training (enabled by replay), then possibly LTC
