@@ -1,0 +1,75 @@
+{
+  "checkpoint": "checkpoints\\sncp_ppo_v15.pt",
+  "baseline_nav_steps": 121.5,
+  "trajectory_files": [
+    "traj_hard_n5.png",
+    "traj_hard_n10.png"
+  ],
+  "density_sweep": [
+    {
+      "num_humans": 1,
+      "scenario": "hard",
+      "episodes": 50,
+      "success_rate": 0.44,
+      "collision_rate": 0.3,
+      "timeout_rate": 0.26,
+      "avg_success_steps": 185.5,
+      "avg_episode_steps": 165.46,
+      "avg_i_sp": 0.009172421969680348,
+      "avg_min_d_min": 1.5864921202360613,
+      "avg_reward": -4.123169348822351
+    },
+    {
+      "num_humans": 3,
+      "scenario": "hard",
+      "episodes": 50,
+      "success_rate": 0.5,
+      "collision_rate": 0.3,
+      "timeout_rate": 0.2,
+      "avg_success_steps": 186.84,
+      "avg_episode_steps": 169.18,
+      "avg_i_sp": 0.021237082963068827,
+      "avg_min_d_min": 1.1736608857280875,
+      "avg_reward": -7.1569945809050175
+    },
+    {
+      "num_humans": 5,
+      "scenario": "hard",
+      "episodes": 50,
+      "success_rate": 0.66,
+      "collision_rate": 0.18,
+      "timeout_rate": 0.16,
+      "avg_success_steps": 187.06060606060606,
+      "avg_episode_steps": 169.58,
+      "avg_i_sp": 0.014966120979778721,
+      "avg_min_d_min": 1.0156860457685322,
+      "avg_reward": 5.316409642063543
+    },
+    {
+      "num_humans": 8,
+      "scenario": "hard",
+      "episodes": 50,
+      "success_rate": 0.5,
+      "collision_rate": 0.34,
+      "timeout_rate": 0.16,
+      "avg_success_steps": 188.08,
+      "avg_episode_steps": 145.2,
+      "avg_i_sp": 0.01949191369548449,
+      "avg_min_d_min": 0.8511438846824799,
+      "avg_reward": -0.0008564634499909019
+    },
+    {
+      "num_humans": 10,
+      "scenario": "hard",
+      "episodes": 50,
+      "success_rate": 0.46,
+      "collision_rate": 0.46,
+      "timeout_rate": 0.08,
+      "avg_success_steps": 188.91304347826087,
+      "avg_episode_steps": 127.4,
+      "avg_i_sp": 0.024571257235984405,
+      "avg_min_d_min": 0.7396526889622962,
+      "avg_reward": -4.386499799902161
+    }
+  ]
+}

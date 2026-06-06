@@ -77,6 +77,8 @@ robot parity so a slow robot can feasibly dodge. Result:
   50 ep): N=1 44%, N=3 50%, **N=5 66% (peak)**, N=8 50%, N=10 46% (collision 46%). Inverted-U
   (peak at N=5 = the checkpoint's training sweet spot), high timeout at low N (26% at N=1 — the wide
   arc is over-conservative for sparse scenes and bumps the 200-step cap), high collision at high N.
+  Standardized baseline artifacts live in `eval_v15/` (`density_sweep.csv/json/png`, `report.md`,
+  `traj_hard_n5.png`, `traj_hard_n10.png`) and were generated with `evaluate_policy_report.py`.
 - ⚠️ **The run collapsed after update 450.** Holdout `min` peaked at update 450 (medium/5h phase:
   easy 66 / hard 60 / circle 36, collision 32%) then crashed to 0–4% through the hard/8h and circle/10h
   phases. Cause: the vectorized curriculum has **no anti-forgetting replay** (log shows "Replay ratio: 0%")
