@@ -20,9 +20,11 @@
   PDF `s12369-026-01389-9.pdf` in repo root, **git-ignored**).
 - Stack: Python, PyTorch, Gymnasium, **`ncps`** (Liquid Time-Constant / Neural Circuit Policies), pytest.
 - Robot = **TurtleBot3 Waffle**, max linear speed **0.26 m/s** (real hardware), wmax 1.8, radius 0.3.
-- **Current head state: v15.** The robot now performs *genuine* collision-avoidance + social-distance
-  keeping (it detours around pedestrians) — the long-standing "beeline" problem is solved. Performance
-  is modest (peak ~66% at N=5) and the training run collapsed late (no curriculum replay); see §9.
+- **Current head state: v16 code-ready / Colab run pending.** v15 proved *genuine*
+  collision-avoidance + social-distance keeping (it detours around pedestrians) — the long-standing
+  "beeline" problem is solved. v16 implements the first roadmap fix: vectorized anti-forgetting replay
+  (`--curriculum_replay_ratio`, notebook set to 0.20) so the N=10 phase does not erase earlier skills.
+  Performance evidence is still v15 until the v16 A100 run finishes: peak ~66% at N=5 and late collapse.
 - **Workflow:** training runs on **Google Colab** (local GPU is too slow); commits go **directly to
   `main`**, which Colab pulls. TDD is used for all code changes. See §6–§7.
 - **Detailed cross-session log** lives OUTSIDE the repo in the Claude auto-memory (§11).
@@ -81,7 +83,8 @@ robot parity so a slow robot can feasibly dodge. Result:
   → catastrophic forgetting + rising policy std (instability). The **best-checkpoint mechanism saved the
   update-450 weights** (`sncp_ppo_v15.pt` = that peak, NOT the collapsed final policy).
 
-Open problems are the **v16 roadmap** (§13): add replay, tame the over-conservative detour, push high-N.
+Open problems are the **v16 roadmap** (§13): run/evaluate replay, tame the over-conservative detour,
+push high-N.
 
 ---
 
@@ -242,8 +245,8 @@ honestly: real hardware speed + the chosen pedestrian model.
 **Training (Colab — the normal path; local GPU is ~5–7 s/step, too slow for full runs):**
 1. `sncp_ppo_colab.ipynb` cell-4: `git pull` (gets latest `main`).
 2. cell-14: launches `python -m sncp_ppo.train …` (A100, ~3–4 h). Edit `SAVE_PATH`, `--num_humans`,
-   `--total_steps`, `--holdout_scenarios` there. Current = v15 (num_humans 10, total_steps 2.5M,
-   holdout `easy hard circle`).
+   `--total_steps`, `--holdout_scenarios`, `--curriculum_replay_ratio` there. Current = v16
+   (num_humans 10, total_steps 2.5M, replay 0.20, holdout `easy hard circle`).
 3. cell-17: evaluation (loads the saved best checkpoint, density sweep).
 
 **Local eval / viz (fast, inference only):**
@@ -301,7 +304,7 @@ success collapsing toward 0 with rising timeout. If seen, lower the comfort coef
 
 ---
 
-## 11. Tests (`pytest`, ~53 passing)
+## 11. Tests (`pytest`, ~57 passing)
 
 | File | Covers |
 |---|---|
@@ -314,7 +317,7 @@ success collapsing toward 0 with rising timeout. If seen, lower the comfort coef
 | `test_reward_paper.py` | goal +20, collision −20, **comfort −6·I_sp**, **approach 1·Δd**, max_time 50 |
 | `test_pedestrian_reactive.py` | **default is non-reactive**; reactive flag still works (keeps more clearance) |
 | `test_speed_parity.py` | every scenario's `human_vpref ≤ robot_vpref` |
-| `test_vec_curriculum.py` | `step_to_phase` boundaries/values, parity, N=10 holdout, vectorized run smoke, `compute_total_updates` |
+| `test_vec_curriculum.py` | `step_to_phase` boundaries/values, parity, N=10 holdout, vectorized replay selection/logging, vectorized run smoke, `compute_total_updates` |
 | `test_vec_gae.py`, `test_vec_buffer.py` | GAE + buffer correctness |
 | `test_train_eta.py` | training ETA output |
 | `test_eval.py` | (CLI eval script, not a pytest module) |
@@ -351,13 +354,16 @@ assert the old value** (they are intentional guards, not bugs) and keep the suit
 ## 13. v16 roadmap (next experiment)
 
 Goal: sustain the v15 N=5 peak all the way to N=10 and lift the ceiling. In priority order:
-1. **Add anti-forgetting replay to the vectorized path** (the #1 fix). Mix earlier-density envs into update
-   windows so training on N=10 doesn't erase N=1/5 competence. This should fix the late collapse + the
-   inverted-U and make the *final* checkpoint usable. **Needs code** (the vectorized path has no replay; the
-   single-env loop has the pattern to port).
+1. **Run v16 replay experiment (code pushed in commit `87896bb`).** The vectorized path now has
+   `select_vectorized_phase(...)`: with replay enabled, a fraction of update windows samples a uniformly
+   random earlier phase while the whole rollout remains single-density. Notebook cell-14 is set to
+   `SAVE_PATH='checkpoints/sncp_ppo_v16.pt'` and `--curriculum_replay_ratio 0.20`. Local verification:
+   `57 passed`; short CLI smoke exited 0 and logged replay phase shifts. **Pending:** Colab A100 run,
+   density sweep, trajectories, nav-time/I_sp comparison vs v15.
 2. **Tame the over-conservative detour** (26% timeout at N=1; ~187 steps vs the 200 cap). Options: comfort
    −6 → −5, or `max_time` 50 → 60 s, or a mild efficiency term. Tune carefully (freezing risk).
-3. **Lift high-N** (46% collision at N=10): more N=10 training (enabled by replay), possibly LTC capacity.
+3. **Lift high-N** (46% collision at N=10): more N=10 training (enabled by replay), then possibly LTC
+   capacity only if replay evidence points to capacity rather than curriculum forgetting.
 
 Then re-evaluate with the §9 criteria (nav-time, I_sp, trajectories, density sweep) and compare to v15.
 
