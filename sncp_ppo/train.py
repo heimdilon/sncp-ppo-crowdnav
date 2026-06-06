@@ -206,8 +206,8 @@ def train(args):
         holdout_cols += [f'holdout_{sc}_success', f'holdout_{sc}_collision',
                          f'holdout_{sc}_timeout', f'holdout_{sc}_reward']
     csv_writer.writerow([
-        'episode', 'scenario', 'num_humans', 'human_vpref', 'steps', 'reward',
-        'success', 'collision', 'timeout', 'comfort',
+        'episode', 'scenario', 'num_humans', 'human_vpref', 'is_replay_update',
+        'steps', 'reward', 'success', 'collision', 'timeout', 'comfort',
         'is_best_checkpoint', 'best_reason',
     ] + holdout_cols)
     print(f"CSV log: {log_path}")
@@ -433,7 +433,8 @@ def train(args):
         # checkpoints even without the CSV.
         try:
             csv_writer.writerow([
-                episode, env.scenario, env.num_humans, env.human_vpref, step_count, f"{episode_reward:.4f}",
+                episode, env.scenario, env.num_humans, env.human_vpref, int(window_is_replay),
+                step_count, f"{episode_reward:.4f}",
                 int(info['success']), int(info['collision']), int(info['timeout']), f"{info['comfort']:.4f}",
                 is_best_checkpoint, best_reason,
             ] + ho_row)
@@ -518,22 +519,60 @@ def compute_total_updates(num_envs, episodes, update_freq, total_steps, horizon)
     return episodes // update_freq + 5
 
 
-def step_to_phase(steps_seen, total_steps, final_num_humans):
-    """Map an env-step count to a curriculum phase.
+def curriculum_phases(final_num_humans):
+    """Return the v15/v16 density curriculum phases.
+
+    Each phase is (scenario, num_humans, human_vpref). Speeds stay at or below
+    robot parity so non-reactive avoidance remains physically feasible.
+    """
+    return [
+        ('easy', 1, 0.13),
+        ('easy_plus', 3, 0.18),
+        ('medium', 5, 0.22),
+        ('hard', 8, 0.24),
+        ('circle', final_num_humans, 0.26),
+    ]
+
+
+def phase_index_for_steps(steps_seen, total_steps):
+    """Map an env-step count to a curriculum phase index.
 
     Boundaries are inclusive fractions of total_steps: 10/25/50/75%, matching
-    the single-env curriculum. The final phase uses final_num_humans.
+    the single-env curriculum.
     """
     frac = steps_seen / max(1, total_steps)
     if frac <= 0.10:
-        return ('easy', 1, 0.13)
+        return 0
     if frac <= 0.25:
-        return ('easy_plus', 3, 0.18)
+        return 1
     if frac <= 0.50:
-        return ('medium', 5, 0.22)
+        return 2
     if frac <= 0.75:
-        return ('hard', 8, 0.24)
-    return ('circle', final_num_humans, 0.26)
+        return 3
+    return 4
+
+
+def step_to_phase(steps_seen, total_steps, final_num_humans):
+    """Map an env-step count to a curriculum phase."""
+    return curriculum_phases(final_num_humans)[
+        phase_index_for_steps(steps_seen, total_steps)
+    ]
+
+
+def select_vectorized_phase(steps_seen, total_steps, final_num_humans,
+                            replay_ratio=0.0, rng=random):
+    """Select the next vectorized PPO update phase.
+
+    With replay enabled, a fraction of update windows re-samples a uniformly
+    random earlier phase. The whole update still uses one phase, preserving the
+    fixed human-count tensor shape expected by the vectorized rollout buffer.
+    """
+    phases = curriculum_phases(final_num_humans)
+    current_idx = phase_index_for_steps(steps_seen, total_steps)
+    if replay_ratio > 0.0 and current_idx > 0 and rng.random() < replay_ratio:
+        replay_idx = rng.randint(0, current_idx - 1)
+        return phases[replay_idx], True
+    return phases[current_idx], False
 
 
 def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, csv_file):
@@ -581,18 +620,25 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
 
     total_steps = 0
     update_idx = 0
+    replay_ratio = getattr(args, 'curriculum_replay_ratio', 0.0)
     print(f"\nVectorized training: {N} envs x {T} steps = {N * T} transitions/update")
     print(f"Curriculum by step budget: total={args.total_steps}, phases 10/25/50/75%")
+    print(f"Replay ratio: {replay_ratio:.0%} of vectorized update windows sample earlier phases")
     print(f"Holdout every {args.eval_freq_updates} updates on {args.holdout_scenarios}")
     print(f"Note: --episodes is ignored in vectorized mode; --total_steps controls run length.")
     print("-" * 90)
 
     while total_steps < args.total_steps:
-        next_scenario, next_H, next_vpref = step_to_phase(
-            total_steps, args.total_steps, args.num_humans,
+        (next_scenario, next_H, next_vpref), is_replay_update = select_vectorized_phase(
+            total_steps,
+            args.total_steps,
+            args.num_humans,
+            replay_ratio=replay_ratio,
+            rng=random,
         )
         if next_H != H or next_scenario != scenario:
-            print(f"\n  [Curriculum shift @ step {total_steps}] "
+            replay_mark = " replay" if is_replay_update else ""
+            print(f"\n  [Curriculum shift @ step {total_steps}{replay_mark}] "
                   f"{scenario}/{H}h -> {next_scenario}/{next_H}h")
             envs.close()
             scenario, H, vpref = next_scenario, next_H, next_vpref
@@ -696,7 +742,7 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
                        f"{r['timeout_rate']:.4f}", f"{r['avg_reward']:.4f}"]
         try:
             csv_writer.writerow([
-                total_steps, scenario, H, vpref, T,
+                total_steps, scenario, H, vpref, int(is_replay_update), T,
                 '', '', '', '', '',
                 is_best_checkpoint, best_reason,
             ] + ho_row)
@@ -709,8 +755,9 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
         if update_idx % 10 == 0:
             with torch.no_grad():
                 stdv = policy.actor_logstd.exp().squeeze().cpu().numpy()
+            replay_mark = "R" if is_replay_update else " "
             print(f"Update {update_idx} | step {total_steps}/{args.total_steps} [{scenario} {H}h] | "
-                  f"ent={agent.last_entropy:+.3f} kl={agent.last_approx_kl:.5f} "
+                  f"[{replay_mark}] ent={agent.last_entropy:+.3f} kl={agent.last_approx_kl:.5f} "
                   f"std=[{stdv[0]:.3f},{stdv[1]:.3f}] rms={agent.return_rms.std:.2f}")
 
     envs.close()
@@ -772,16 +819,12 @@ if __name__ == '__main__':
     parser.add_argument('--update_freq', type=int, default=5,
                         help='Episodes between PPO updates.')
     parser.add_argument('--curriculum_replay_ratio', type=float, default=0.0,
-                        help='[EXPERIMENTAL — default off after v5 regression] '
-                             'Fraction of PPO update windows that re-sample a '
+                        help='Fraction of PPO update windows that re-sample a '
                              'uniformly-random earlier curriculum phase instead '
-                             'of training on the current one. The intent was to '
-                             'prevent forgetting of low-density (N=1,2) scenarios. '
-                             'Empirically at 0.2 this stole ~20%% of phase-specific '
-                             'sample budget AND contaminated the return-RMS '
-                             'normalizer with mixed-distribution returns, killing '
-                             'HARD-phase learning (rolling success 85%% → 10%%). '
-                             'Kept opt-in for experiments; set to 0 by default.')
+                             'of training on the current one. v16 uses this in '
+                             'the vectorized path to reduce catastrophic '
+                             'forgetting after the v15 N=5 peak. Default stays '
+                             '0 so replay is an explicit experiment variable.')
 
     # Curriculum thresholds (inclusive) — 5-phase: 10%/25%/50%/75%/100%
     parser.add_argument('--curriculum_easy_until', type=int, default=None,

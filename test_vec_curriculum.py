@@ -9,6 +9,20 @@ import torch
 from sncp_ppo.train import _train_vectorized, step_to_phase, SCENARIO_HOLDOUT_CONFIG
 
 
+VECTOR_LOG_HEADER = [
+    'episode', 'scenario', 'num_humans', 'human_vpref', 'is_replay_update',
+    'steps', 'reward', 'success', 'collision', 'timeout', 'comfort',
+    'is_best_checkpoint', 'best_reason',
+    'holdout_easy_success', 'holdout_easy_collision', 'holdout_easy_timeout',
+    'holdout_easy_reward', 'holdout_hard_success', 'holdout_hard_collision',
+    'holdout_hard_timeout', 'holdout_hard_reward',
+]
+
+
+def _write_vector_log_header(csv_writer):
+    csv_writer.writerow(VECTOR_LOG_HEADER)
+
+
 def test_step_to_phase_boundaries():
     total = 1000
     final = 10  # v15 final density
@@ -62,6 +76,7 @@ def test_vectorized_runs_with_curriculum_holdout_and_saves(tmp_path):
         save_path=str(save_path),
         lr=1e-4,
         target_kl=0.01,
+        curriculum_replay_ratio=0.0,
     )
     device = torch.device('cpu')
     env = CrowdSimEnv(num_humans=args.num_humans, scenario='circle')
@@ -77,17 +92,18 @@ def test_vectorized_runs_with_curriculum_holdout_and_saves(tmp_path):
 
     with log_path.open('w', newline='') as csv_file:
         csv_writer = csv.writer(csv_file)
+        _write_vector_log_header(csv_writer)
         _train_vectorized(args, env, policy, agent, device, str(log_path), csv_writer, csv_file)
 
     with log_path.open(newline='') as csv_file:
-        rows = list(csv.reader(csv_file))
+        rows = list(csv.DictReader(csv_file))
 
-    num_humans_seen = {int(row[2]) for row in rows}
+    num_humans_seen = {int(row['num_humans']) for row in rows}
     assert 1 in num_humans_seen
     assert len(num_humans_seen) > 1
-    assert rows[-1][10] == '1'
-    assert rows[-1][12] != 'nan'
-    assert rows[-1][16] != 'nan'
+    assert rows[-1]['is_best_checkpoint'] == '1'
+    assert rows[-1]['holdout_easy_success'] != 'nan'
+    assert rows[-1]['holdout_hard_success'] != 'nan'
     assert save_path.exists() or os.path.exists(str(save_path).replace('.pt', '_final.pt'))
 
 
@@ -133,3 +149,108 @@ def test_holdout_config_is_parity_and_has_highdensity():
     for name, (n, v) in SCENARIO_HOLDOUT_CONFIG.items():
         assert v <= 0.26 + 1e-9, f"{name} holdout speed {v} > parity"
     assert SCENARIO_HOLDOUT_CONFIG['circle'][0] >= 10, "no high-density holdout"
+
+
+class _ReplayRng:
+    def __init__(self, random_value=0.0, randint_value=0):
+        self.random_value = random_value
+        self.randint_value = randint_value
+        self.randint_bounds = None
+
+    def random(self):
+        return self.random_value
+
+    def randint(self, low, high):
+        self.randint_bounds = (low, high)
+        return self.randint_value
+
+
+def test_select_vectorized_phase_uses_current_phase_when_replay_disabled():
+    from sncp_ppo.train import select_vectorized_phase
+
+    phase, is_replay = select_vectorized_phase(
+        steps_seen=800,
+        total_steps=1000,
+        final_num_humans=10,
+        replay_ratio=0.0,
+        rng=_ReplayRng(random_value=0.0, randint_value=0),
+    )
+
+    assert phase == ('circle', 10, 0.26)
+    assert is_replay is False
+
+
+def test_select_vectorized_phase_samples_only_earlier_phases_for_replay():
+    from sncp_ppo.train import select_vectorized_phase
+
+    rng = _ReplayRng(random_value=0.0, randint_value=1)
+    phase, is_replay = select_vectorized_phase(
+        steps_seen=800,
+        total_steps=1000,
+        final_num_humans=10,
+        replay_ratio=1.0,
+        rng=rng,
+    )
+
+    assert phase == ('easy_plus', 3, 0.18)
+    assert is_replay is True
+    assert rng.randint_bounds == (0, 3)
+
+
+def test_select_vectorized_phase_never_replays_before_second_phase():
+    from sncp_ppo.train import select_vectorized_phase
+
+    phase, is_replay = select_vectorized_phase(
+        steps_seen=0,
+        total_steps=1000,
+        final_num_humans=10,
+        replay_ratio=1.0,
+        rng=_ReplayRng(random_value=0.0, randint_value=0),
+    )
+
+    assert phase == ('easy', 1, 0.13)
+    assert is_replay is False
+
+
+def test_vectorized_replay_updates_are_logged(tmp_path):
+    from crowd_sim.crowd_env import CrowdSimEnv
+    from sncp_ppo.models import SNCPPolicy
+    from sncp_ppo.ppo import PPOAgent
+
+    save_path = tmp_path / 'vc_replay_smoke.pt'
+    log_path = tmp_path / 'vc_replay_log.csv'
+    args = argparse.Namespace(
+        num_envs=2,
+        horizon=8,
+        total_steps=96,
+        eval_freq_updates=0,
+        episodes=1,
+        num_humans=10,
+        seed=42,
+        holdout_scenarios=['easy', 'hard'],
+        holdout_episodes=1,
+        best_warmup_evals=0,
+        best_min_success_threshold=0.0,
+        save_path=str(save_path),
+        lr=1e-4,
+        target_kl=0.01,
+        curriculum_replay_ratio=1.0,
+    )
+    device = torch.device('cpu')
+    env = CrowdSimEnv(num_humans=args.num_humans, scenario='circle')
+    policy = SNCPPolicy(robot_vpref=env.robot_vpref, robot_wmax=env.robot_wmax).to(device)
+    agent = PPOAgent(
+        policy=policy, lr=args.lr, target_kl=args.target_kl,
+        epochs=1, batch_size=2, seq_len=4,
+    )
+
+    with log_path.open('w', newline='') as csv_file:
+        csv_writer = csv.writer(csv_file)
+        _write_vector_log_header(csv_writer)
+        _train_vectorized(args, env, policy, agent, device, str(log_path), csv_writer, csv_file)
+
+    with log_path.open(newline='') as csv_file:
+        rows = list(csv.DictReader(csv_file))
+
+    assert any(row['is_replay_update'] == '1' for row in rows)
+    assert any(row['is_replay_update'] == '0' for row in rows)
