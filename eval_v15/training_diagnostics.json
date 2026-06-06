@@ -1,0 +1,28 @@
+{
+  "csv_path": "logs\\training_20260605_140811.csv",
+  "total_rows": 1059,
+  "evaluated_rows": 1040,
+  "holdout_scenarios": [
+    "easy",
+    "hard",
+    "circle"
+  ],
+  "observed_replay_ratio": null,
+  "best_step": 942080,
+  "best_min_success": 0.36,
+  "best_success_by_scenario": {
+    "easy": 0.66,
+    "hard": 0.6,
+    "circle": 0.36
+  },
+  "best_reason": "best updated (priority: min_success, tie-break: avg_reward, then lower collision_rate)",
+  "final_step": 2168832,
+  "final_min_success": 0.0,
+  "final_success_by_scenario": {
+    "easy": 0.0,
+    "hard": 0.0,
+    "circle": 0.0
+  },
+  "collapse_delta": -0.36,
+  "collapse_detected": true
+}

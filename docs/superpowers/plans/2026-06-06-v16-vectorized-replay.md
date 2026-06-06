@@ -433,11 +433,12 @@ Run the v16 notebook eval cell or local equivalents:
 $env:PYTHONPATH='C:\tmp\codex-pydeps'
 & 'C:\Users\kor_a\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' evaluate_policy_report.py --checkpoint checkpoints/sncp_ppo_v16.pt --output_dir eval_v16 --densities 1 3 5 8 10 --scenario hard --n_episodes 50 --seed 100 --trajectory_densities 5 10
 & 'C:\Users\kor_a\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' compare_policy_reports.py --baseline eval_v15/density_sweep.json --candidate eval_v16/density_sweep.json --output eval_v16/comparison_vs_v15.md
+& 'C:\Users\kor_a\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' analyze_training_log.py --csv logs/<training_csv>.csv --output_dir eval_v16
 ```
 
 This writes `eval_v16/density_sweep.csv`, `eval_v16/density_sweep.json`,
 `eval_v16/density_sweep.png`, `eval_v16/report.md`, `eval_v16/comparison_vs_v15.md`,
-and N=5/N=10 trajectory PNGs.
+`eval_v16/training_diagnostics.md/json`, and N=5/N=10 trajectory PNGs.
 
 - [ ] **Step 2: Inspect trajectory plots**
 

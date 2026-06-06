@@ -79,6 +79,7 @@ robot parity so a slow robot can feasibly dodge. Result:
   arc is over-conservative for sparse scenes and bumps the 200-step cap), high collision at high N.
   Standardized baseline artifacts live in `eval_v15/` (`density_sweep.csv/json/png`, `report.md`,
   `traj_hard_n5.png`, `traj_hard_n10.png`) and were generated with `evaluate_policy_report.py`.
+  `eval_v15/training_diagnostics.md/json` captures the training collapse from the v15 CSV.
 - ⚠️ **The run collapsed after update 450.** Holdout `min` peaked at update 450 (medium/5h phase:
   easy 66 / hard 60 / circle 36, collision 32%) then crashed to 0–4% through the hard/8h and circle/10h
   phases. Cause: the vectorized curriculum has **no anti-forgetting replay** (log shows "Replay ratio: 0%")
@@ -255,6 +256,7 @@ honestly: real hardware speed + the chosen pedestrian model.
 ```bash
 python evaluate_policy_report.py --checkpoint checkpoints/sncp_ppo_v16.pt --output_dir eval_v16 --densities 1 3 5 8 10 --scenario hard --n_episodes 50 --seed 100 --trajectory_densities 5 10
 python compare_policy_reports.py --baseline eval_v15/density_sweep.json --candidate eval_v16/density_sweep.json --output eval_v16/comparison_vs_v15.md
+python analyze_training_log.py --csv logs/<training_csv>.csv --output_dir eval_v16
 python test_eval.py --checkpoint <ckpt>.pt --num_humans 5 --scenario hard --n_episodes 50 --seed 100
 python visualize_trajectory.py --checkpoint <ckpt>.pt --num_humans 5 --scenario hard --seed 100 --output traj.png
 python visualize_trajectory_gif.py --checkpoint <ckpt>.pt --num_humans 10 --scenario hard --seed 100 --output anim.gif
@@ -264,6 +266,8 @@ python visualize_trajectory_gif.py --checkpoint <ckpt>.pt --num_humans 10 --scen
   N=5/N=10 trajectory PNGs. Use this before judging success so nav-time and `I_sp` are visible.
 - `compare_policy_reports.py` compares `eval_v16/density_sweep.json` against the committed
   `eval_v15/density_sweep.json` and writes the pass/warn/fail gate report used for the v16 verdict.
+- `analyze_training_log.py` summarizes best vs final holdout from the training CSV and flags late
+  curriculum collapse; use it to verify replay fixed the v15 final-phase forgetting.
 - **Checkpoint naming:** `checkpoints/sncp_ppo_v<N>.pt`. Bump the version for each experiment so prior
   results are preserved (v13, v14, v15, …). Downloaded checkpoints often land at repo root or `colabout/`.
 - `test_eval.py --num_humans` must match the intended density; scenario sets speed + layout.
@@ -313,7 +317,7 @@ success collapsing toward 0 with rising timeout. If seen, lower the comfort coef
 
 ---
 
-## 11. Tests (`pytest`, ~67 passing)
+## 11. Tests (`pytest`, ~71 passing)
 
 | File | Covers |
 |---|---|
@@ -330,6 +334,7 @@ success collapsing toward 0 with rising timeout. If seen, lower the comfort coef
 | `test_vec_gae.py`, `test_vec_buffer.py` | GAE + buffer correctness |
 | `test_train_eta.py` | training ETA output |
 | `test_eval_report.py` | density-sweep report aggregation, artifact writing, nav-time plot, v15/v16 comparison gates, and CLI argument wiring |
+| `test_training_log_report.py` | training CSV diagnostics: best/final holdout, replay fraction, collapse report, CLI |
 | `test_eval.py` | (CLI eval script, not a pytest module) |
 
 Run all: `python -m pytest -q`. After any reward/curriculum/default change, **update the tests that
@@ -370,8 +375,9 @@ Goal: sustain the v15 N=5 peak all the way to N=10 and lift the ceiling. In prio
    `SAVE_PATH='checkpoints/sncp_ppo_v16.pt'` and `--curriculum_replay_ratio 0.20`. Notebook cell-17 now
    runs `evaluate_policy_report.py` for the hard-scenario N=1/3/5/8/10 sweep and trajectory artifacts,
    then `compare_policy_reports.py` against the committed `eval_v15/` baseline.
-   Local verification: `67 passed`; replay smoke exited 0 and logged replay phase shifts; report smoke
-   loaded v15 and wrote sweep artifacts; comparison smoke produced the expected v15-vs-v15 `warn`.
+   Local verification: `71 passed`; replay smoke exited 0 and logged replay phase shifts; report smoke
+   loaded v15 and wrote sweep artifacts; comparison smoke produced the expected v15-vs-v15 `warn`;
+   v15 training-log diagnostics detect the known late collapse.
    **Pending:** Colab A100 run, density sweep, trajectories, nav-time/I_sp comparison vs v15.
 2. **Tame the over-conservative detour** (26% timeout at N=1; ~187 steps vs the 200 cap). Options: comfort
    −6 → −5, or `max_time` 50 → 60 s, or a mild efficiency term. Tune carefully (freezing risk).
