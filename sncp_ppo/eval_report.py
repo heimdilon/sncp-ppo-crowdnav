@@ -37,6 +37,32 @@ class DensitySummary:
     avg_reward: float
 
 
+@dataclass(frozen=True)
+class DensityComparison:
+    num_humans: int
+    baseline_success_rate: float
+    candidate_success_rate: float
+    success_delta: float
+    baseline_collision_rate: float
+    candidate_collision_rate: float
+    collision_delta: float
+    baseline_avg_success_steps: float
+    candidate_avg_success_steps: float
+    nav_margin_vs_beeline: float
+    baseline_avg_i_sp: float
+    candidate_avg_i_sp: float
+    i_sp_delta: float
+    status: str
+    notes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SweepComparison:
+    overall_status: str
+    rows: tuple[DensityComparison, ...]
+    baseline_nav_steps: float
+
+
 CSV_FIELDS = [
     "num_humans",
     "scenario",
@@ -121,6 +147,11 @@ def write_summary_json(
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
+def load_summary_json(path: str | Path) -> list[DensitySummary]:
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    return [DensitySummary(**row) for row in data["density_sweep"]]
+
+
 def write_markdown_report(
     summaries: Sequence[DensitySummary],
     path: str | Path,
@@ -164,6 +195,134 @@ def write_markdown_report(
     if trajectory_files:
         lines.extend(["", "## Trajectory Artifacts", ""])
         lines.extend(f"- `{name}`" for name in trajectory_files)
+
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _status_from_notes(notes: Sequence[str]) -> str:
+    if any(note.startswith("FAIL:") for note in notes):
+        return "fail"
+    if any(note.startswith("WARN:") for note in notes):
+        return "warn"
+    return "pass"
+
+
+def _overall_status(rows: Sequence[DensityComparison]) -> str:
+    statuses = {row.status for row in rows}
+    if "fail" in statuses:
+        return "fail"
+    if "warn" in statuses:
+        return "warn"
+    return "pass"
+
+
+def compare_density_sweeps(
+    baseline: Sequence[DensitySummary],
+    candidate: Sequence[DensitySummary],
+    *,
+    baseline_nav_steps: float,
+    nav_margin_steps: float = 30.0,
+    success_tolerance: float = 0.05,
+    collision_tolerance: float = 0.05,
+    i_sp_warn_tolerance: float = 0.01,
+    i_sp_fail_tolerance: float = 0.02,
+) -> SweepComparison:
+    """Compare a candidate sweep against the standardized v15 baseline gates."""
+
+    baseline_by_density = {item.num_humans: item for item in baseline}
+    candidate_by_density = {item.num_humans: item for item in candidate}
+    if baseline_by_density.keys() != candidate_by_density.keys():
+        raise ValueError("baseline and candidate sweeps must contain the same densities")
+
+    max_density = max(baseline_by_density)
+    rows: list[DensityComparison] = []
+    for num_humans in sorted(baseline_by_density):
+        base = baseline_by_density[num_humans]
+        cand = candidate_by_density[num_humans]
+        notes: list[str] = []
+
+        success_delta = round(cand.success_rate - base.success_rate, 4)
+        collision_delta = round(cand.collision_rate - base.collision_rate, 4)
+        i_sp_delta = round(cand.avg_i_sp - base.avg_i_sp, 4)
+        nav_margin = round(cand.avg_success_steps - baseline_nav_steps, 4)
+
+        if math.isnan(cand.avg_success_steps) or nav_margin < nav_margin_steps:
+            notes.append(
+                f"FAIL: beeline/nav-time regression ({cand.avg_success_steps:.1f} steps)"
+            )
+        if success_delta < -success_tolerance:
+            notes.append(f"FAIL: success dropped by {success_delta * 100.0:.1f} pp")
+        if collision_delta > collision_tolerance:
+            notes.append(f"FAIL: collision rose by {collision_delta * 100.0:.1f} pp")
+        if i_sp_delta > i_sp_fail_tolerance:
+            notes.append(f"FAIL: I_sp rose by {i_sp_delta:.4f}")
+        elif i_sp_delta > i_sp_warn_tolerance:
+            notes.append(f"WARN: I_sp rose by {i_sp_delta:.4f}")
+
+        if num_humans == max_density and success_delta <= 0:
+            notes.append("WARN: high-density success did not improve")
+
+        if not notes:
+            notes.append("PASS: preserved real-avoidance gates")
+
+        rows.append(
+            DensityComparison(
+                num_humans=num_humans,
+                baseline_success_rate=base.success_rate,
+                candidate_success_rate=cand.success_rate,
+                success_delta=success_delta,
+                baseline_collision_rate=base.collision_rate,
+                candidate_collision_rate=cand.collision_rate,
+                collision_delta=collision_delta,
+                baseline_avg_success_steps=base.avg_success_steps,
+                candidate_avg_success_steps=cand.avg_success_steps,
+                nav_margin_vs_beeline=nav_margin,
+                baseline_avg_i_sp=base.avg_i_sp,
+                candidate_avg_i_sp=cand.avg_i_sp,
+                i_sp_delta=i_sp_delta,
+                status=_status_from_notes(notes),
+                notes=tuple(notes),
+            )
+        )
+
+    return SweepComparison(
+        overall_status=_overall_status(rows),
+        rows=tuple(rows),
+        baseline_nav_steps=baseline_nav_steps,
+    )
+
+
+def write_comparison_report(
+    comparison: SweepComparison,
+    path: str | Path,
+    *,
+    baseline_path: str | Path,
+    candidate_path: str | Path,
+) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    lines = [
+        "# SNCP-PPO Baseline Comparison",
+        "",
+        f"Overall verdict: {comparison.overall_status}",
+        "",
+        f"Baseline: `{Path(baseline_path)}`",
+        f"Candidate: `{Path(candidate_path)}`",
+        f"Beeline baseline: {comparison.baseline_nav_steps:.1f} successful steps",
+        "",
+        "| N | v15 Success | Candidate Success | Success Delta | v15 Collision | Candidate Collision | Nav Margin | I_sp Delta | Status | Notes |",
+        "|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
+    ]
+    for row in comparison.rows:
+        notes = "; ".join(row.notes)
+        lines.append(
+            f"| {row.num_humans} | {row.baseline_success_rate:.1%} | "
+            f"{row.candidate_success_rate:.1%} | {row.success_delta * 100.0:+.1f} pp | "
+            f"{row.baseline_collision_rate:.1%} | {row.candidate_collision_rate:.1%} | "
+            f"{row.nav_margin_vs_beeline:.1f} | {row.i_sp_delta:+.4f} | "
+            f"{row.status} | {notes} |"
+        )
 
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 

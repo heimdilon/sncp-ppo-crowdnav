@@ -2,13 +2,17 @@ import math
 import json
 
 from sncp_ppo.eval_report import (
+    compare_density_sweeps,
     DensitySummary,
     EpisodeResult,
+    load_summary_json,
     plot_density_curves,
     run_report,
     summarize_density,
+    write_comparison_report,
     write_markdown_report,
     write_summary_csv,
+    write_summary_json,
 )
 
 
@@ -274,3 +278,121 @@ def test_cli_main_passes_arguments_to_report_runner(tmp_path, monkeypatch, capsy
     assert captured["seed"] == 100
     assert captured["trajectory_densities"] == [5, 10]
     assert "density_sweep.csv" in capsys.readouterr().out
+
+
+def test_compare_density_sweeps_passes_when_v16_preserves_avoidance_and_improves_high_density():
+    baseline = [
+        DensitySummary(5, "hard", 50, 0.66, 0.18, 0.16, 187.1, 169.6, 0.015, 1.02, 5.3),
+        DensitySummary(10, "hard", 50, 0.46, 0.46, 0.08, 188.9, 127.4, 0.025, 0.74, -4.4),
+    ]
+    candidate = [
+        DensitySummary(5, "hard", 50, 0.68, 0.16, 0.16, 186.5, 170.0, 0.016, 1.00, 6.0),
+        DensitySummary(10, "hard", 50, 0.58, 0.34, 0.08, 190.0, 150.0, 0.024, 0.78, 2.0),
+    ]
+
+    comparison = compare_density_sweeps(baseline, candidate, baseline_nav_steps=121.5)
+
+    assert comparison.overall_status == "pass"
+    high_density = comparison.rows[-1]
+    assert high_density.num_humans == 10
+    assert high_density.success_delta == 0.12
+    assert high_density.collision_delta == -0.12
+    assert high_density.nav_margin_vs_beeline == 68.5
+    assert high_density.status == "pass"
+
+
+def test_compare_density_sweeps_fails_beeline_regression_even_with_higher_success():
+    baseline = [
+        DensitySummary(10, "hard", 50, 0.46, 0.46, 0.08, 188.9, 127.4, 0.025, 0.74, -4.4),
+    ]
+    candidate = [
+        DensitySummary(10, "hard", 50, 0.80, 0.10, 0.10, 124.0, 124.0, 0.010, 1.20, 10.0),
+    ]
+
+    comparison = compare_density_sweeps(baseline, candidate, baseline_nav_steps=121.5)
+
+    assert comparison.overall_status == "fail"
+    assert comparison.rows[0].status == "fail"
+    assert any("beeline" in note for note in comparison.rows[0].notes)
+
+
+def test_compare_density_sweeps_warns_when_high_density_success_does_not_improve():
+    baseline = [
+        DensitySummary(5, "hard", 50, 0.66, 0.18, 0.16, 187.1, 169.6, 0.015, 1.02, 5.3),
+        DensitySummary(10, "hard", 50, 0.46, 0.46, 0.08, 188.9, 127.4, 0.025, 0.74, -4.4),
+    ]
+    candidate = [
+        DensitySummary(5, "hard", 50, 0.66, 0.18, 0.16, 187.0, 169.6, 0.015, 1.02, 5.3),
+        DensitySummary(10, "hard", 50, 0.46, 0.40, 0.14, 189.0, 140.0, 0.025, 0.76, -2.0),
+    ]
+
+    comparison = compare_density_sweeps(baseline, candidate, baseline_nav_steps=121.5)
+
+    assert comparison.overall_status == "warn"
+    assert comparison.rows[-1].status == "warn"
+    assert any("high-density success did not improve" in note for note in comparison.rows[-1].notes)
+
+
+def test_summary_json_round_trips_and_comparison_report_mentions_verdict(tmp_path):
+    baseline = [
+        DensitySummary(10, "hard", 50, 0.46, 0.46, 0.08, 188.9, 127.4, 0.025, 0.74, -4.4),
+    ]
+    candidate = [
+        DensitySummary(10, "hard", 50, 0.58, 0.34, 0.08, 190.0, 150.0, 0.024, 0.78, 2.0),
+    ]
+    baseline_path = tmp_path / "baseline.json"
+    candidate_path = tmp_path / "candidate.json"
+    output_path = tmp_path / "comparison.md"
+    write_summary_json(baseline, baseline_path, checkpoint="v15.pt", baseline_nav_steps=121.5)
+    write_summary_json(candidate, candidate_path, checkpoint="v16.pt", baseline_nav_steps=121.5)
+
+    comparison = compare_density_sweeps(
+        load_summary_json(baseline_path),
+        load_summary_json(candidate_path),
+        baseline_nav_steps=121.5,
+    )
+    write_comparison_report(
+        comparison,
+        output_path,
+        baseline_path=baseline_path,
+        candidate_path=candidate_path,
+    )
+
+    report = output_path.read_text(encoding="utf-8")
+    assert "Overall verdict: pass" in report
+    assert "v15.pt" not in report
+    assert "baseline.json" in report
+    assert "| 10 | 46.0% | 58.0% | +12.0 pp |" in report
+
+
+def test_compare_cli_loads_reports_and_writes_comparison(tmp_path, monkeypatch, capsys):
+    import compare_policy_reports
+
+    baseline_path = tmp_path / "eval_v15.json"
+    candidate_path = tmp_path / "eval_v16.json"
+    output_path = tmp_path / "comparison.md"
+    baseline = [
+        DensitySummary(10, "hard", 50, 0.46, 0.46, 0.08, 188.9, 127.4, 0.025, 0.74, -4.4),
+    ]
+    candidate = [
+        DensitySummary(10, "hard", 50, 0.58, 0.34, 0.08, 190.0, 150.0, 0.024, 0.78, 2.0),
+    ]
+    write_summary_json(baseline, baseline_path, checkpoint="v15.pt", baseline_nav_steps=121.5)
+    write_summary_json(candidate, candidate_path, checkpoint="v16.pt", baseline_nav_steps=121.5)
+
+    exit_code = compare_policy_reports.main(
+        [
+            "--baseline",
+            str(baseline_path),
+            "--candidate",
+            str(candidate_path),
+            "--output",
+            str(output_path),
+            "--baseline_nav_steps",
+            "121.5",
+        ]
+    )
+
+    assert exit_code == 0
+    assert "Overall verdict: pass" in output_path.read_text(encoding="utf-8")
+    assert "comparison.md" in capsys.readouterr().out
