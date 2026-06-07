@@ -34,6 +34,18 @@ whether replay fixes v15 catastrophic forgetting without regressing real avoidan
 
 ## Equivalent CLI sequence
 
+Preferred one-command post-run pipeline:
+
+```bash
+python run_v16_post_eval.py --checkpoint checkpoints/sncp_ppo_v16.pt --output_dir eval_v16
+```
+
+By default it uses the newest `logs/training_*.csv`, writes the density report, v15 comparison,
+training diagnostics, and artifact verification, then exits nonzero only if the final artifact
+verification is `fail`.
+
+Equivalent manual sequence:
+
 ```bash
 python evaluate_policy_report.py --checkpoint checkpoints/sncp_ppo_v16.pt --output_dir eval_v16 --densities 1 3 5 8 10 --scenario hard --n_episodes 50 --seed 100 --trajectory_densities 5 10
 python compare_policy_reports.py --baseline eval_v15/density_sweep.json --candidate eval_v16/density_sweep.json --output eval_v16/comparison_vs_v15.md

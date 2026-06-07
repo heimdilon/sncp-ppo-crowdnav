@@ -1,0 +1,64 @@
+"""Run the complete v16 post-training evaluation pipeline."""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+from typing import Sequence
+
+from sncp_ppo.post_run_pipeline import (
+    PostRunResult,
+    find_latest_training_csv,
+    run_v16_post_eval,
+)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Generate v16 evaluation, comparison, training diagnostics, and artifact verification."
+    )
+    parser.add_argument("--checkpoint", type=Path, default=Path("checkpoints/sncp_ppo_v16.pt"))
+    parser.add_argument("--training_csv", type=Path, default=None)
+    parser.add_argument("--log_dir", type=Path, default=Path("logs"))
+    parser.add_argument("--output_dir", type=Path, default=Path("eval_v16"))
+    parser.add_argument("--baseline_json", type=Path, default=Path("eval_v15/density_sweep.json"))
+    parser.add_argument("--densities", type=int, nargs="+", default=[1, 3, 5, 8, 10])
+    parser.add_argument("--scenario", type=str, default="hard")
+    parser.add_argument("--n_episodes", type=int, default=50)
+    parser.add_argument("--seed", type=int, default=100)
+    parser.add_argument("--trajectory_densities", type=int, nargs="*", default=[5, 10])
+    parser.add_argument("--expected_replay_ratio", type=float, default=0.20)
+    parser.add_argument("--replay_tolerance", type=float, default=0.10)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    training_csv = args.training_csv or find_latest_training_csv(args.log_dir)
+    result = run_v16_post_eval(
+        checkpoint_path=args.checkpoint,
+        training_csv=training_csv,
+        output_dir=args.output_dir,
+        baseline_json=args.baseline_json,
+        densities=args.densities,
+        scenario=args.scenario,
+        n_episodes=args.n_episodes,
+        seed=args.seed,
+        trajectory_densities=args.trajectory_densities,
+        expected_replay_ratio=args.expected_replay_ratio,
+        replay_tolerance=args.replay_tolerance,
+    )
+
+    print(f"Overall status: {result.status}")
+    print(f"Output dir: {result.output_dir}")
+    print(f"Comparison report: {result.comparison_report}")
+    print(f"Training report: {result.training_report}")
+    print(f"Artifact report: {result.artifact_report}")
+    return 1 if result.status == "fail" else 0
+
+
+__all__ = ["PostRunResult", "build_parser", "find_latest_training_csv", "main", "run_v16_post_eval"]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
