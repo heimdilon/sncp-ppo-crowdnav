@@ -1,0 +1,81 @@
+import json
+from pathlib import Path
+
+from sncp_ppo.run_readiness import verify_v16_run_ready, write_readiness_report
+
+
+def _source_text(cell):
+    source = cell.get("source", "")
+    return "".join(source) if isinstance(source, list) else source
+
+
+def test_v16_run_readiness_passes_current_repo():
+    summary = verify_v16_run_ready(Path("."))
+
+    assert summary.status == "pass"
+    assert summary.training_cell_found is True
+    assert summary.evaluation_cell_found is True
+    assert summary.baseline_densities == (1, 3, 5, 8, 10)
+
+
+def test_v16_run_readiness_flags_stale_notebook(tmp_path):
+    notebook = {
+        "cells": [
+            {
+                "cell_type": "code",
+                "source": "SAVE_PATH = 'checkpoints/sncp_ppo_v16.pt'\nREPLAY_RATIO = 0.0\n",
+            },
+            {
+                "cell_type": "code",
+                "source": "CHECKPOINT = 'checkpoints/sncp_ppo_v16.pt'\ncmd = ['python', 'evaluate_policy_report.py']\n",
+            },
+        ]
+    }
+    (tmp_path / "sncp_ppo_colab.ipynb").write_text(json.dumps(notebook), encoding="utf-8")
+    (tmp_path / "run_v16_post_eval.py").write_text("stub\n", encoding="utf-8")
+    baseline_dir = tmp_path / "eval_v15"
+    baseline_dir.mkdir()
+    (baseline_dir / "density_sweep.json").write_text(
+        json.dumps({"density_sweep": [{"num_humans": 1, "episodes": 50}]}),
+        encoding="utf-8",
+    )
+
+    summary = verify_v16_run_ready(tmp_path)
+
+    assert summary.status == "fail"
+    assert any("REPLAY_RATIO = 0.20" in note for note in summary.notes)
+    assert any("run_v16_post_eval.py" in note for note in summary.notes)
+    assert any("baseline densities" in note for note in summary.notes)
+
+
+def test_write_readiness_report(tmp_path):
+    summary = verify_v16_run_ready(Path("."))
+    output = tmp_path / "readiness.md"
+
+    write_readiness_report(summary, output)
+
+    report = output.read_text(encoding="utf-8")
+    assert "Overall status: pass" in report
+    assert "Baseline densities: 1, 3, 5, 8, 10" in report
+
+
+def test_colab_notebook_has_preflight_cell_before_v16_training():
+    notebook = json.loads(Path("sncp_ppo_colab.ipynb").read_text(encoding="utf-8"))
+    code_sources = [
+        _source_text(cell)
+        for cell in notebook["cells"]
+        if cell.get("cell_type") == "code"
+    ]
+    preflight_indices = [
+        idx for idx, source in enumerate(code_sources) if "verify_v16_run_ready.py" in source
+    ]
+    training_indices = [
+        idx for idx, source in enumerate(code_sources) if "SAVE_PATH = 'checkpoints/sncp_ppo_v16.pt'" in source
+    ]
+
+    assert len(preflight_indices) == 1
+    assert len(training_indices) == 1
+    assert preflight_indices[0] < training_indices[0]
+    preflight_cell = code_sources[preflight_indices[0]]
+    assert "subprocess.run(cmd, check=True)" in preflight_cell
+    assert "eval_v16/run_readiness.md" in preflight_cell

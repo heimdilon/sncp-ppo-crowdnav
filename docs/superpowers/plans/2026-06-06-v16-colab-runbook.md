@@ -13,7 +13,10 @@ whether replay fixes v15 catastrophic forgetting without regressing real avoidan
 ## Notebook sequence
 
 1. Run setup cells through dependency install and `git pull`.
-2. Run the v16 full training cell:
+2. Run the v16 readiness preflight:
+   - `python verify_v16_run_ready.py`
+   - `eval_v16/run_readiness.md` should report `Overall status: pass`
+3. Run the v16 full training cell:
    - `SAVE_PATH = 'checkpoints/sncp_ppo_v16.pt'`
    - `TOTAL_STEPS = 2_500_000`
    - `--num_humans 10`
@@ -21,7 +24,7 @@ whether replay fixes v15 catastrophic forgetting without regressing real avoidan
    - holdout scenarios: `easy hard circle`
    - the cell raises `SystemExit` if training exits nonzero; do not continue to evaluation after a
      failed training subprocess
-3. Run the evaluation cell. It calls `run_v16_post_eval.py` and should write:
+4. Run the evaluation cell. It calls `run_v16_post_eval.py` and should write:
    - `eval_v16/density_sweep.csv`
    - `eval_v16/density_sweep.json`
    - `eval_v16/density_sweep.png`
@@ -32,7 +35,7 @@ whether replay fixes v15 catastrophic forgetting without regressing real avoidan
    - `eval_v16/artifact_verification.md`
    - `eval_v16/traj_hard_n5.png`
    - `eval_v16/traj_hard_n10.png`
-4. Run the training-curves cell if you want the Colab plot. It should write:
+5. Run the training-curves cell if you want the Colab plot. It should write:
    - `training_curves_colab.png`
 
 ## Equivalent CLI sequence
@@ -40,12 +43,13 @@ whether replay fixes v15 catastrophic forgetting without regressing real avoidan
 Preferred one-command post-run pipeline:
 
 ```bash
+python verify_v16_run_ready.py
 python run_v16_post_eval.py --checkpoint checkpoints/sncp_ppo_v16.pt --output_dir eval_v16
 ```
 
-By default it uses the newest `logs/training_*.csv`, writes the density report, v15 comparison,
-training diagnostics, and artifact verification, then exits nonzero only if the final artifact
-verification is `fail`.
+Run the readiness preflight before training. After training, the post-run pipeline uses the newest
+`logs/training_*.csv`, writes the density report, v15 comparison, training diagnostics, and artifact
+verification, then exits nonzero only if the final artifact verification is `fail`.
 
 Equivalent manual sequence:
 

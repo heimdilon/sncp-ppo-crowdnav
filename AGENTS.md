@@ -250,17 +250,19 @@ honestly: real hardware speed + the chosen pedestrian model.
 
 **Training (Colab — the normal path; local GPU is ~5–7 s/step, too slow for full runs):**
 1. `sncp_ppo_colab.ipynb` cell-4: `git pull` (gets latest `main`).
-2. cell-14: launches `python -m sncp_ppo.train …` (A100, ~3–4 h). Edit `SAVE_PATH`, `--num_humans`,
+2. Run `python verify_v16_run_ready.py`; `eval_v16/run_readiness.md` should report `Overall status: pass`.
+3. cell-14: launches `python -m sncp_ppo.train …` (A100, ~3–4 h). Edit `SAVE_PATH`, `--num_humans`,
    `--total_steps`, `--holdout_scenarios`, `--curriculum_replay_ratio` there. Current = v16
    (num_humans 10, total_steps 2.5M, replay 0.20, holdout `easy hard circle`). The cell raises
    `SystemExit` on a nonzero training subprocess exit, so do not evaluate a failed run.
-3. cell-17: post-run evaluation pipeline (loads the saved best checkpoint, density sweep,
+4. cell-17: post-run evaluation pipeline (loads the saved best checkpoint, density sweep,
    v15 comparison, training diagnostics, artifact verification).
-4. See `docs/superpowers/plans/2026-06-06-v16-colab-runbook.md` for the exact post-run artifact
+5. See `docs/superpowers/plans/2026-06-06-v16-colab-runbook.md` for the exact post-run artifact
    sequence and verdict gates.
 
 **Local eval / viz (fast, inference only):**
 ```bash
+python verify_v16_run_ready.py
 python run_v16_post_eval.py --checkpoint checkpoints/sncp_ppo_v16.pt --output_dir eval_v16
 python evaluate_policy_report.py --checkpoint checkpoints/sncp_ppo_v16.pt --output_dir eval_v16 --densities 1 3 5 8 10 --scenario hard --n_episodes 50 --seed 100 --trajectory_densities 5 10
 python compare_policy_reports.py --baseline eval_v15/density_sweep.json --candidate eval_v16/density_sweep.json --output eval_v16/comparison_vs_v15.md
@@ -273,6 +275,8 @@ python visualize_trajectory_gif.py --checkpoint <ckpt>.pt --num_humans 10 --scen
 - `run_v16_post_eval.py` is the preferred one-command post-run pipeline; it runs the density report,
   v15 comparison, training diagnostics, and artifact verification in order, using the newest
   `logs/training_*.csv` by default.
+- `verify_v16_run_ready.py` is the pre-A100 readiness gate; it checks the v16 notebook training
+  config, fail-fast guard, evaluation pipeline wiring, and committed v15 density baseline.
 - `evaluate_policy_report.py` is the underlying manual density-report command: it holds `scenario=hard`
   fixed, sweeps density N=1/3/5/8/10, writes `density_sweep.csv/json/png` + `report.md`, and generates
   N=5/N=10 trajectory PNGs. The pipeline calls it before judging success so nav-time and `I_sp` are visible.
@@ -331,7 +335,7 @@ success collapsing toward 0 with rising timeout. If seen, lower the comfort coef
 
 ---
 
-## 11. Tests (`pytest`, ~81 passing)
+## 11. Tests (`pytest`, ~85 passing)
 
 | File | Covers |
 |---|---|
@@ -351,6 +355,7 @@ success collapsing toward 0 with rising timeout. If seen, lower the comfort coef
 | `test_training_log_report.py` | training CSV diagnostics: best/final holdout, replay fraction, collapse report, CLI |
 | `test_artifact_verifier.py` | final v16 artifact completeness and gate verification |
 | `test_post_run_pipeline.py` | one-command v16 post-run pipeline orchestration |
+| `test_v16_run_readiness.py` | pre-A100 v16 notebook/baseline readiness checks |
 | `test_eval.py` | (CLI eval script, not a pytest module) |
 
 Run all: `python -m pytest -q`. After any reward/curriculum/default change, **update the tests that
@@ -391,11 +396,12 @@ Goal: sustain the v15 N=5 peak all the way to N=10 and lift the ceiling. In prio
    `SAVE_PATH='checkpoints/sncp_ppo_v16.pt'` and `--curriculum_replay_ratio 0.20`. Notebook cell-17 now
    runs `run_v16_post_eval.py`, which produces the hard-scenario N=1/3/5/8/10 sweep, trajectory
    artifacts, v15 comparison, training diagnostics, and artifact verification.
-   Local verification: `81 passed`; replay smoke exited 0 and logged replay phase shifts plus PPO
+   Local verification: `85 passed`; replay smoke exited 0 and logged replay phase shifts plus PPO
    diagnostics columns; report smoke loaded v15 and wrote sweep artifacts; comparison smoke produced the
    expected v15-vs-v15 `warn`; v15 training-log diagnostics detect the known late collapse; artifact
    verifier tests cover the final `eval_v16/` completeness gate; post-run pipeline tests cover the
-   one-command artifact sequence, Colab evaluation-cell wiring, and v16 training-cell readiness.
+   one-command artifact sequence, Colab evaluation-cell wiring, and v16 training-cell readiness;
+   run-readiness tests cover the pre-A100 notebook/baseline gate.
    **Pending:** Colab A100 run, density sweep, trajectories, nav-time/I_sp comparison vs v15.
 2. **Tame the over-conservative detour** (26% timeout at N=1; ~187 steps vs the 200 cap). Options: comfort
    −6 → −5, or `max_time` 50 → 60 s, or a mild efficiency term. Tune carefully (freezing risk).
