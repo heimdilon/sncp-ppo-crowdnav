@@ -1,0 +1,34 @@
+{
+  "csv_path": "logs\\training_20260607_131329.csv",
+  "total_rows": 1221,
+  "evaluated_rows": 1202,
+  "holdout_scenarios": [
+    "easy",
+    "hard",
+    "circle"
+  ],
+  "observed_replay_ratio": 0.17772317772317772,
+  "best_step": 1515520,
+  "best_min_success": 0.56,
+  "best_success_by_scenario": {
+    "easy": 0.7,
+    "hard": 0.62,
+    "circle": 0.56
+  },
+  "best_reason": "best updated (priority: min_success, tie-break: avg_reward, then lower collision_rate)",
+  "final_step": 2500608,
+  "final_min_success": 0.46,
+  "final_success_by_scenario": {
+    "easy": 0.76,
+    "hard": 0.78,
+    "circle": 0.46
+  },
+  "collapse_delta": -0.10000000000000003,
+  "collapse_detected": false,
+  "final_std_linear": 0.152818,
+  "final_std_angular": 0.243033,
+  "max_std_linear": 0.152841,
+  "max_std_angular": 0.243047,
+  "std_linear_delta": 0.017456,
+  "std_angular_delta": 0.019732
+}

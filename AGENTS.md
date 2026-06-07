@@ -20,14 +20,15 @@
   PDF `s12369-026-01389-9.pdf` in repo root, **git-ignored**).
 - Stack: Python, PyTorch, Gymnasium, **`ncps`** (Liquid Time-Constant / Neural Circuit Policies), pytest.
 - Robot = **TurtleBot3 Waffle**, max linear speed **0.26 m/s** (real hardware), wmax 1.8, radius 0.3.
-- **Current head state: v16 training complete / post-run evaluation pending.** v15 proved *genuine*
+- **Current head state: v16 evaluated / v15 remains the behavioral baseline.** v15 proved *genuine*
   collision-avoidance + social-distance keeping (it detours around pedestrians) — the long-standing
-  "beeline" problem is solved. v16 implements the first roadmap fix: vectorized anti-forgetting replay
-  (`--curriculum_replay_ratio`, notebook set to 0.20) so the N=10 phase does not erase earlier skills.
-  The Colab stdout for `logs/training_20260607_131329.csv` completed cleanly after 1220 updates and saved
-  a best holdout checkpoint at **min=56%** (`easy=70%`, `hard=62%`, `circle=56%`, collision 18%) with
-  stable final std (`[0.153, 0.243]`). This is promising training evidence only; the v16 verdict still
-  requires the density sweep, trajectory plots, nav-time/`I_sp`, and v15 comparison artifacts.
+  "beeline" problem is solved. v16 added vectorized anti-forgetting replay
+  (`--curriculum_replay_ratio=0.20`) and did reduce the v15 late-collapse failure mode, but the final
+  artifact gate is **fail**: `eval_v16/comparison_vs_v15.md` shows success regressions at N=1/5/8 and no
+  N=10 lift. Real avoidance is still preserved (wide-detour trajectories, nav-time 166-182 steps vs the
+  v14 121.5-step beeline, lower `I_sp`), but v16 is over-conservative and timeout-heavy, especially
+  N=1 timeout 60%. Next experiment should be reviewed as v17: tune one over-conservatism variable, likely
+  comfort `-6 -> -5`, while keeping replay and AutoNCP unchanged.
 - **Workflow:** training runs on **Google Colab** (local GPU is too slow); commits go **directly to
   `main`**, which Colab pulls. TDD is used for all code changes. See §6–§7.
 - **Detailed cross-session log** lives OUTSIDE the repo in the Claude auto-memory (§11).
@@ -47,7 +48,7 @@
 10. Conventions (TDD, commits, branch, notebook edits)
 11. Tests
 12. Gotchas & hard-won lessons
-13. v16 roadmap
+13. v17 roadmap
 14. External memory & docs
 
 ---
@@ -89,8 +90,27 @@ robot parity so a slow robot can feasibly dodge. Result:
   → catastrophic forgetting + rising policy std (instability). The **best-checkpoint mechanism saved the
   update-450 weights** (`sncp_ppo_v15.pt` = that peak, NOT the collapsed final policy).
 
-Open problems are the **v16 roadmap** (§13): evaluate the completed replay run, tame the
-over-conservative detour, push high-N.
+**v16 = replay helped stability, but failed the v15 comparison gates.** Artifacts live in `eval_v16/`;
+the checkpoint is `checkpoints/sncp_ppo_v16.pt` and the Colab CSV is staged locally as
+`logs/training_20260607_131329.csv` (logs are git-ignored). Evidence:
+
+| N | v15 Succ | v16 Succ | v16 Coll | v16 Timeout | v16 Avg Success Steps | v16 I_sp | Verdict |
+|---:|---:|---:|---:|---:|---:|---:|---|
+| 1 | 44% | 36% | 4% | **60%** | 166.7 | 0.0091 | fail: success drop + timeout/freezing |
+| 3 | 50% | 62% | 8% | 30% | 167.6 | 0.0103 | pass |
+| 5 | 66% | 56% | 18% | 26% | 171.8 | 0.0058 | fail: success drop |
+| 8 | 50% | 40% | 34% | 26% | 174.4 | 0.0120 | fail: success drop |
+| 10 | 46% | 44% | 44% | 12% | 181.9 | 0.0210 | warn: no high-density lift |
+
+Training diagnostics are mixed: best holdout min improved to 56% at step 1,515,520 and final holdout min
+was 46% with `Collapse detected: no`, replay ratio 17.8%, final std `[0.153, 0.243]`. This means replay
+mostly addressed the catastrophic-forgetting failure mode. The behavioral evaluation still fails:
+artifact verification is `fail` because comparison is `fail`. Trajectories at N=5 and N=10 still show
+wide outside arcs around the crowd, so this is not a v14-style beeline regression; it is an
+over-conservative / timeout-limited policy that did not lift N=10.
+
+Open problems are the **v17 roadmap** (§13): tame the over-conservative detour without losing the
+genuine avoidance, then push high-N.
 
 ---
 
@@ -108,6 +128,7 @@ valuable context — it records what was *ruled out*, not just what was tried.
 | **v13** | **Reward restored to the paper** (goal +20, approach 2·Δd, collision −20, comfort −2·I_sp; max_time 60→50) | First tried max_time=35 → timeout-dominant stall (robot starts at random heading; 35s insufficient). Fixed to 50s. Result ~30% hard → **reward shaping was NOT the bottleneck either** (eliminated). |
 | **v14** | **Two changes:** (a) **reactive** pedestrians (`human_dodge_robot=True`, cooperative crowd); (b) **true sparse NCP** (`AutoNCP`, replacing dense `FullyConnected` LTC) | Hit **~100%** — but trajectory/density analysis showed the robot **BEELINES** (straight line, constant 121.5 steps, the crowd yields). **Critical realization:** the paper uses **invisible-robot** pedestrians (CrowdNav default), so v14's reactivity made the task *easier* and the 100% is **not comparable** to the paper. The real gap is robot **speed**. The reactivity recommendation was a fidelity mistake; the NCP change was correct and kept. |
 | **v15** | **Revert to non-reactive** + **speed parity** (peds ≤0.26) + **strong comfort** (−6·I_sp) + **approach halved** (1·Δd) + **density curriculum to N=10** | ✅ genuine avoidance (detours, low I_sp). ⚠️ modest (peak 66%) + late collapse (no replay). See §2. |
+| **v16** | **Single variable:** vectorized anti-forgetting replay ratio 0.20; env/reward/model unchanged from v15 | ✅ collapse/stability improved (best holdout min 56%, final min 46%, stable std). ✅ real detours preserved. ❌ density sweep failed vs v15: N=1/5/8 success regressed, N=10 did not improve, N=1 timeout 60%. |
 
 **Two bottlenecks were experimentally eliminated** (observation, reward-shaping). The dominant factors
 turned out to be **environment realism** (pedestrian reactivity) and **robot speed** — not the policy.
@@ -394,32 +415,27 @@ assert the old value** (they are intentional guards, not bugs) and keep the suit
 
 ---
 
-## 13. v16 roadmap (next experiment)
+## 13. v17 roadmap (next experiment)
 
-Goal: sustain the v15 N=5 peak all the way to N=10 and lift the ceiling. In priority order:
-1. **Run v16 replay experiment (code pushed in commit `87896bb`).** The vectorized path now has
-   `select_vectorized_phase(...)`: with replay enabled, a fraction of update windows samples a uniformly
-   random earlier phase while the whole rollout remains single-density. Notebook cell-14 is set to
-   `SAVE_PATH='checkpoints/sncp_ppo_v16.pt'` and `--curriculum_replay_ratio 0.20`. Notebook cell-17 now
-   runs `run_v16_post_eval.py`, which produces the hard-scenario N=1/3/5/8/10 sweep, trajectory
-   artifacts, v15 comparison, training diagnostics, and artifact verification.
-   Local verification: `91 passed`; replay smoke exited 0 and logged replay phase shifts plus PPO
-   diagnostics columns; report smoke loaded v15 and wrote sweep artifacts; comparison smoke produced the
-   expected v15-vs-v15 `warn`; v15 training-log diagnostics detect the known late collapse; artifact
-   verifier tests cover the final `eval_v16/` completeness/readiness gate; post-run pipeline tests cover the
-   one-command artifact sequence, Colab evaluation-cell wiring, and v16 training-cell readiness;
-   run-readiness tests cover the pre-A100 notebook/baseline gate and Colab artifact-bundle persistence.
-   Colab training stdout completed cleanly for `logs/training_20260607_131329.csv`: best generalist
-   min=56% (`easy=70%`, `hard=62%`, `circle=56%`, collision 18%) at the saved
-   `checkpoints/sncp_ppo_v16.pt`; final update 1220 still had stable std `[0.153, 0.243]` and low KL.
-   **Pending:** download/paste the v16 checkpoint/eval bundle, density sweep, trajectories, and
-   nav-time/`I_sp` comparison vs v15 before claiming improvement.
-2. **Tame the over-conservative detour** (26% timeout at N=1; ~187 steps vs the 200 cap). Options: comfort
-   −6 → −5, or `max_time` 50 → 60 s, or a mild efficiency term. Tune carefully (freezing risk).
-3. **Lift high-N** (46% collision at N=10): more N=10 training (enabled by replay), then possibly LTC
-   capacity only if replay evidence points to capacity rather than curriculum forgetting.
+Goal: recover v15's genuine avoidance while reducing the timeout/freezing introduced by v16 replay, then
+lift N=10. The next run should still change **one variable only**.
 
-Then re-evaluate with the §9 criteria (nav-time, I_sp, trajectories, density sweep) and compare to v15.
+1. **Recommended v17 candidate for review: relax comfort `-6 -> -5`, keep everything else fixed.**
+   Evidence: v16 preserved wide detours and lowered `I_sp` versus v15, but success fell where timeout rose
+   (N=1 timeout 60%, N=5/8 timeout 26%) and low-density collision was already very low (N=1 collision 4%).
+   That points to over-conservative behavior, not a beeline regression. Relaxing comfort moves slightly
+   back toward the paper's baseline comfort coefficient while keeping the real-avoidance mechanism.
+   Keep `max_time=50`, `approach=1`, non-reactive pedestrians, speed parity, AutoNCP, and replay 0.20.
+2. **Alternative later candidate: `max_time` 50 -> 60 s.** Do not combine this with comfort tuning in the
+   same run. It may expose whether the policy is merely slow, but it can also mask freezing, so prefer
+   comfort tuning first unless the user explicitly wants a cap-only experiment.
+3. **High-density capacity remains unproven.** v16 N=10 collision stayed high (44%) but capacity is not
+   proven as the bottleneck because the same checkpoint already fails lower-density timeout/success gates.
+   Keep AutoNCP unchanged until replay + over-conservatism evidence is exhausted.
+
+Re-evaluate every candidate with the same §9 criteria and `eval_v15/` baseline: success across
+N=1/3/5/8/10, collision, timeout/freezing, nav-time above the v14 121.5-step beeline, low `I_sp`, and
+trajectory plots routing around clusters.
 
 ---
 
@@ -435,6 +451,7 @@ Then re-evaluate with the §9 criteria (nav-time, I_sp, trajectories, density sw
   detailed log**. Keep them consistent.
 - **In-repo design docs:** `docs/superpowers/specs/` (e.g. `2026-06-05-v15-social-navigation-design.md`) and
   `docs/superpowers/plans/` (e.g. `2026-06-05-v15-social-navigation.md`,
-  `2026-06-06-v16-colab-runbook.md`) — specs, step-by-step plans, and the current Colab handoff.
+  `2026-06-06-v16-colab-runbook.md`, `2026-06-08-v17-comfort-tuning.md`) — specs, step-by-step plans,
+  and the current Colab handoff.
 - **Paper:** `s12369-026-01389-9.pdf` (repo root, git-ignored).
 - **README.md:** user-facing but **stale (v6-era)** — update pending; trust AGENTS.md/code/memory for current values.
