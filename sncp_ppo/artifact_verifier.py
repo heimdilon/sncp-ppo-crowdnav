@@ -10,6 +10,7 @@ from typing import Sequence
 
 
 REQUIRED_EVAL_FILES = (
+    "run_readiness.md",
     "density_sweep.csv",
     "density_sweep.json",
     "density_sweep.png",
@@ -29,6 +30,7 @@ class ArtifactVerificationSummary:
     eval_dir: str
     missing_files: tuple[str, ...]
     densities: tuple[int, ...]
+    readiness_status: str | None
     comparison_verdict: str | None
     collapse_detected: bool | None
     replay_ratio: float | None
@@ -57,6 +59,14 @@ def _comparison_verdict(path: Path) -> str | None:
     return match.group(1).lower() if match else None
 
 
+def _readiness_status(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r"Overall status:\s*(pass|warn|fail)", text, flags=re.IGNORECASE)
+    return match.group(1).lower() if match else None
+
+
 def verify_v16_artifacts(
     *,
     checkpoint_path: str | Path,
@@ -80,6 +90,12 @@ def verify_v16_artifacts(
             missing.append(file_name)
     if missing:
         notes.append(f"FAIL: missing required artifacts: {', '.join(missing)}")
+
+    readiness = _readiness_status(eval_dir / "run_readiness.md")
+    if readiness is None and (eval_dir / "run_readiness.md").exists():
+        notes.append("FAIL: run readiness report does not contain an overall status")
+    elif readiness != "pass" and readiness is not None:
+        notes.append(f"FAIL: run readiness status is {readiness}")
 
     densities: tuple[int, ...] = ()
     sweep = _load_json(eval_dir / "density_sweep.json")
@@ -130,6 +146,7 @@ def verify_v16_artifacts(
         eval_dir=str(eval_dir),
         missing_files=tuple(missing),
         densities=densities,
+        readiness_status=readiness,
         comparison_verdict=verdict,
         collapse_detected=collapse_detected,
         replay_ratio=replay_ratio,
@@ -151,6 +168,7 @@ def write_artifact_verification_report(
         f"Checkpoint: `{summary.checkpoint_path}`",
         f"Eval dir: `{summary.eval_dir}`",
         f"Densities: {', '.join(str(item) for item in summary.densities) or 'n/a'}",
+        f"Run readiness: {summary.readiness_status or 'n/a'}",
         f"Comparison verdict: {summary.comparison_verdict or 'n/a'}",
         f"Training collapse detected: {summary.collapse_detected}",
         f"Replay ratio: {replay}",

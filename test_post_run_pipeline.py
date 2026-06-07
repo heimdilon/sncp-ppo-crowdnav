@@ -61,6 +61,10 @@ def _write_training_csv(path):
 
 def _write_fake_report_outputs(output_dir, *, checkpoint_path, densities, scenario, **_kwargs):
     output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "run_readiness.md").write_text(
+        "# readiness\n\nOverall status: pass\n",
+        encoding="utf-8",
+    )
     summaries = [
         DensitySummary(
             num_humans=n,

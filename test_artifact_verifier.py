@@ -3,8 +3,20 @@ import json
 from sncp_ppo.artifact_verifier import verify_v16_artifacts, write_artifact_verification_report
 
 
-def _write_complete_eval_dir(eval_dir, *, verdict="pass", collapse=False, replay_ratio=0.18):
+def _write_complete_eval_dir(
+    eval_dir,
+    *,
+    verdict="pass",
+    collapse=False,
+    replay_ratio=0.18,
+    readiness="pass",
+):
     eval_dir.mkdir(parents=True)
+    if readiness is not None:
+        (eval_dir / "run_readiness.md").write_text(
+            f"# readiness\n\nOverall status: {readiness}\n",
+            encoding="utf-8",
+        )
     (eval_dir / "density_sweep.csv").write_text("stub\n", encoding="utf-8")
     (eval_dir / "density_sweep.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 128)
     (eval_dir / "report.md").write_text("# report\n", encoding="utf-8")
@@ -70,6 +82,7 @@ def test_verify_v16_artifacts_passes_complete_noncollapsed_run(tmp_path):
     assert summary.status == "pass"
     assert summary.missing_files == ()
     assert summary.densities == (1, 3, 5, 8, 10)
+    assert summary.readiness_status == "pass"
     assert summary.comparison_verdict == "pass"
     assert summary.collapse_detected is False
 
@@ -87,6 +100,31 @@ def test_verify_v16_artifacts_fails_missing_checkpoint_and_required_files(tmp_pa
     assert "checkpoint" in summary.missing_files
     assert "density_sweep.json" in summary.missing_files
     assert any("missing" in note for note in summary.notes)
+
+
+def test_verify_v16_artifacts_requires_successful_run_readiness_report(tmp_path):
+    checkpoint = tmp_path / "sncp_ppo_v16.pt"
+    checkpoint.write_bytes(b"checkpoint")
+    eval_dir = tmp_path / "eval_v16"
+    _write_complete_eval_dir(eval_dir, readiness=None)
+
+    summary = verify_v16_artifacts(checkpoint_path=checkpoint, eval_dir=eval_dir)
+
+    assert summary.status == "fail"
+    assert "run_readiness.md" in summary.missing_files
+
+
+def test_verify_v16_artifacts_fails_nonpassing_run_readiness_report(tmp_path):
+    checkpoint = tmp_path / "sncp_ppo_v16.pt"
+    checkpoint.write_bytes(b"checkpoint")
+    eval_dir = tmp_path / "eval_v16"
+    _write_complete_eval_dir(eval_dir, readiness="fail")
+
+    summary = verify_v16_artifacts(checkpoint_path=checkpoint, eval_dir=eval_dir)
+
+    assert summary.status == "fail"
+    assert summary.readiness_status == "fail"
+    assert any("run readiness status is fail" in note for note in summary.notes)
 
 
 def test_verify_v16_artifacts_fails_failed_comparison_or_training_collapse(tmp_path):
@@ -116,6 +154,7 @@ def test_artifact_verification_report_summarizes_status(tmp_path):
 
     report = output.read_text(encoding="utf-8")
     assert "Overall status: warn" in report
+    assert "Run readiness: pass" in report
     assert "Comparison verdict: warn" in report
     assert "Replay ratio: 18.0%" in report
 

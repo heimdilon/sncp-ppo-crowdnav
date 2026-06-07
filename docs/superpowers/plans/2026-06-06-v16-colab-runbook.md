@@ -25,6 +25,7 @@ whether replay fixes v15 catastrophic forgetting without regressing real avoidan
    - the cell raises `SystemExit` if training exits nonzero; do not continue to evaluation after a
      failed training subprocess
 4. Run the evaluation cell. It calls `run_v16_post_eval.py` and should write:
+   - `eval_v16/run_readiness.md` from the preflight step, still present with `Overall status: pass`
    - `eval_v16/density_sweep.csv`
    - `eval_v16/density_sweep.json`
    - `eval_v16/density_sweep.png`
@@ -70,6 +71,7 @@ Read these files in order:
    - `fail`: artifact set is incomplete or a hard gate failed. Do not treat v16 as evaluated.
    - `warn`: artifacts are complete, but at least one gate needs engineering interpretation.
    - `pass`: artifact-level gates passed; still inspect trajectories.
+   - This verifier also requires `eval_v16/run_readiness.md` to exist and report `pass`.
 2. `eval_v16/comparison_vs_v15.md`
    - A `fail` row means v16 regressed against v15 on real-avoidance gates.
    - A high-density `warn` means N=10 did not improve; this does not satisfy the v16 objective.
