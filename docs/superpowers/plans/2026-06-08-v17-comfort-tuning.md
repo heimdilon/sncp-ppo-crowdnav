@@ -10,6 +10,19 @@
 
 ---
 
+## Execution Status
+
+Implemented on `main` after TDD:
+
+- `CrowdSimEnv` accepts `comfort_coeff`, defaulting to 6.0 for v15/v16 compatibility.
+- `sncp_ppo.train` exposes `--comfort_coeff`; vectorized, legacy, and holdout envs receive the coefficient.
+- `sncp_ppo_colab.ipynb` is configured for v17: `checkpoints/sncp_ppo_v17.pt`, `COMFORT_COEFF = 5.0`, `--comfort_coeff 5.0`, readiness output `eval_v17/run_readiness.md`, evaluation output `eval_v17/`, and persist bundle `eval_v17_artifacts.zip`.
+- Local verification: `test_reward_paper.py::test_custom_comfort_coeff_controls_Isp` failed red before the env change; `test_train_config.py` failed red before `build_parser`; v17 notebook/readiness tests failed red against the v16 notebook. After implementation, targeted tests passed (`28 passed`), the v17 vectorized smoke exited 0, `verify_v16_run_ready.py` reported pass for the current notebook, and the full suite passed (`94 passed in 54.18s`).
+
+Pending: Colab A100 v17 run and `eval_v17/` artifact review.
+
+---
+
 ## Evidence Behind This Plan
 
 v16 replay reduced the v15 collapse but failed the v15 comparison gate:

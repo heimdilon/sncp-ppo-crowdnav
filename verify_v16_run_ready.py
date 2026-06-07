@@ -1,4 +1,4 @@
-"""Check that the repo is ready for the v16 Colab replay run."""
+"""Check that the repo is ready for the current Colab experiment run."""
 
 from __future__ import annotations
 
@@ -10,9 +10,9 @@ from sncp_ppo.run_readiness import verify_v16_run_ready, write_readiness_report
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Preflight-check v16 Colab run configuration.")
+    parser = argparse.ArgumentParser(description="Preflight-check current Colab run configuration.")
     parser.add_argument("--repo_root", type=Path, default=Path("."))
-    parser.add_argument("--output", type=Path, default=Path("eval_v16/run_readiness.md"))
+    parser.add_argument("--output", type=Path, default=Path("eval_v17/run_readiness.md"))
     return parser
 
 

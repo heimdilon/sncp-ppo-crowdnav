@@ -160,10 +160,14 @@ def update_diagnostic_row(policy, agent):
     ]
 
 
-def make_env(num_humans, scenario, seed):
+def make_env(num_humans, scenario, seed, comfort_coeff=6.0):
     """Factory for a single CrowdSimEnv, used by SyncVectorEnv."""
     def _thunk():
-        env = CrowdSimEnv(num_humans=num_humans, scenario=scenario)
+        env = CrowdSimEnv(
+            num_humans=num_humans,
+            scenario=scenario,
+            comfort_coeff=comfort_coeff,
+        )
         env.reset(seed=seed)
         return env
     return _thunk
@@ -181,7 +185,11 @@ def train(args):
     # to the robot's (parity, <=0.26 m/s) — see step_to_phase + the scenario speed
     # block. (v14 used a reactive cooperative crowd, which let the robot beeline;
     # v15 reverts to non-reactive + strong comfort to force genuine avoidance.)
-    env = CrowdSimEnv(num_humans=args.num_humans, scenario='easy')
+    env = CrowdSimEnv(
+        num_humans=args.num_humans,
+        scenario='easy',
+        comfort_coeff=args.comfort_coeff,
+    )
 
     # 2. Create SNCP policy and PPO agent
     policy = SNCPPolicy(robot_vpref=env.robot_vpref, robot_wmax=env.robot_wmax).to(device)
@@ -610,6 +618,7 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
     from sncp_ppo.vec_buffer import VectorizedRolloutBuffer, reset_hidden_where_done
 
     N, T = args.num_envs, args.horizon
+    comfort_coeff = getattr(args, 'comfort_coeff', 6.0)
 
     def set_envs_vpref(envs, vpref):
         for sub_env in envs.envs:
@@ -617,7 +626,15 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
 
     def build_envs(num_humans, scenario, vpref):
         envs = gym.vector.SyncVectorEnv(
-            [make_env(num_humans, scenario, args.seed + i) for i in range(N)]
+            [
+                make_env(
+                    num_humans,
+                    scenario,
+                    args.seed + i,
+                    comfort_coeff=comfort_coeff,
+                )
+                for i in range(N)
+            ]
         )
         obs, _ = envs.reset(seed=args.seed)
         set_envs_vpref(envs, vpref)
@@ -636,7 +653,11 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
     best_holdout_min_success = -1.0
     best_holdout_score = (-1.0, -float('inf'), -float('inf'))
     holdout_eval_count = 0
-    eval_env = CrowdSimEnv(num_humans=args.num_humans, scenario='circle')
+    eval_env = CrowdSimEnv(
+        num_humans=args.num_humans,
+        scenario='circle',
+        comfort_coeff=comfort_coeff,
+    )
 
     scenario, H, vpref = step_to_phase(0, args.total_steps, args.num_humans)
     envs, obs_np = build_envs(H, scenario, vpref)
@@ -811,7 +832,7 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
     print(f"CSV log saved to: {log_path}")
 
 
-if __name__ == '__main__':
+def build_parser():
     parser = argparse.ArgumentParser(description='Train SNCP-PPO with curriculum + holdout eval.')
 
     # Episodes / data sizing
@@ -850,6 +871,9 @@ if __name__ == '__main__':
                              'the vectorized path to reduce catastrophic '
                              'forgetting after the v15 N=5 peak. Default stays '
                              '0 so replay is an explicit experiment variable.')
+    parser.add_argument('--comfort_coeff', type=float, default=6.0,
+                        help='Social-pressure comfort penalty coefficient. '
+                             'v15/v16 default is 6.0; v17 candidate uses 5.0.')
 
     # Curriculum thresholds (inclusive) — 5-phase: 10%/25%/50%/75%/100%
     parser.add_argument('--curriculum_easy_until', type=int, default=None,
@@ -897,6 +921,11 @@ if __name__ == '__main__':
     parser.add_argument('--eval_freq_updates', type=int, default=20,
                         help='Holdout evaluation cadence in PPO updates (vectorized mode).')
 
+    return parser
+
+
+if __name__ == '__main__':
+    parser = build_parser()
     args = parser.parse_args()
 
     # Deprecated alias: --holdout_scenario hard  ->  --holdout_scenarios [hard]

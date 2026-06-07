@@ -181,12 +181,13 @@ def test_post_eval_cli_uses_latest_training_csv_and_returns_status(tmp_path, mon
     assert "Overall status: warn" in capsys.readouterr().out
 
 
-def test_colab_v16_eval_cell_uses_post_run_pipeline():
+def test_colab_v17_eval_cell_uses_post_run_pipeline():
     code_sources = _colab_code_sources()
-    eval_cells = [source for source in code_sources if "CHECKPOINT = 'checkpoints/sncp_ppo_v16.pt'" in source]
+    eval_cells = [source for source in code_sources if "CHECKPOINT = 'checkpoints/sncp_ppo_v17.pt'" in source]
 
     assert len(eval_cells) == 1
     eval_cell = eval_cells[0]
+    assert "EVAL_OUT = 'eval_v17'" in eval_cell
     assert "run_v16_post_eval.py" in eval_cell
     assert "'--checkpoint', CHECKPOINT" in eval_cell
     assert "'--output_dir', EVAL_OUT" in eval_cell
@@ -194,9 +195,9 @@ def test_colab_v16_eval_cell_uses_post_run_pipeline():
     assert "compare_policy_reports.py" not in eval_cell
 
 
-def test_colab_v16_training_cell_fails_fast_and_preserves_single_variable_config():
+def test_colab_v17_training_cell_fails_fast_and_preserves_single_variable_config():
     code_sources = _colab_code_sources()
-    train_cells = [source for source in code_sources if "SAVE_PATH = 'checkpoints/sncp_ppo_v16.pt'" in source]
+    train_cells = [source for source in code_sources if "SAVE_PATH = 'checkpoints/sncp_ppo_v17.pt'" in source]
 
     assert len(train_cells) == 1
     train_cell = train_cells[0]
@@ -204,7 +205,9 @@ def test_colab_v16_training_cell_fails_fast_and_preserves_single_variable_config
     assert "NUM_ENVS = 16" in train_cell
     assert "HORIZON = 128" in train_cell
     assert "REPLAY_RATIO = 0.20" in train_cell
+    assert "COMFORT_COEFF = 5.0" in train_cell
     assert "'--curriculum_replay_ratio', str(REPLAY_RATIO)" in train_cell
+    assert "'--comfort_coeff', str(COMFORT_COEFF)" in train_cell
     assert "'--num_humans', '10'" in train_cell
     assert "'--holdout_scenarios', 'easy', 'hard', 'circle'" in train_cell
     assert "'--holdout_episodes', '50'" in train_cell

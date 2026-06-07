@@ -20,15 +20,16 @@
   PDF `s12369-026-01389-9.pdf` in repo root, **git-ignored**).
 - Stack: Python, PyTorch, Gymnasium, **`ncps`** (Liquid Time-Constant / Neural Circuit Policies), pytest.
 - Robot = **TurtleBot3 Waffle**, max linear speed **0.26 m/s** (real hardware), wmax 1.8, radius 0.3.
-- **Current head state: v16 evaluated / v15 remains the behavioral baseline.** v15 proved *genuine*
+- **Current head state: v17 code-ready / Colab run pending.** v15 proved *genuine*
   collision-avoidance + social-distance keeping (it detours around pedestrians) — the long-standing
   "beeline" problem is solved. v16 added vectorized anti-forgetting replay
   (`--curriculum_replay_ratio=0.20`) and did reduce the v15 late-collapse failure mode, but the final
   artifact gate is **fail**: `eval_v16/comparison_vs_v15.md` shows success regressions at N=1/5/8 and no
   N=10 lift. Real avoidance is still preserved (wide-detour trajectories, nav-time 166-182 steps vs the
   v14 121.5-step beeline, lower `I_sp`), but v16 is over-conservative and timeout-heavy, especially
-  N=1 timeout 60%. Next experiment should be reviewed as v17: tune one over-conservatism variable, likely
-  comfort `-6 -> -5`, while keeping replay and AutoNCP unchanged.
+  N=1 timeout 60%. v17 implements the next single-variable candidate: configurable `comfort_coeff` with
+  v15/v16 default **6.0**, and the Colab run set to **5.0** while keeping replay 0.20, max_time 50,
+  approach 1, non-reactive pedestrians, speed parity, and AutoNCP unchanged.
 - **Workflow:** training runs on **Google Colab** (local GPU is too slow); commits go **directly to
   `main`**, which Colab pulls. TDD is used for all code changes. See §6–§7.
 - **Detailed cross-session log** lives OUTSIDE the repo in the Claude auto-memory (§11).
@@ -274,26 +275,27 @@ honestly: real hardware speed + the chosen pedestrian model.
 
 **Training (Colab — the normal path; local GPU is ~5–7 s/step, too slow for full runs):**
 1. `sncp_ppo_colab.ipynb` cell-4: `git pull` (gets latest `main`).
-2. Run `python verify_v16_run_ready.py`; `eval_v16/run_readiness.md` should report `Overall status: pass`.
+2. Run `python verify_v16_run_ready.py`; `eval_v17/run_readiness.md` should report `Overall status: pass`.
 3. cell-14: launches `python -m sncp_ppo.train …` (A100, ~3–4 h). Edit `SAVE_PATH`, `--num_humans`,
-   `--total_steps`, `--holdout_scenarios`, `--curriculum_replay_ratio` there. Current = v16
-   (num_humans 10, total_steps 2.5M, replay 0.20, holdout `easy hard circle`). The cell raises
-   `SystemExit` on a nonzero training subprocess exit, so do not evaluate a failed run.
+   `--total_steps`, `--holdout_scenarios`, `--curriculum_replay_ratio`, and `--comfort_coeff` there.
+   Current = v17 (num_humans 10, total_steps 2.5M, replay 0.20, comfort 5.0, holdout
+   `easy hard circle`, save path `checkpoints/sncp_ppo_v17.pt`). The cell raises `SystemExit` on a
+   nonzero training subprocess exit, so do not evaluate a failed run.
 4. cell-17: post-run evaluation pipeline (loads the saved best checkpoint, density sweep,
    v15 comparison, training diagnostics, artifact verification).
 5. Persist-results cell: set `DOWNLOAD = True` before the Colab session ends; it downloads the checkpoint,
-   latest training CSV, training curve, and `eval_v16_artifacts.zip` containing the full evidence bundle.
+   latest training CSV, training curve, and `eval_v17_artifacts.zip` containing the full evidence bundle.
 6. See `docs/superpowers/plans/2026-06-06-v16-colab-runbook.md` for the exact post-run artifact
    sequence and verdict gates.
 
 **Local eval / viz (fast, inference only):**
 ```bash
 python verify_v16_run_ready.py
-python run_v16_post_eval.py --checkpoint checkpoints/sncp_ppo_v16.pt --output_dir eval_v16
-python evaluate_policy_report.py --checkpoint checkpoints/sncp_ppo_v16.pt --output_dir eval_v16 --densities 1 3 5 8 10 --scenario hard --n_episodes 50 --seed 100 --trajectory_densities 5 10
-python compare_policy_reports.py --baseline eval_v15/density_sweep.json --candidate eval_v16/density_sweep.json --output eval_v16/comparison_vs_v15.md
-python analyze_training_log.py --csv logs/<training_csv>.csv --output_dir eval_v16
-python verify_v16_artifacts.py --checkpoint checkpoints/sncp_ppo_v16.pt --eval_dir eval_v16 --output eval_v16/artifact_verification.md
+python run_v16_post_eval.py --checkpoint checkpoints/sncp_ppo_v17.pt --output_dir eval_v17
+python evaluate_policy_report.py --checkpoint checkpoints/sncp_ppo_v17.pt --output_dir eval_v17 --densities 1 3 5 8 10 --scenario hard --n_episodes 50 --seed 100 --trajectory_densities 5 10
+python compare_policy_reports.py --baseline eval_v15/density_sweep.json --candidate eval_v17/density_sweep.json --output eval_v17/comparison_vs_v15.md
+python analyze_training_log.py --csv logs/<training_csv>.csv --output_dir eval_v17
+python verify_v16_artifacts.py --checkpoint checkpoints/sncp_ppo_v17.pt --eval_dir eval_v17 --output eval_v17/artifact_verification.md
 python test_eval.py --checkpoint <ckpt>.pt --num_humans 5 --scenario hard --n_episodes 50 --seed 100
 python visualize_trajectory.py --checkpoint <ckpt>.pt --num_humans 5 --scenario hard --seed 100 --output traj.png
 python visualize_trajectory_gif.py --checkpoint <ckpt>.pt --num_humans 10 --scenario hard --seed 100 --output anim.gif
@@ -301,17 +303,18 @@ python visualize_trajectory_gif.py --checkpoint <ckpt>.pt --num_humans 10 --scen
 - `run_v16_post_eval.py` is the preferred one-command post-run pipeline; it runs the density report,
   v15 comparison, training diagnostics, and artifact verification in order, using the newest
   `logs/training_*.csv` by default.
-- `verify_v16_run_ready.py` is the pre-A100 readiness gate; it checks the v16 notebook training
-  config, fail-fast guard, evaluation pipeline wiring, and committed v15 density baseline.
+- `verify_v16_run_ready.py` is the pre-A100 readiness gate; despite the legacy filename, it checks the
+  current v17 notebook training config, fail-fast guard, evaluation pipeline wiring, and committed v15
+  density baseline.
 - `evaluate_policy_report.py` is the underlying manual density-report command: it holds `scenario=hard`
   fixed, sweeps density N=1/3/5/8/10, writes `density_sweep.csv/json/png` + `report.md`, and generates
   N=5/N=10 trajectory PNGs. The pipeline calls it before judging success so nav-time and `I_sp` are visible.
-- `compare_policy_reports.py` compares `eval_v16/density_sweep.json` against the committed
-  `eval_v15/density_sweep.json` and writes the pass/warn/fail gate report used for the v16 verdict,
+- `compare_policy_reports.py` compares the candidate density sweep (currently `eval_v17/density_sweep.json`)
+  against the committed `eval_v15/density_sweep.json` and writes the pass/warn/fail gate report,
   including success, collision, timeout/freezing, nav-time, and `I_sp` deltas.
 - `analyze_training_log.py` summarizes best vs final holdout from the training CSV and flags late
   curriculum collapse; use it to verify replay fixed the v15 final-phase forgetting.
-- `verify_v16_artifacts.py` checks the completed v16 artifact set: checkpoint, pre-A100 readiness report,
+- `verify_v16_artifacts.py` checks the completed candidate artifact set: checkpoint, pre-A100 readiness report,
   density sweep, comparison, training diagnostics, trajectory PNGs, densities, minimum episodes,
   non-empty required files, valid PNG signatures, collapse flag, and replay ratio.
 - **Checkpoint naming:** `checkpoints/sncp_ppo_v<N>.pt`. Bump the version for each experiment so prior
@@ -363,7 +366,7 @@ success collapsing toward 0 with rising timeout. If seen, lower the comfort coef
 
 ---
 
-## 11. Tests (`pytest`, ~91 passing)
+## 11. Tests (`pytest`, ~94 passing)
 
 | File | Covers |
 |---|---|
@@ -373,17 +376,18 @@ success collapsing toward 0 with rising timeout. If seen, lower the comfort coef
 | `test_env_velocity.py` | velocity/observation correctness |
 | `test_model.py` | policy forward pass (shapes + action limits) |
 | `test_ncp_wiring.py` | encoders are sparse AutoNCP (not dense); proj reads motor `output_dim`; node inter-layer sized; forward intact |
-| `test_reward_paper.py` | goal +20, collision −20, **comfort −6·I_sp**, **approach 1·Δd**, max_time 50 |
+| `test_reward_paper.py` | goal +20, collision −20, default **comfort −6·I_sp**, configurable v17 comfort coefficient, **approach 1·Δd**, max_time 50 |
 | `test_pedestrian_reactive.py` | **default is non-reactive**; reactive flag still works (keeps more clearance) |
 | `test_speed_parity.py` | every scenario's `human_vpref ≤ robot_vpref` |
 | `test_vec_curriculum.py` | `step_to_phase` boundaries/values, parity, N=10 holdout, vectorized replay selection/logging, vectorized run smoke, `compute_total_updates` |
 | `test_vec_gae.py`, `test_vec_buffer.py` | GAE + buffer correctness |
+| `test_train_config.py` | training parser exposes `--comfort_coeff` while defaulting to v15/v16 coefficient 6.0 |
 | `test_train_eta.py` | training ETA output |
 | `test_eval_report.py` | density-sweep report aggregation, artifact writing, nav-time plot, v15/v16 comparison gates, and CLI argument wiring |
 | `test_training_log_report.py` | training CSV diagnostics: best/final holdout, replay fraction, collapse report, CLI |
 | `test_artifact_verifier.py` | final v16 artifact completeness and gate verification |
-| `test_post_run_pipeline.py` | one-command v16 post-run pipeline orchestration |
-| `test_v16_run_readiness.py` | pre-A100 v16 notebook/baseline readiness checks |
+| `test_post_run_pipeline.py` | one-command post-run pipeline orchestration and current Colab eval/training-cell wiring |
+| `test_v16_run_readiness.py` | pre-A100 current-run notebook/baseline readiness checks |
 | `test_eval.py` | (CLI eval script, not a pytest module) |
 
 Run all: `python -m pytest -q`. After any reward/curriculum/default change, **update the tests that
@@ -420,16 +424,24 @@ assert the old value** (they are intentional guards, not bugs) and keep the suit
 Goal: recover v15's genuine avoidance while reducing the timeout/freezing introduced by v16 replay, then
 lift N=10. The next run should still change **one variable only**.
 
-1. **Recommended v17 candidate for review: relax comfort `-6 -> -5`, keep everything else fixed.**
+1. **v17 comfort-tuning code is ready on `main`; Colab run pending.**
+   Implementation: `CrowdSimEnv(..., comfort_coeff=6.0)` preserves v15/v16 by default; `sncp_ppo.train`
+   exposes `--comfort_coeff`; the Colab full-training cell now writes `checkpoints/sncp_ppo_v17.pt`,
+   uses `COMFORT_COEFF = 5.0`, passes `--comfort_coeff 5.0`, evaluates into `eval_v17/`, and preserves
+   the v17 artifact bundle. Local verification: custom comfort test failed red, parser test failed red,
+   notebook/readiness tests failed red against v16 config, then all passed after implementation.
+   Targeted suite: `28 passed`; v17 vectorized smoke with `--comfort_coeff 5.0` exited 0 and logged replay
+   phase shifts; full regression: `94 passed in 32.89s`.
+2. **Experiment hypothesis: relax comfort `-6 -> -5`, keep everything else fixed.**
    Evidence: v16 preserved wide detours and lowered `I_sp` versus v15, but success fell where timeout rose
    (N=1 timeout 60%, N=5/8 timeout 26%) and low-density collision was already very low (N=1 collision 4%).
    That points to over-conservative behavior, not a beeline regression. Relaxing comfort moves slightly
    back toward the paper's baseline comfort coefficient while keeping the real-avoidance mechanism.
    Keep `max_time=50`, `approach=1`, non-reactive pedestrians, speed parity, AutoNCP, and replay 0.20.
-2. **Alternative later candidate: `max_time` 50 -> 60 s.** Do not combine this with comfort tuning in the
+3. **Alternative later candidate: `max_time` 50 -> 60 s.** Do not combine this with comfort tuning in the
    same run. It may expose whether the policy is merely slow, but it can also mask freezing, so prefer
    comfort tuning first unless the user explicitly wants a cap-only experiment.
-3. **High-density capacity remains unproven.** v16 N=10 collision stayed high (44%) but capacity is not
+4. **High-density capacity remains unproven.** v16 N=10 collision stayed high (44%) but capacity is not
    proven as the bottleneck because the same checkpoint already fails lower-density timeout/success gates.
    Keep AutoNCP unchanged until replay + over-conservatism evidence is exhausted.
 

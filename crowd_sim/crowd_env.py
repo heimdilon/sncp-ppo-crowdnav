@@ -7,7 +7,16 @@ import matplotlib.patches as patches
 class CrowdSimEnv(gym.Env):
     metadata = {'render.modes': ['human', 'rgb_array']}
 
-    def __init__(self, num_humans=5, time_step=0.25, max_time=50.0, scenario='circle', human_dodge_robot=False, randomize_layout=True):
+    def __init__(
+        self,
+        num_humans=5,
+        time_step=0.25,
+        max_time=50.0,
+        scenario='circle',
+        human_dodge_robot=False,
+        randomize_layout=True,
+        comfort_coeff=6.0,
+    ):
         super(CrowdSimEnv, self).__init__()
 
         self.scenario = scenario  # 'easy', 'medium', 'hard', 'extreme', 'circle', 'random'
@@ -19,6 +28,7 @@ class CrowdSimEnv(gym.Env):
         self.num_humans = num_humans
         self.time_step = time_step
         self.max_time = max_time
+        self.comfort_coeff = comfort_coeff
         
         # Robot physical parameters (Turtlebot3 Waffle)
         self.robot_radius = 0.3
@@ -400,7 +410,7 @@ class CrowdSimEnv(gym.Env):
         # the earlier -0.5/N was ~20x weaker at N=5 and let the robot ignore
         # social proximity (it never braked into crowds).
         I_sp = self._compute_social_pressure()
-        r_s = -6.0 * I_sp
+        r_s = -self.comfort_coeff * I_sp
         
         # 4. Standstill penalty removed. Even the softened -0.05 / v<0.03
         # version was sampling-driven (negative Normal samples clip to 0 and

@@ -1,4 +1,4 @@
-"""Preflight checks for the v16 Colab replay run."""
+"""Preflight checks for the current Colab experiment run."""
 
 from __future__ import annotations
 
@@ -15,12 +15,14 @@ TRAINING_TOKENS = (
     "LR = 5e-5",
     "TARGET_KL = 0.01",
     "REPLAY_RATIO = 0.20",
-    "SAVE_PATH = 'checkpoints/sncp_ppo_v16.pt'",
+    "COMFORT_COEFF = 5.0",
+    "SAVE_PATH = 'checkpoints/sncp_ppo_v17.pt'",
     "'--num_envs', str(NUM_ENVS)",
     "'--horizon', str(HORIZON)",
     "'--total_steps', str(TOTAL_STEPS)",
     "'--num_humans', '10'",
     "'--curriculum_replay_ratio', str(REPLAY_RATIO)",
+    "'--comfort_coeff', str(COMFORT_COEFF)",
     "'--holdout_scenarios', 'easy', 'hard', 'circle'",
     "'--holdout_episodes', '50'",
     "'--save_path', SAVE_PATH",
@@ -29,8 +31,8 @@ TRAINING_TOKENS = (
 )
 
 EVALUATION_TOKENS = (
-    "CHECKPOINT = 'checkpoints/sncp_ppo_v16.pt'",
-    "EVAL_OUT = 'eval_v16'",
+    "CHECKPOINT = 'checkpoints/sncp_ppo_v17.pt'",
+    "EVAL_OUT = 'eval_v17'",
     "EVAL_SEED = 100",
     "EVAL_EPISODES = 50",
     "run_v16_post_eval.py",
@@ -118,22 +120,22 @@ def verify_v16_run_ready(repo_root: str | Path = ".") -> V16RunReadinessSummary:
     cells = _load_notebook(repo_root / "sncp_ppo_colab.ipynb") or []
     training_cell = _find_unique_cell(
         cells,
-        "SAVE_PATH = 'checkpoints/sncp_ppo_v16.pt'",
+        "SAVE_PATH = 'checkpoints/sncp_ppo_v17.pt'",
         notes,
-        "v16 training",
+        "v17 training",
     )
     evaluation_cell = _find_unique_cell(
         cells,
-        "CHECKPOINT = 'checkpoints/sncp_ppo_v16.pt'",
+        "CHECKPOINT = 'checkpoints/sncp_ppo_v17.pt'",
         notes,
-        "v16 evaluation",
+        "v17 evaluation",
     )
-    _check_tokens(training_cell, TRAINING_TOKENS, notes, "v16 training")
-    _check_tokens(evaluation_cell, EVALUATION_TOKENS, notes, "v16 evaluation")
+    _check_tokens(training_cell, TRAINING_TOKENS, notes, "v17 training")
+    _check_tokens(evaluation_cell, EVALUATION_TOKENS, notes, "v17 evaluation")
 
     densities = _baseline_densities(repo_root / "eval_v15" / "density_sweep.json", notes)
     if not notes:
-        notes.append("PASS: v16 Colab training and evaluation configuration is ready")
+        notes.append("PASS: v17 Colab training and evaluation configuration is ready")
 
     return V16RunReadinessSummary(
         status=_status(notes),
@@ -150,7 +152,7 @@ def write_readiness_report(summary: V16RunReadinessSummary, path: str | Path) ->
     path.parent.mkdir(parents=True, exist_ok=True)
     densities = ", ".join(str(item) for item in summary.baseline_densities) or "n/a"
     lines = [
-        "# SNCP-PPO v16 Run Readiness",
+        "# SNCP-PPO Run Readiness",
         "",
         f"Overall status: {summary.status}",
         f"Repo root: `{summary.repo_root}`",

@@ -47,6 +47,18 @@ def test_comfort_is_minus_6_times_Isp(monkeypatch):
     assert not np.isclose(info['comfort'], -2.0 * 0.5)
 
 
+def test_custom_comfort_coeff_controls_Isp(monkeypatch):
+    env = CrowdSimEnv(num_humans=5, scenario='hard', comfort_coeff=5.0)
+    env.reset(seed=1)
+    monkeypatch.setattr(env, '_compute_social_pressure', lambda: 0.5)
+    env.humans_px[:] = 100.0
+    env.humans_py[:] = 100.0
+
+    _, _, _, _, info = env.step(np.array([0.0, 0.0], dtype=np.float32))
+
+    assert np.isclose(info['comfort'], -5.0 * 0.5)
+
+
 def test_approach_coefficient_is_1():
     """Dense approach shaping = 1.0 * delta-distance (v15: halved from 2.0 so
     detours around people are not over-penalized vs the straight line)."""
