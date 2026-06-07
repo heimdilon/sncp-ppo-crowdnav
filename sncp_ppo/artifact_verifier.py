@@ -80,16 +80,24 @@ def verify_v16_artifacts(
     eval_dir = Path(eval_dir)
     notes: list[str] = []
     missing: list[str] = []
+    empty: list[str] = []
 
     if not checkpoint_path.exists():
         missing.append("checkpoint")
+    elif checkpoint_path.stat().st_size == 0:
+        empty.append("checkpoint")
     if not eval_dir.exists():
         missing.append(str(eval_dir))
     for file_name in REQUIRED_EVAL_FILES:
-        if not (eval_dir / file_name).exists():
+        artifact_path = eval_dir / file_name
+        if not artifact_path.exists():
             missing.append(file_name)
+        elif artifact_path.stat().st_size == 0:
+            empty.append(file_name)
     if missing:
         notes.append(f"FAIL: missing required artifacts: {', '.join(missing)}")
+    if empty:
+        notes.append(f"FAIL: empty required artifacts: {', '.join(empty)}")
 
     readiness = _readiness_status(eval_dir / "run_readiness.md")
     if readiness is None and (eval_dir / "run_readiness.md").exists():
