@@ -252,7 +252,8 @@ honestly: real hardware speed + the chosen pedestrian model.
 1. `sncp_ppo_colab.ipynb` cell-4: `git pull` (gets latest `main`).
 2. cell-14: launches `python -m sncp_ppo.train …` (A100, ~3–4 h). Edit `SAVE_PATH`, `--num_humans`,
    `--total_steps`, `--holdout_scenarios`, `--curriculum_replay_ratio` there. Current = v16
-   (num_humans 10, total_steps 2.5M, replay 0.20, holdout `easy hard circle`).
+   (num_humans 10, total_steps 2.5M, replay 0.20, holdout `easy hard circle`). The cell raises
+   `SystemExit` on a nonzero training subprocess exit, so do not evaluate a failed run.
 3. cell-17: post-run evaluation pipeline (loads the saved best checkpoint, density sweep,
    v15 comparison, training diagnostics, artifact verification).
 4. See `docs/superpowers/plans/2026-06-06-v16-colab-runbook.md` for the exact post-run artifact
@@ -330,7 +331,7 @@ success collapsing toward 0 with rising timeout. If seen, lower the comfort coef
 
 ---
 
-## 11. Tests (`pytest`, ~80 passing)
+## 11. Tests (`pytest`, ~81 passing)
 
 | File | Covers |
 |---|---|
@@ -390,11 +391,11 @@ Goal: sustain the v15 N=5 peak all the way to N=10 and lift the ceiling. In prio
    `SAVE_PATH='checkpoints/sncp_ppo_v16.pt'` and `--curriculum_replay_ratio 0.20`. Notebook cell-17 now
    runs `run_v16_post_eval.py`, which produces the hard-scenario N=1/3/5/8/10 sweep, trajectory
    artifacts, v15 comparison, training diagnostics, and artifact verification.
-   Local verification: `80 passed`; replay smoke exited 0 and logged replay phase shifts plus PPO
+   Local verification: `81 passed`; replay smoke exited 0 and logged replay phase shifts plus PPO
    diagnostics columns; report smoke loaded v15 and wrote sweep artifacts; comparison smoke produced the
    expected v15-vs-v15 `warn`; v15 training-log diagnostics detect the known late collapse; artifact
    verifier tests cover the final `eval_v16/` completeness gate; post-run pipeline tests cover the
-   one-command artifact sequence and Colab evaluation-cell wiring.
+   one-command artifact sequence, Colab evaluation-cell wiring, and v16 training-cell readiness.
    **Pending:** Colab A100 run, density sweep, trajectories, nav-time/I_sp comparison vs v15.
 2. **Tame the over-conservative detour** (26% timeout at N=1; ~187 steps vs the 200 cap). Options: comfort
    −6 → −5, or `max_time` 50 → 60 s, or a mild efficiency term. Tune carefully (freezing risk).

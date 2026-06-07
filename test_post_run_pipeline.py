@@ -6,6 +6,20 @@ from sncp_ppo.eval_report import DensitySummary, write_summary_json
 from sncp_ppo.post_run_pipeline import find_latest_training_csv, run_v16_post_eval
 
 
+def _source_text(cell):
+    source = cell.get("source", "")
+    return "".join(source) if isinstance(source, list) else source
+
+
+def _colab_code_sources():
+    notebook = json.loads(Path("sncp_ppo_colab.ipynb").read_text(encoding="utf-8"))
+    return [
+        _source_text(cell)
+        for cell in notebook["cells"]
+        if cell.get("cell_type") == "code"
+    ]
+
+
 def _write_training_csv(path):
     header = [
         "episode",
@@ -164,16 +178,7 @@ def test_post_eval_cli_uses_latest_training_csv_and_returns_status(tmp_path, mon
 
 
 def test_colab_v16_eval_cell_uses_post_run_pipeline():
-    def source_text(cell):
-        source = cell.get("source", "")
-        return "".join(source) if isinstance(source, list) else source
-
-    notebook = json.loads(Path("sncp_ppo_colab.ipynb").read_text(encoding="utf-8"))
-    code_sources = [
-        source_text(cell)
-        for cell in notebook["cells"]
-        if cell.get("cell_type") == "code"
-    ]
+    code_sources = _colab_code_sources()
     eval_cells = [source for source in code_sources if "CHECKPOINT = 'checkpoints/sncp_ppo_v16.pt'" in source]
 
     assert len(eval_cells) == 1
@@ -183,3 +188,22 @@ def test_colab_v16_eval_cell_uses_post_run_pipeline():
     assert "'--output_dir', EVAL_OUT" in eval_cell
     assert "evaluate_policy_report.py" not in eval_cell
     assert "compare_policy_reports.py" not in eval_cell
+
+
+def test_colab_v16_training_cell_fails_fast_and_preserves_single_variable_config():
+    code_sources = _colab_code_sources()
+    train_cells = [source for source in code_sources if "SAVE_PATH = 'checkpoints/sncp_ppo_v16.pt'" in source]
+
+    assert len(train_cells) == 1
+    train_cell = train_cells[0]
+    assert "TOTAL_STEPS = 2_500_000" in train_cell
+    assert "NUM_ENVS = 16" in train_cell
+    assert "HORIZON = 128" in train_cell
+    assert "REPLAY_RATIO = 0.20" in train_cell
+    assert "'--curriculum_replay_ratio', str(REPLAY_RATIO)" in train_cell
+    assert "'--num_humans', '10'" in train_cell
+    assert "'--holdout_scenarios', 'easy', 'hard', 'circle'" in train_cell
+    assert "'--holdout_episodes', '50'" in train_cell
+    assert "'--save_path', SAVE_PATH" in train_cell
+    assert "if p.returncode != 0:" in train_cell
+    assert "raise SystemExit(p.returncode)" in train_cell

@@ -19,6 +19,8 @@ whether replay fixes v15 catastrophic forgetting without regressing real avoidan
    - `--num_humans 10`
    - `--curriculum_replay_ratio 0.20`
    - holdout scenarios: `easy hard circle`
+   - the cell raises `SystemExit` if training exits nonzero; do not continue to evaluation after a
+     failed training subprocess
 3. Run the evaluation cell. It calls `run_v16_post_eval.py` and should write:
    - `eval_v16/density_sweep.csv`
    - `eval_v16/density_sweep.json`
