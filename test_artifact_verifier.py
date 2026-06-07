@@ -141,6 +141,20 @@ def test_verify_v16_artifacts_fails_empty_required_artifact(tmp_path):
     assert any("traj_hard_n10.png" in note for note in summary.notes)
 
 
+def test_verify_v16_artifacts_fails_invalid_png_artifact(tmp_path):
+    checkpoint = tmp_path / "sncp_ppo_v16.pt"
+    checkpoint.write_bytes(b"checkpoint")
+    eval_dir = tmp_path / "eval_v16"
+    _write_complete_eval_dir(eval_dir)
+    (eval_dir / "traj_hard_n5.png").write_bytes(b"not actually a png")
+
+    summary = verify_v16_artifacts(checkpoint_path=checkpoint, eval_dir=eval_dir)
+
+    assert summary.status == "fail"
+    assert any("invalid PNG artifacts" in note for note in summary.notes)
+    assert any("traj_hard_n5.png" in note for note in summary.notes)
+
+
 def test_verify_v16_artifacts_fails_failed_comparison_or_training_collapse(tmp_path):
     checkpoint = tmp_path / "sncp_ppo_v16.pt"
     checkpoint.write_bytes(b"checkpoint")

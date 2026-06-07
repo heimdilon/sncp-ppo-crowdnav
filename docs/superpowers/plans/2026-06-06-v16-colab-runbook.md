@@ -76,8 +76,8 @@ Read these files in order:
    - `fail`: artifact set is incomplete or a hard gate failed. Do not treat v16 as evaluated.
    - `warn`: artifacts are complete, but at least one gate needs engineering interpretation.
    - `pass`: artifact-level gates passed; still inspect trajectories.
-   - This verifier also requires `eval_v16/run_readiness.md` to exist and report `pass`, and all
-     required files to be non-empty.
+   - This verifier also requires `eval_v16/run_readiness.md` to exist and report `pass`, all required
+     files to be non-empty, and required PNG artifacts to have valid PNG signatures.
 2. `eval_v16/comparison_vs_v15.md`
    - A `fail` row means v16 regressed against v15 on real-avoidance gates.
    - A high-density `warn` means N=10 did not improve; this does not satisfy the v16 objective.

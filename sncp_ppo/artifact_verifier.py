@@ -21,6 +21,7 @@ REQUIRED_EVAL_FILES = (
     "traj_hard_n5.png",
     "traj_hard_n10.png",
 )
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
 @dataclass(frozen=True)
@@ -81,6 +82,7 @@ def verify_v16_artifacts(
     notes: list[str] = []
     missing: list[str] = []
     empty: list[str] = []
+    invalid_png: list[str] = []
 
     if not checkpoint_path.exists():
         missing.append("checkpoint")
@@ -94,10 +96,16 @@ def verify_v16_artifacts(
             missing.append(file_name)
         elif artifact_path.stat().st_size == 0:
             empty.append(file_name)
+        elif artifact_path.suffix.lower() == ".png":
+            with artifact_path.open("rb") as f:
+                if f.read(len(PNG_SIGNATURE)) != PNG_SIGNATURE:
+                    invalid_png.append(file_name)
     if missing:
         notes.append(f"FAIL: missing required artifacts: {', '.join(missing)}")
     if empty:
         notes.append(f"FAIL: empty required artifacts: {', '.join(empty)}")
+    if invalid_png:
+        notes.append(f"FAIL: invalid PNG artifacts: {', '.join(invalid_png)}")
 
     readiness = _readiness_status(eval_dir / "run_readiness.md")
     if readiness is None and (eval_dir / "run_readiness.md").exists():
