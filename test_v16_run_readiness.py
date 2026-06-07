@@ -79,3 +79,20 @@ def test_colab_notebook_has_preflight_cell_before_v16_training():
     preflight_cell = code_sources[preflight_indices[0]]
     assert "subprocess.run(cmd, check=True)" in preflight_cell
     assert "eval_v16/run_readiness.md" in preflight_cell
+
+
+def test_colab_persist_cell_downloads_eval_v16_artifact_bundle():
+    notebook = json.loads(Path("sncp_ppo_colab.ipynb").read_text(encoding="utf-8"))
+    code_sources = [
+        _source_text(cell)
+        for cell in notebook["cells"]
+        if cell.get("cell_type") == "code"
+    ]
+    persist_cells = [source for source in code_sources if "DOWNLOAD = False" in source]
+
+    assert len(persist_cells) == 1
+    persist_cell = persist_cells[0]
+    assert "shutil.make_archive" in persist_cell
+    assert "'eval_v16_artifacts'" in persist_cell
+    assert "'eval_v16'" in persist_cell
+    assert "files.download(archive)" in persist_cell

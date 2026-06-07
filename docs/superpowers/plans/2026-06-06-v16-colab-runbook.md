@@ -38,6 +38,11 @@ whether replay fixes v15 catastrophic forgetting without regressing real avoidan
    - `eval_v16/traj_hard_n10.png`
 5. Run the training-curves cell if you want the Colab plot. It should write:
    - `training_curves_colab.png`
+6. Before the Colab session ends, run the persist-results cell with `DOWNLOAD = True`. It downloads:
+   - `checkpoints/sncp_ppo_v16.pt`
+   - newest `logs/training_*.csv`
+   - `training_curves_colab.png`
+   - `eval_v16_artifacts.zip` containing the full readiness/evaluation/report bundle
 
 ## Equivalent CLI sequence
 

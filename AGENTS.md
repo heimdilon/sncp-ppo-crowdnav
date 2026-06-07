@@ -257,7 +257,9 @@ honestly: real hardware speed + the chosen pedestrian model.
    `SystemExit` on a nonzero training subprocess exit, so do not evaluate a failed run.
 4. cell-17: post-run evaluation pipeline (loads the saved best checkpoint, density sweep,
    v15 comparison, training diagnostics, artifact verification).
-5. See `docs/superpowers/plans/2026-06-06-v16-colab-runbook.md` for the exact post-run artifact
+5. Persist-results cell: set `DOWNLOAD = True` before the Colab session ends; it downloads the checkpoint,
+   latest training CSV, training curve, and `eval_v16_artifacts.zip` containing the full evidence bundle.
+6. See `docs/superpowers/plans/2026-06-06-v16-colab-runbook.md` for the exact post-run artifact
    sequence and verdict gates.
 
 **Local eval / viz (fast, inference only):**
@@ -336,7 +338,7 @@ success collapsing toward 0 with rising timeout. If seen, lower the comfort coef
 
 ---
 
-## 11. Tests (`pytest`, ~87 passing)
+## 11. Tests (`pytest`, ~88 passing)
 
 | File | Covers |
 |---|---|
@@ -397,12 +399,12 @@ Goal: sustain the v15 N=5 peak all the way to N=10 and lift the ceiling. In prio
    `SAVE_PATH='checkpoints/sncp_ppo_v16.pt'` and `--curriculum_replay_ratio 0.20`. Notebook cell-17 now
    runs `run_v16_post_eval.py`, which produces the hard-scenario N=1/3/5/8/10 sweep, trajectory
    artifacts, v15 comparison, training diagnostics, and artifact verification.
-   Local verification: `87 passed`; replay smoke exited 0 and logged replay phase shifts plus PPO
+   Local verification: `88 passed`; replay smoke exited 0 and logged replay phase shifts plus PPO
    diagnostics columns; report smoke loaded v15 and wrote sweep artifacts; comparison smoke produced the
    expected v15-vs-v15 `warn`; v15 training-log diagnostics detect the known late collapse; artifact
    verifier tests cover the final `eval_v16/` completeness/readiness gate; post-run pipeline tests cover the
    one-command artifact sequence, Colab evaluation-cell wiring, and v16 training-cell readiness;
-   run-readiness tests cover the pre-A100 notebook/baseline gate.
+   run-readiness tests cover the pre-A100 notebook/baseline gate and Colab artifact-bundle persistence.
    **Pending:** Colab A100 run, density sweep, trajectories, nav-time/I_sp comparison vs v15.
 2. **Tame the over-conservative detour** (26% timeout at N=1; ~187 steps vs the 200 cap). Options: comfort
    −6 → −5, or `max_time` 50 → 60 s, or a mild efficiency term. Tune carefully (freezing risk).
