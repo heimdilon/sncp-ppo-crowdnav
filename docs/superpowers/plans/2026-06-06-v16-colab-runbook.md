@@ -3,6 +3,11 @@
 Purpose: run the single-variable v16 replay experiment and produce the artifact set needed to decide
 whether replay fixes v15 catastrophic forgetting without regressing real avoidance.
 
+Status on 2026-06-08: the Colab training subprocess for `logs/training_20260607_131329.csv` completed
+cleanly (`Exited with code 0`) after update 1220. The saved best checkpoint reported holdout
+`min=56%` (`easy=70%`, `hard=62%`, `circle=56%`, collision 18%). This is not a final v16 verdict:
+the post-run density sweep, trajectories, training diagnostics, and v15 comparison are still required.
+
 ## Preconditions
 
 - Colab has pulled current `main` and has `run_v16_post_eval.py`.

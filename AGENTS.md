@@ -20,11 +20,14 @@
   PDF `s12369-026-01389-9.pdf` in repo root, **git-ignored**).
 - Stack: Python, PyTorch, Gymnasium, **`ncps`** (Liquid Time-Constant / Neural Circuit Policies), pytest.
 - Robot = **TurtleBot3 Waffle**, max linear speed **0.26 m/s** (real hardware), wmax 1.8, radius 0.3.
-- **Current head state: v16 code-ready / Colab run pending.** v15 proved *genuine*
+- **Current head state: v16 training complete / post-run evaluation pending.** v15 proved *genuine*
   collision-avoidance + social-distance keeping (it detours around pedestrians) — the long-standing
   "beeline" problem is solved. v16 implements the first roadmap fix: vectorized anti-forgetting replay
   (`--curriculum_replay_ratio`, notebook set to 0.20) so the N=10 phase does not erase earlier skills.
-  Performance evidence is still v15 until the v16 A100 run finishes: peak ~66% at N=5 and late collapse.
+  The Colab stdout for `logs/training_20260607_131329.csv` completed cleanly after 1220 updates and saved
+  a best holdout checkpoint at **min=56%** (`easy=70%`, `hard=62%`, `circle=56%`, collision 18%) with
+  stable final std (`[0.153, 0.243]`). This is promising training evidence only; the v16 verdict still
+  requires the density sweep, trajectory plots, nav-time/`I_sp`, and v15 comparison artifacts.
 - **Workflow:** training runs on **Google Colab** (local GPU is too slow); commits go **directly to
   `main`**, which Colab pulls. TDD is used for all code changes. See §6–§7.
 - **Detailed cross-session log** lives OUTSIDE the repo in the Claude auto-memory (§11).
@@ -86,8 +89,8 @@ robot parity so a slow robot can feasibly dodge. Result:
   → catastrophic forgetting + rising policy std (instability). The **best-checkpoint mechanism saved the
   update-450 weights** (`sncp_ppo_v15.pt` = that peak, NOT the collapsed final policy).
 
-Open problems are the **v16 roadmap** (§13): run/evaluate replay, tame the over-conservative detour,
-push high-N.
+Open problems are the **v16 roadmap** (§13): evaluate the completed replay run, tame the
+over-conservative detour, push high-N.
 
 ---
 
@@ -406,7 +409,11 @@ Goal: sustain the v15 N=5 peak all the way to N=10 and lift the ceiling. In prio
    verifier tests cover the final `eval_v16/` completeness/readiness gate; post-run pipeline tests cover the
    one-command artifact sequence, Colab evaluation-cell wiring, and v16 training-cell readiness;
    run-readiness tests cover the pre-A100 notebook/baseline gate and Colab artifact-bundle persistence.
-   **Pending:** Colab A100 run, density sweep, trajectories, nav-time/I_sp comparison vs v15.
+   Colab training stdout completed cleanly for `logs/training_20260607_131329.csv`: best generalist
+   min=56% (`easy=70%`, `hard=62%`, `circle=56%`, collision 18%) at the saved
+   `checkpoints/sncp_ppo_v16.pt`; final update 1220 still had stable std `[0.153, 0.243]` and low KL.
+   **Pending:** download/paste the v16 checkpoint/eval bundle, density sweep, trajectories, and
+   nav-time/`I_sp` comparison vs v15 before claiming improvement.
 2. **Tame the over-conservative detour** (26% timeout at N=1; ~187 steps vs the 200 cap). Options: comfort
    −6 → −5, or `max_time` 50 → 60 s, or a mild efficiency term. Tune carefully (freezing risk).
 3. **Lift high-N** (46% collision at N=10): more N=10 training (enabled by replay), then possibly LTC
