@@ -46,6 +46,9 @@ class DensityComparison:
     baseline_collision_rate: float
     candidate_collision_rate: float
     collision_delta: float
+    baseline_timeout_rate: float
+    candidate_timeout_rate: float
+    timeout_delta: float
     baseline_avg_success_steps: float
     candidate_avg_success_steps: float
     nav_margin_vs_beeline: float
@@ -224,6 +227,7 @@ def compare_density_sweeps(
     nav_margin_steps: float = 30.0,
     success_tolerance: float = 0.05,
     collision_tolerance: float = 0.05,
+    timeout_tolerance: float = 0.10,
     i_sp_warn_tolerance: float = 0.01,
     i_sp_fail_tolerance: float = 0.02,
 ) -> SweepComparison:
@@ -243,6 +247,7 @@ def compare_density_sweeps(
 
         success_delta = round(cand.success_rate - base.success_rate, 4)
         collision_delta = round(cand.collision_rate - base.collision_rate, 4)
+        timeout_delta = round(cand.timeout_rate - base.timeout_rate, 4)
         i_sp_delta = round(cand.avg_i_sp - base.avg_i_sp, 4)
         nav_margin = round(cand.avg_success_steps - baseline_nav_steps, 4)
 
@@ -254,6 +259,8 @@ def compare_density_sweeps(
             notes.append(f"FAIL: success dropped by {success_delta * 100.0:.1f} pp")
         if collision_delta > collision_tolerance:
             notes.append(f"FAIL: collision rose by {collision_delta * 100.0:.1f} pp")
+        if timeout_delta > timeout_tolerance:
+            notes.append(f"FAIL: timeout/freezing rose by {timeout_delta * 100.0:.1f} pp")
         if i_sp_delta > i_sp_fail_tolerance:
             notes.append(f"FAIL: I_sp rose by {i_sp_delta:.4f}")
         elif i_sp_delta > i_sp_warn_tolerance:
@@ -274,6 +281,9 @@ def compare_density_sweeps(
                 baseline_collision_rate=base.collision_rate,
                 candidate_collision_rate=cand.collision_rate,
                 collision_delta=collision_delta,
+                baseline_timeout_rate=base.timeout_rate,
+                candidate_timeout_rate=cand.timeout_rate,
+                timeout_delta=timeout_delta,
                 baseline_avg_success_steps=base.avg_success_steps,
                 candidate_avg_success_steps=cand.avg_success_steps,
                 nav_margin_vs_beeline=nav_margin,
@@ -311,8 +321,8 @@ def write_comparison_report(
         f"Candidate: `{Path(candidate_path)}`",
         f"Beeline baseline: {comparison.baseline_nav_steps:.1f} successful steps",
         "",
-        "| N | v15 Success | Candidate Success | Success Delta | v15 Collision | Candidate Collision | Nav Margin | I_sp Delta | Status | Notes |",
-        "|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
+        "| N | v15 Success | Candidate Success | Success Delta | v15 Collision | Candidate Collision | v15 Timeout | Candidate Timeout | Timeout Delta | Nav Margin | I_sp Delta | Status | Notes |",
+        "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
     ]
     for row in comparison.rows:
         notes = "; ".join(row.notes)
@@ -320,6 +330,8 @@ def write_comparison_report(
             f"| {row.num_humans} | {row.baseline_success_rate:.1%} | "
             f"{row.candidate_success_rate:.1%} | {row.success_delta * 100.0:+.1f} pp | "
             f"{row.baseline_collision_rate:.1%} | {row.candidate_collision_rate:.1%} | "
+            f"{row.baseline_timeout_rate:.1%} | {row.candidate_timeout_rate:.1%} | "
+            f"{row.timeout_delta * 100.0:+.1f} pp | "
             f"{row.nav_margin_vs_beeline:.1f} | {row.i_sp_delta:+.4f} | "
             f"{row.status} | {notes} |"
         )

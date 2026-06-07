@@ -283,7 +283,8 @@ python visualize_trajectory_gif.py --checkpoint <ckpt>.pt --num_humans 10 --scen
   fixed, sweeps density N=1/3/5/8/10, writes `density_sweep.csv/json/png` + `report.md`, and generates
   N=5/N=10 trajectory PNGs. The pipeline calls it before judging success so nav-time and `I_sp` are visible.
 - `compare_policy_reports.py` compares `eval_v16/density_sweep.json` against the committed
-  `eval_v15/density_sweep.json` and writes the pass/warn/fail gate report used for the v16 verdict.
+  `eval_v15/density_sweep.json` and writes the pass/warn/fail gate report used for the v16 verdict,
+  including success, collision, timeout/freezing, nav-time, and `I_sp` deltas.
 - `analyze_training_log.py` summarizes best vs final holdout from the training CSV and flags late
   curriculum collapse; use it to verify replay fixed the v15 final-phase forgetting.
 - `verify_v16_artifacts.py` checks the completed v16 artifact set: checkpoint, pre-A100 readiness report,
@@ -338,7 +339,7 @@ success collapsing toward 0 with rising timeout. If seen, lower the comfort coef
 
 ---
 
-## 11. Tests (`pytest`, ~90 passing)
+## 11. Tests (`pytest`, ~91 passing)
 
 | File | Covers |
 |---|---|
@@ -399,7 +400,7 @@ Goal: sustain the v15 N=5 peak all the way to N=10 and lift the ceiling. In prio
    `SAVE_PATH='checkpoints/sncp_ppo_v16.pt'` and `--curriculum_replay_ratio 0.20`. Notebook cell-17 now
    runs `run_v16_post_eval.py`, which produces the hard-scenario N=1/3/5/8/10 sweep, trajectory
    artifacts, v15 comparison, training diagnostics, and artifact verification.
-   Local verification: `90 passed`; replay smoke exited 0 and logged replay phase shifts plus PPO
+   Local verification: `91 passed`; replay smoke exited 0 and logged replay phase shifts plus PPO
    diagnostics columns; report smoke loaded v15 and wrote sweep artifacts; comparison smoke produced the
    expected v15-vs-v15 `warn`; v15 training-log diagnostics detect the known late collapse; artifact
    verifier tests cover the final `eval_v16/` completeness/readiness gate; post-run pipeline tests cover the

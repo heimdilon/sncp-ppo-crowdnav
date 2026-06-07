@@ -80,6 +80,7 @@ Read these files in order:
      files to be non-empty, and required PNG artifacts to have valid PNG signatures.
 2. `eval_v16/comparison_vs_v15.md`
    - A `fail` row means v16 regressed against v15 on real-avoidance gates.
+   - Timeout/freezing increases over the tolerance are hard failures, even if collision falls.
    - A high-density `warn` means N=10 did not improve; this does not satisfy the v16 objective.
 3. `eval_v16/training_diagnostics.md`
    - Replay ratio should be logged and near 20%.
@@ -96,5 +97,5 @@ If the artifact set is complete, update:
 - `AGENTS.md`: v16 result summary, density table, collapse verdict, trajectory verdict, next experiment.
 - `~/.claude/projects/C--Users-kor-a-Desktop-deneme/memory/sncp-paper-vs-impl.md`: detailed result log.
 
-Only claim improvement if success/collision improve while nav-time remains well above the v14 beeline
-baseline and `I_sp` stays low.
+Only claim improvement if success/collision improve, timeout/freezing does not regress, nav-time remains
+well above the v14 beeline baseline, and `I_sp` stays low.

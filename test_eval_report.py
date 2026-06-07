@@ -333,6 +333,25 @@ def test_compare_density_sweeps_warns_when_high_density_success_does_not_improve
     assert any("high-density success did not improve" in note for note in comparison.rows[-1].notes)
 
 
+def test_compare_density_sweeps_fails_timeout_freezing_regression():
+    baseline = [
+        DensitySummary(5, "hard", 50, 0.66, 0.18, 0.16, 187.1, 169.6, 0.015, 1.02, 5.3),
+        DensitySummary(10, "hard", 50, 0.46, 0.46, 0.08, 188.9, 127.4, 0.025, 0.74, -4.4),
+    ]
+    candidate = [
+        DensitySummary(5, "hard", 50, 0.66, 0.00, 0.50, 190.0, 190.0, 0.014, 1.10, 3.0),
+        DensitySummary(10, "hard", 50, 0.58, 0.34, 0.08, 190.0, 150.0, 0.024, 0.78, 2.0),
+    ]
+
+    comparison = compare_density_sweeps(baseline, candidate, baseline_nav_steps=121.5)
+
+    assert comparison.overall_status == "fail"
+    sparse = comparison.rows[0]
+    assert sparse.timeout_delta == 0.34
+    assert sparse.status == "fail"
+    assert any("timeout/freezing" in note for note in sparse.notes)
+
+
 def test_summary_json_round_trips_and_comparison_report_mentions_verdict(tmp_path):
     baseline = [
         DensitySummary(10, "hard", 50, 0.46, 0.46, 0.08, 188.9, 127.4, 0.025, 0.74, -4.4),
