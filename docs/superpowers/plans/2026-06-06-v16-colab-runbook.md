@@ -5,7 +5,7 @@ whether replay fixes v15 catastrophic forgetting without regressing real avoidan
 
 ## Preconditions
 
-- Colab has pulled current `main` (commit should be at least `635522c`).
+- Colab has pulled current `main` and has `run_v16_post_eval.py`.
 - Runtime is A100 if available.
 - Do not change reward, environment defaults, NCP capacity, pedestrian reactivity, or robot speed.
 - The only v16 training variable is `--curriculum_replay_ratio 0.20`.
@@ -19,18 +19,19 @@ whether replay fixes v15 catastrophic forgetting without regressing real avoidan
    - `--num_humans 10`
    - `--curriculum_replay_ratio 0.20`
    - holdout scenarios: `easy hard circle`
-3. Run the evaluation cell. It should write:
+3. Run the evaluation cell. It calls `run_v16_post_eval.py` and should write:
    - `eval_v16/density_sweep.csv`
    - `eval_v16/density_sweep.json`
    - `eval_v16/density_sweep.png`
    - `eval_v16/report.md`
    - `eval_v16/comparison_vs_v15.md`
-   - `eval_v16/traj_hard_n5.png`
-   - `eval_v16/traj_hard_n10.png`
-4. Run the training-curves analysis cell. It should write:
    - `eval_v16/training_diagnostics.json`
    - `eval_v16/training_diagnostics.md`
    - `eval_v16/artifact_verification.md`
+   - `eval_v16/traj_hard_n5.png`
+   - `eval_v16/traj_hard_n10.png`
+4. Run the training-curves cell if you want the Colab plot. It should write:
+   - `training_curves_colab.png`
 
 ## Equivalent CLI sequence
 

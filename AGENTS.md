@@ -253,7 +253,8 @@ honestly: real hardware speed + the chosen pedestrian model.
 2. cell-14: launches `python -m sncp_ppo.train …` (A100, ~3–4 h). Edit `SAVE_PATH`, `--num_humans`,
    `--total_steps`, `--holdout_scenarios`, `--curriculum_replay_ratio` there. Current = v16
    (num_humans 10, total_steps 2.5M, replay 0.20, holdout `easy hard circle`).
-3. cell-17: evaluation (loads the saved best checkpoint, density sweep).
+3. cell-17: post-run evaluation pipeline (loads the saved best checkpoint, density sweep,
+   v15 comparison, training diagnostics, artifact verification).
 4. See `docs/superpowers/plans/2026-06-06-v16-colab-runbook.md` for the exact post-run artifact
    sequence and verdict gates.
 
@@ -271,9 +272,9 @@ python visualize_trajectory_gif.py --checkpoint <ckpt>.pt --num_humans 10 --scen
 - `run_v16_post_eval.py` is the preferred one-command post-run pipeline; it runs the density report,
   v15 comparison, training diagnostics, and artifact verification in order, using the newest
   `logs/training_*.csv` by default.
-- `evaluate_policy_report.py` is the preferred v16 post-run command: it holds `scenario=hard` fixed,
-  sweeps density N=1/3/5/8/10, writes `density_sweep.csv/json/png` + `report.md`, and generates
-  N=5/N=10 trajectory PNGs. Use this before judging success so nav-time and `I_sp` are visible.
+- `evaluate_policy_report.py` is the underlying manual density-report command: it holds `scenario=hard`
+  fixed, sweeps density N=1/3/5/8/10, writes `density_sweep.csv/json/png` + `report.md`, and generates
+  N=5/N=10 trajectory PNGs. The pipeline calls it before judging success so nav-time and `I_sp` are visible.
 - `compare_policy_reports.py` compares `eval_v16/density_sweep.json` against the committed
   `eval_v15/density_sweep.json` and writes the pass/warn/fail gate report used for the v16 verdict.
 - `analyze_training_log.py` summarizes best vs final holdout from the training CSV and flags late
@@ -329,7 +330,7 @@ success collapsing toward 0 with rising timeout. If seen, lower the comfort coef
 
 ---
 
-## 11. Tests (`pytest`, ~79 passing)
+## 11. Tests (`pytest`, ~80 passing)
 
 | File | Covers |
 |---|---|
@@ -387,13 +388,13 @@ Goal: sustain the v15 N=5 peak all the way to N=10 and lift the ceiling. In prio
    `select_vectorized_phase(...)`: with replay enabled, a fraction of update windows samples a uniformly
    random earlier phase while the whole rollout remains single-density. Notebook cell-14 is set to
    `SAVE_PATH='checkpoints/sncp_ppo_v16.pt'` and `--curriculum_replay_ratio 0.20`. Notebook cell-17 now
-   runs `evaluate_policy_report.py` for the hard-scenario N=1/3/5/8/10 sweep and trajectory artifacts,
-   then `compare_policy_reports.py` against the committed `eval_v15/` baseline.
-   Local verification: `79 passed`; replay smoke exited 0 and logged replay phase shifts plus PPO
+   runs `run_v16_post_eval.py`, which produces the hard-scenario N=1/3/5/8/10 sweep, trajectory
+   artifacts, v15 comparison, training diagnostics, and artifact verification.
+   Local verification: `80 passed`; replay smoke exited 0 and logged replay phase shifts plus PPO
    diagnostics columns; report smoke loaded v15 and wrote sweep artifacts; comparison smoke produced the
    expected v15-vs-v15 `warn`; v15 training-log diagnostics detect the known late collapse; artifact
    verifier tests cover the final `eval_v16/` completeness gate; post-run pipeline tests cover the
-   one-command artifact sequence.
+   one-command artifact sequence and Colab evaluation-cell wiring.
    **Pending:** Colab A100 run, density sweep, trajectories, nav-time/I_sp comparison vs v15.
 2. **Tame the over-conservative detour** (26% timeout at N=1; ~187 steps vs the 200 cap). Options: comfort
    −6 → −5, or `max_time` 50 → 60 s, or a mild efficiency term. Tune carefully (freezing risk).

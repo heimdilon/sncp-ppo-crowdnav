@@ -1,5 +1,6 @@
 import csv
 import json
+from pathlib import Path
 
 from sncp_ppo.eval_report import DensitySummary, write_summary_json
 from sncp_ppo.post_run_pipeline import find_latest_training_csv, run_v16_post_eval
@@ -160,3 +161,25 @@ def test_post_eval_cli_uses_latest_training_csv_and_returns_status(tmp_path, mon
     assert exit_code == 0
     assert captured["training_csv"] == latest
     assert "Overall status: warn" in capsys.readouterr().out
+
+
+def test_colab_v16_eval_cell_uses_post_run_pipeline():
+    def source_text(cell):
+        source = cell.get("source", "")
+        return "".join(source) if isinstance(source, list) else source
+
+    notebook = json.loads(Path("sncp_ppo_colab.ipynb").read_text(encoding="utf-8"))
+    code_sources = [
+        source_text(cell)
+        for cell in notebook["cells"]
+        if cell.get("cell_type") == "code"
+    ]
+    eval_cells = [source for source in code_sources if "CHECKPOINT = 'checkpoints/sncp_ppo_v16.pt'" in source]
+
+    assert len(eval_cells) == 1
+    eval_cell = eval_cells[0]
+    assert "run_v16_post_eval.py" in eval_cell
+    assert "'--checkpoint', CHECKPOINT" in eval_cell
+    assert "'--output_dir', EVAL_OUT" in eval_cell
+    assert "evaluate_policy_report.py" not in eval_cell
+    assert "compare_policy_reports.py" not in eval_cell
