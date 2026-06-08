@@ -33,6 +33,7 @@ training_curves*.png
 trajectory_plot*.png
 *_trajectory.gif
 trajectory_animation*.gif
+custom_eval/
 
 # Keep one curated demo GIF (committed manually if desired)
 !demo/*.gif

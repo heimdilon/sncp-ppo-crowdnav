@@ -16,11 +16,15 @@ class CrowdSimEnv(gym.Env):
         human_dodge_robot=False,
         randomize_layout=True,
         comfort_coeff=6.0,
+        human_motion_model='sfm',
     ):
         super(CrowdSimEnv, self).__init__()
 
         self.scenario = scenario  # 'easy', 'medium', 'hard', 'extreme', 'circle', 'random'
         self.human_dodge_robot = human_dodge_robot
+        if human_motion_model not in ('sfm', 'linear'):
+            raise ValueError("human_motion_model must be 'sfm' or 'linear'")
+        self.human_motion_model = human_motion_model
         # When True (default), robot start/goal and pedestrian spawns are
         # randomized every reset (circle-crossing with random antipodal points).
         # When False, the legacy fixed (0,-4)->(0,4) scene is reproduced exactly.
@@ -129,6 +133,8 @@ class CrowdSimEnv(gym.Env):
         else:
             self.human_vpref = 0.26
             scenario_type = self.scenario
+
+        self.humans_vpref = np.full(self.num_humans, self.human_vpref, dtype=float)
         
         if scenario_type == 'circle':
             radius = 4.0
@@ -441,6 +447,10 @@ class CrowdSimEnv(gym.Env):
         """
         Updates pedestrian positions using a robust Social Force Model (SFM).
         """
+        if self.human_motion_model == 'linear':
+            self._move_humans_linear()
+            return
+
         N = self.num_humans
         tau = 0.5  # relaxation time
         A = 2.0    # repulsive force magnitude
@@ -469,8 +479,9 @@ class CrowdSimEnv(gym.Env):
                 pref_vx = 0.0
                 pref_vy = 0.0
             else:
-                pref_vx = (dx_g / dist_g) * self.human_vpref
-                pref_vy = (dy_g / dist_g) * self.human_vpref
+                vpref_i = self._human_vpref(i)
+                pref_vx = (dx_g / dist_g) * vpref_i
+                pref_vy = (dy_g / dist_g) * vpref_i
                 
             f_drive_x = (pref_vx - vx) / tau
             f_drive_y = (pref_vy - vy) / tau
@@ -511,9 +522,10 @@ class CrowdSimEnv(gym.Env):
             
             # Limit speed to max preferred speed
             speed = np.hypot(nvx, nvy)
-            if speed > self.human_vpref:
-                nvx = (nvx / speed) * self.human_vpref
-                nvy = (nvy / speed) * self.human_vpref
+            vpref_i = self._human_vpref(i)
+            if speed > vpref_i:
+                nvx = (nvx / speed) * vpref_i
+                nvy = (nvy / speed) * vpref_i
                 
             # Update position
             new_px[i] = px + nvx * self.time_step
@@ -529,6 +541,29 @@ class CrowdSimEnv(gym.Env):
         self.humans_py = new_py
         self.humans_vx = new_vx
         self.humans_vy = new_vy
+
+    def _human_vpref(self, index):
+        speeds = getattr(self, 'humans_vpref', None)
+        if speeds is None:
+            return float(self.human_vpref)
+        return float(speeds[index])
+
+    def _move_humans_linear(self):
+        """Move custom-map pedestrians with fixed per-agent heading and speed."""
+        N = self.num_humans
+        new_vx = np.zeros(N)
+        new_vy = np.zeros(N)
+
+        for i in range(N):
+            speed = self._human_vpref(i)
+            theta = self.humans_theta[i]
+            new_vx[i] = speed * np.cos(theta)
+            new_vy[i] = speed * np.sin(theta)
+
+        self.humans_vx = new_vx
+        self.humans_vy = new_vy
+        self.humans_px = self.humans_px + new_vx * self.time_step
+        self.humans_py = self.humans_py + new_vy * self.time_step
 
     def render(self, mode='human'):
         # For simple visual verification

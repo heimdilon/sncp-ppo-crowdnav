@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "name": "example_crossing",
+  "time_step": 0.25,
+  "max_time": 50,
+  "human_motion_model": "linear",
+  "human_dodge_robot": false,
+  "robot": {
+    "position": {
+      "x": -4.0,
+      "y": 0.0
+    },
+    "goal": {
+      "x": 4.0,
+      "y": 0.0
+    },
+    "theta_deg": 0.0
+  },
+  "humans": [
+    {
+      "id": "h1",
+      "position": {
+        "x": 0.0,
+        "y": -2.4
+      },
+      "theta_deg": 90.0,
+      "speed": 0.2,
+      "goal": {
+        "x": 0.0,
+        "y": 4.0
+      }
+    },
+    {
+      "id": "h2",
+      "position": {
+        "x": 0.7,
+        "y": 2.4
+      },
+      "theta_deg": -90.0,
+      "speed": 0.2,
+      "goal": {
+        "x": 0.7,
+        "y": -4.0
+      }
+    },
+    {
+      "id": "h3",
+      "position": {
+        "x": -1.4,
+        "y": -1.5
+      },
+      "theta_deg": 45.0,
+      "speed": 0.18,
+      "goal": {
+        "x": 3.0,
+        "y": 3.0
+      }
+    },
+    {
+      "id": "h4",
+      "position": {
+        "x": 1.5,
+        "y": 1.6
+      },
+      "theta_deg": -135.0,
+      "speed": 0.18,
+      "goal": {
+        "x": -3.0,
+        "y": -3.0
+      }
+    },
+    {
+      "id": "h5",
+      "position": {
+        "x": -1.8,
+        "y": 1.4
+      },
+      "theta_deg": -35.0,
+      "speed": 0.16,
+      "goal": {
+        "x": 3.3,
+        "y": -2.2
+      }
+    }
+  ]
+}

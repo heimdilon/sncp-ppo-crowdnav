@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SNCP Custom Map Tester</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    <section class="panel">
+      <header>
+        <h1>SNCP Custom Map Tester</h1>
+        <div class="subtle">Design a fixed scenario and export JSON for checkpoint evaluation.</div>
+      </header>
+
+      <div class="control-grid">
+        <label>
+          Name
+          <input id="scenarioName" type="text" value="custom_crossing">
+        </label>
+        <label>
+          Motion
+          <select id="motionModel">
+            <option value="linear">linear</option>
+            <option value="sfm">sfm</option>
+          </select>
+        </label>
+        <label>
+          Max time
+          <input id="maxTime" type="number" step="0.25" value="50">
+        </label>
+        <label>
+          Time step
+          <input id="timeStep" type="number" step="0.05" value="0.25">
+        </label>
+      </div>
+
+      <section class="section">
+        <h2>Robot</h2>
+        <div class="control-grid compact">
+          <label>X <input id="robotX" type="number" step="0.1" value="-4"></label>
+          <label>Y <input id="robotY" type="number" step="0.1" value="0"></label>
+          <label>Heading deg <input id="robotTheta" type="number" step="1" value="0"></label>
+          <label>Goal X <input id="goalX" type="number" step="0.1" value="4"></label>
+          <label>Goal Y <input id="goalY" type="number" step="0.1" value="0"></label>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>Humans</h2>
+          <div class="button-row">
+            <button id="addHuman" type="button">Add</button>
+            <button id="removeHuman" type="button">Remove</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>X</th>
+                <th>Y</th>
+                <th>Deg</th>
+                <th>Speed</th>
+                <th>Goal X</th>
+                <th>Goal Y</th>
+              </tr>
+            </thead>
+            <tbody id="humanTableBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>Presets</h2>
+          <button id="loadPreset" type="button">Load</button>
+        </div>
+        <select id="presetSelect">
+          <option value="crossing5">crossing5</option>
+          <option value="gate8">gate8</option>
+          <option value="cluster10">cluster10</option>
+        </select>
+      </section>
+
+      <section class="section">
+        <div class="button-grid">
+          <button id="exportJson" type="button">Download JSON</button>
+          <label class="file-button">
+            Import JSON
+            <input id="importJson" type="file" accept="application/json">
+          </label>
+          <button id="copyEvalCommand" type="button">Copy Command</button>
+        </div>
+        <textarea id="evalCommand" rows="3" readonly></textarea>
+        <textarea id="jsonPreview" rows="8" readonly></textarea>
+      </section>
+    </section>
+
+    <section class="canvas-panel">
+      <canvas id="mapCanvas" width="760" height="760"></canvas>
+      <div id="warnings" class="warnings"></div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

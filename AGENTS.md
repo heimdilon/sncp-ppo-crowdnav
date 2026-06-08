@@ -32,6 +32,8 @@
   approach 1, non-reactive pedestrians, speed parity, and AutoNCP unchanged.
 - **Workflow:** training runs on **Google Colab** (local GPU is too slow); commits go **directly to
   `main`**, which Colab pulls. TDD is used for all code changes. See §6–§7.
+- **Custom map testing:** `custom_map_app/index.html` is a static browser editor for hand-authored
+  scenarios; it exports JSON consumed by `evaluate_custom_scenario.py`.
 - **Detailed cross-session log** lives OUTSIDE the repo in the Claude auto-memory (§11).
 
 ---
@@ -211,6 +213,9 @@ CrowdSimEnv(num_humans=5, time_step=0.25, max_time=50.0, scenario='circle',
 - `reset()` randomizes robot angle on the circle + random heading + antipodal goal + pedestrian layout,
   using `self.np_random` (seeded per sub-env). Scenario block sets `human_vpref` (all ≤0.26 in v15):
   easy 0.13 / easy_plus 0.18 / medium 0.22 / hard 0.26 / extreme 0.26(random layout) / else 0.26.
+- Custom test maps can set per-human speeds through `humans_vpref` and can use
+  `human_motion_model='linear'` for fixed heading/speed playback. The default remains
+  `human_motion_model='sfm'`, so training behavior is unchanged.
 - Terminal: `terminated = collision or reached_goal`; `truncated = timeout (current_time ≥ max_time)`.
   `info` has `success, collision, timeout, comfort, d_min, I_sp`.
 
@@ -321,6 +326,18 @@ python visualize_trajectory_gif.py --checkpoint <ckpt>.pt --num_humans 10 --scen
   results are preserved (v13, v14, v15, …). Downloaded checkpoints often land at repo root or `colabout/`.
 - `test_eval.py --num_humans` must match the intended density; scenario sets speed + layout.
 
+**Custom map tester (manual model probes):**
+```bash
+# Open directly in a browser; no dev server is required.
+custom_map_app/index.html
+
+# Put exported JSON under custom_scenarios/, then run:
+python evaluate_custom_scenario.py --scenario custom_scenarios/example_crossing.json --checkpoint checkpoints/sncp_ppo_v17.pt --output custom_eval/example_crossing.png --summary custom_eval/example_crossing.json
+```
+- The editor controls robot start, robot heading, robot goal, human positions, human headings, per-human
+  speeds, human goals, motion model (`linear` vs `sfm`), max time, and timestep. It warns on initial
+  overlaps and speeds above TurtleBot parity. `custom_eval/` is git-ignored runtime output.
+
 ---
 
 ## 9. Success criteria — what "working" means (read this before celebrating a number)
@@ -366,7 +383,7 @@ success collapsing toward 0 with rising timeout. If seen, lower the comfort coef
 
 ---
 
-## 11. Tests (`pytest`, ~94 passing)
+## 11. Tests (`pytest`, ~98 passing)
 
 | File | Covers |
 |---|---|
@@ -388,6 +405,8 @@ success collapsing toward 0 with rising timeout. If seen, lower the comfort coef
 | `test_artifact_verifier.py` | final v16 artifact completeness and gate verification |
 | `test_post_run_pipeline.py` | one-command post-run pipeline orchestration and current Colab eval/training-cell wiring |
 | `test_v16_run_readiness.py` | pre-A100 current-run notebook/baseline readiness checks |
+| `test_custom_scenario.py` | custom scenario JSON loading, env application, per-human speeds, linear motion, episode-runner metrics |
+| `test_custom_map_app.py` | static custom map editor exposes required controls and evaluation command wiring |
 | `test_eval.py` | (CLI eval script, not a pytest module) |
 
 Run all: `python -m pytest -q`. After any reward/curriculum/default change, **update the tests that
