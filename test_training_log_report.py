@@ -31,14 +31,23 @@ def _write_csv(path, rows):
         "holdout_easy_collision",
         "holdout_easy_timeout",
         "holdout_easy_reward",
+        "holdout_easy_avg_steps",
+        "holdout_easy_avg_I_sp",
+        "holdout_easy_min_d_min",
         "holdout_hard_success",
         "holdout_hard_collision",
         "holdout_hard_timeout",
         "holdout_hard_reward",
+        "holdout_hard_avg_steps",
+        "holdout_hard_avg_I_sp",
+        "holdout_hard_min_d_min",
         "holdout_circle_success",
         "holdout_circle_collision",
         "holdout_circle_timeout",
         "holdout_circle_reward",
+        "holdout_circle_avg_steps",
+        "holdout_circle_avg_I_sp",
+        "holdout_circle_min_d_min",
     ]
     lines = [",".join(header)]
     for row in rows:
@@ -88,8 +97,26 @@ def test_analyze_training_log_detects_holdout_collapse_and_replay_fraction(tmp_p
                 "is_best_checkpoint": 1,
                 "best_reason": "best updated",
                 "holdout_easy_success": 0.60,
+                "holdout_easy_collision": 0.10,
+                "holdout_easy_timeout": 0.30,
+                "holdout_easy_reward": -1.0,
+                "holdout_easy_avg_steps": 150.0,
+                "holdout_easy_avg_I_sp": 0.010,
+                "holdout_easy_min_d_min": 0.90,
                 "holdout_hard_success": 0.50,
+                "holdout_hard_collision": 0.20,
+                "holdout_hard_timeout": 0.30,
+                "holdout_hard_reward": -2.0,
+                "holdout_hard_avg_steps": 170.0,
+                "holdout_hard_avg_I_sp": 0.020,
+                "holdout_hard_min_d_min": 0.70,
                 "holdout_circle_success": 0.40,
+                "holdout_circle_collision": 0.30,
+                "holdout_circle_timeout": 0.30,
+                "holdout_circle_reward": -3.0,
+                "holdout_circle_avg_steps": 190.0,
+                "holdout_circle_avg_I_sp": 0.030,
+                "holdout_circle_min_d_min": 0.60,
             },
             {
                 "episode": 400,
@@ -101,8 +128,26 @@ def test_analyze_training_log_detects_holdout_collapse_and_replay_fraction(tmp_p
                 "std_angular": 0.50,
                 "is_best_checkpoint": 0,
                 "holdout_easy_success": 0.10,
+                "holdout_easy_collision": 0.05,
+                "holdout_easy_timeout": 0.85,
+                "holdout_easy_reward": -4.0,
+                "holdout_easy_avg_steps": 199.0,
+                "holdout_easy_avg_I_sp": 0.005,
+                "holdout_easy_min_d_min": 1.10,
                 "holdout_hard_success": 0.00,
+                "holdout_hard_collision": 0.75,
+                "holdout_hard_timeout": 0.25,
+                "holdout_hard_reward": -18.0,
+                "holdout_hard_avg_steps": 80.0,
+                "holdout_hard_avg_I_sp": 0.040,
+                "holdout_hard_min_d_min": 0.40,
                 "holdout_circle_success": 0.00,
+                "holdout_circle_collision": 0.90,
+                "holdout_circle_timeout": 0.10,
+                "holdout_circle_reward": -21.0,
+                "holdout_circle_avg_steps": 65.0,
+                "holdout_circle_avg_I_sp": 0.050,
+                "holdout_circle_min_d_min": 0.35,
             },
         ],
     )
@@ -171,8 +216,26 @@ def test_training_diagnostic_writers_include_best_final_and_collapse(tmp_path):
                 "is_best_checkpoint": 1,
                 "best_reason": "best updated",
                 "holdout_easy_success": 0.50,
+                "holdout_easy_collision": 0.10,
+                "holdout_easy_timeout": 0.40,
+                "holdout_easy_reward": -1.0,
+                "holdout_easy_avg_steps": 150.0,
+                "holdout_easy_avg_I_sp": 0.010,
+                "holdout_easy_min_d_min": 0.90,
                 "holdout_hard_success": 0.40,
+                "holdout_hard_collision": 0.20,
+                "holdout_hard_timeout": 0.40,
+                "holdout_hard_reward": -2.0,
+                "holdout_hard_avg_steps": 170.0,
+                "holdout_hard_avg_I_sp": 0.020,
+                "holdout_hard_min_d_min": 0.70,
                 "holdout_circle_success": 0.30,
+                "holdout_circle_collision": 0.30,
+                "holdout_circle_timeout": 0.40,
+                "holdout_circle_reward": -3.0,
+                "holdout_circle_avg_steps": 190.0,
+                "holdout_circle_avg_I_sp": 0.030,
+                "holdout_circle_min_d_min": 0.60,
             },
             {
                 "episode": 200,
@@ -184,8 +247,26 @@ def test_training_diagnostic_writers_include_best_final_and_collapse(tmp_path):
                 "std_angular": 0.45,
                 "is_best_checkpoint": 0,
                 "holdout_easy_success": 0.10,
+                "holdout_easy_collision": 0.05,
+                "holdout_easy_timeout": 0.85,
+                "holdout_easy_reward": -4.0,
+                "holdout_easy_avg_steps": 199.0,
+                "holdout_easy_avg_I_sp": 0.005,
+                "holdout_easy_min_d_min": 1.10,
                 "holdout_hard_success": 0.00,
+                "holdout_hard_collision": 0.75,
+                "holdout_hard_timeout": 0.25,
+                "holdout_hard_reward": -18.0,
+                "holdout_hard_avg_steps": 80.0,
+                "holdout_hard_avg_I_sp": 0.040,
+                "holdout_hard_min_d_min": 0.40,
                 "holdout_circle_success": 0.00,
+                "holdout_circle_collision": 0.90,
+                "holdout_circle_timeout": 0.10,
+                "holdout_circle_reward": -21.0,
+                "holdout_circle_avg_steps": 65.0,
+                "holdout_circle_avg_I_sp": 0.050,
+                "holdout_circle_min_d_min": 0.35,
             },
         ],
     )
@@ -200,12 +281,18 @@ def test_training_diagnostic_writers_include_best_final_and_collapse(tmp_path):
     assert data["best_step"] == 100
     assert data["collapse_detected"] is True
     assert data["final_std_angular"] == 0.45
+    assert data["final_collision_by_scenario"]["circle"] == 0.90
+    assert data["final_timeout_by_scenario"]["easy"] == 0.85
+    assert data["final_avg_steps_by_scenario"]["easy"] == 199.0
+    assert data["final_avg_I_sp_by_scenario"]["circle"] == 0.050
 
     report = report_path.read_text(encoding="utf-8")
     assert "Collapse detected: yes" in report
     assert "Best min success: 30.0%" in report
     assert "Final min success: 0.0%" in report
     assert "Final std angular: 0.450" in report
+    assert "## Per-Scenario Failure Profile" in report
+    assert "| circle | 0.0% | 90.0% | 10.0% | 65.0 | 0.050 | 0.350 |" in report
 
 
 def test_training_log_cli_writes_json_and_markdown(tmp_path, capsys):

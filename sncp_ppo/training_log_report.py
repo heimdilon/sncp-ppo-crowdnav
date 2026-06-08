@@ -20,10 +20,22 @@ class TrainingLogSummary:
     best_step: int
     best_min_success: float
     best_success_by_scenario: dict[str, float]
+    best_collision_by_scenario: dict[str, float | None]
+    best_timeout_by_scenario: dict[str, float | None]
+    best_reward_by_scenario: dict[str, float | None]
+    best_avg_steps_by_scenario: dict[str, float | None]
+    best_avg_I_sp_by_scenario: dict[str, float | None]
+    best_min_d_min_by_scenario: dict[str, float | None]
     best_reason: str
     final_step: int
     final_min_success: float
     final_success_by_scenario: dict[str, float]
+    final_collision_by_scenario: dict[str, float | None]
+    final_timeout_by_scenario: dict[str, float | None]
+    final_reward_by_scenario: dict[str, float | None]
+    final_avg_steps_by_scenario: dict[str, float | None]
+    final_avg_I_sp_by_scenario: dict[str, float | None]
+    final_min_d_min_by_scenario: dict[str, float | None]
     collapse_delta: float
     collapse_detected: bool
     final_std_linear: float | None
@@ -60,6 +72,18 @@ def _success_by_scenario(row: dict[str, str], scenarios: Sequence[str]) -> dict[
         if math.isnan(value):
             return None
         values[scenario] = value
+    return values
+
+
+def _metric_by_scenario(
+    row: dict[str, str],
+    scenarios: Sequence[str],
+    suffix: str,
+) -> dict[str, float | None]:
+    values: dict[str, float | None] = {}
+    for scenario in scenarios:
+        value = _parse_float(row.get(f"holdout_{scenario}_{suffix}"))
+        values[scenario] = None if math.isnan(value) else value
     return values
 
 
@@ -158,10 +182,22 @@ def analyze_training_log(
         best_step=_row_step(best_row),
         best_min_success=best_min_success,
         best_success_by_scenario=best_successes,
+        best_collision_by_scenario=_metric_by_scenario(best_row, scenarios, "collision"),
+        best_timeout_by_scenario=_metric_by_scenario(best_row, scenarios, "timeout"),
+        best_reward_by_scenario=_metric_by_scenario(best_row, scenarios, "reward"),
+        best_avg_steps_by_scenario=_metric_by_scenario(best_row, scenarios, "avg_steps"),
+        best_avg_I_sp_by_scenario=_metric_by_scenario(best_row, scenarios, "avg_I_sp"),
+        best_min_d_min_by_scenario=_metric_by_scenario(best_row, scenarios, "min_d_min"),
         best_reason=best_row.get("best_reason", ""),
         final_step=_row_step(final_row),
         final_min_success=final_min_success,
         final_success_by_scenario=final_successes,
+        final_collision_by_scenario=_metric_by_scenario(final_row, scenarios, "collision"),
+        final_timeout_by_scenario=_metric_by_scenario(final_row, scenarios, "timeout"),
+        final_reward_by_scenario=_metric_by_scenario(final_row, scenarios, "reward"),
+        final_avg_steps_by_scenario=_metric_by_scenario(final_row, scenarios, "avg_steps"),
+        final_avg_I_sp_by_scenario=_metric_by_scenario(final_row, scenarios, "avg_I_sp"),
+        final_min_d_min_by_scenario=_metric_by_scenario(final_row, scenarios, "min_d_min"),
         collapse_delta=collapse_delta,
         collapse_detected=collapse_delta <= -collapse_threshold,
         final_std_linear=final_std_linear,
@@ -183,8 +219,16 @@ def _format_rate(value: float) -> str:
     return f"{value:.1%}"
 
 
+def _format_optional_rate(value: float | None) -> str:
+    return "n/a" if value is None else _format_rate(value)
+
+
 def _format_optional_float(value: float | None) -> str:
     return "not logged" if value is None else f"{value:.3f}"
+
+
+def _format_table_float(value: float | None, digits: int = 3) -> str:
+    return "n/a" if value is None else f"{value:.{digits}f}"
 
 
 def write_training_diagnostic_report(summary: TrainingLogSummary, path: str | Path) -> None:
@@ -235,6 +279,27 @@ def write_training_diagnostic_report(summary: TrainingLogSummary, path: str | Pa
         final = summary.final_success_by_scenario[scenario]
         lines.append(
             f"| {scenario} | {_format_rate(best)} | {_format_rate(final)} | {final - best:+.1%} |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "## Per-Scenario Failure Profile",
+            "",
+            "| Scenario | Final success | Final collision | Final timeout | Final avg steps | Final avg I_sp | Final min d_min |",
+            "|---|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for scenario in summary.holdout_scenarios:
+        lines.append(
+            "| "
+            f"{scenario} | "
+            f"{_format_rate(summary.final_success_by_scenario[scenario])} | "
+            f"{_format_optional_rate(summary.final_collision_by_scenario[scenario])} | "
+            f"{_format_optional_rate(summary.final_timeout_by_scenario[scenario])} | "
+            f"{_format_table_float(summary.final_avg_steps_by_scenario[scenario], digits=1)} | "
+            f"{_format_table_float(summary.final_avg_I_sp_by_scenario[scenario])} | "
+            f"{_format_table_float(summary.final_min_d_min_by_scenario[scenario])} |"
         )
 
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")

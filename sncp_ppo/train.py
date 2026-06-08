@@ -101,6 +101,9 @@ def evaluate_holdout(env, policy, agent, device, n_episodes, scenario, base_seed
     collisions = 0
     timeouts = 0
     rewards = []
+    step_counts = []
+    episode_avg_i_sp = []
+    episode_min_d_min = []
     max_steps = int(env.max_time / env.time_step) + 1
 
     for ep in range(n_episodes):
@@ -108,16 +111,31 @@ def evaluate_holdout(env, policy, agent, device, n_episodes, scenario, base_seed
         h_states = policy.init_hidden(batch_size=1, num_humans=env.num_humans, device=device)
         ep_reward = 0.0
         info = {'success': False, 'collision': False, 'timeout': False}
+        step_count = 0
+        i_sp_values = []
+        d_min_values = []
 
         for _ in range(max_steps):
             action, _, _, h_states = agent.select_action(obs, h_states, device, deterministic=True)
             env_action = PPOAgent.clip_action_for_env(action, env.robot_vpref, env.robot_wmax)
             obs, r, terminated, truncated, info = env.step(env_action)
             ep_reward += r
+            step_count += 1
+            i_sp = float(info.get('I_sp', float('nan')))
+            d_min = float(info.get('d_min', float('nan')))
+            if i_sp == i_sp:
+                i_sp_values.append(i_sp)
+            if d_min == d_min and np.isfinite(d_min):
+                d_min_values.append(d_min)
             if terminated or truncated:
                 break
 
         rewards.append(ep_reward)
+        step_counts.append(step_count)
+        if i_sp_values:
+            episode_avg_i_sp.append(float(np.mean(i_sp_values)))
+        if d_min_values:
+            episode_min_d_min.append(float(np.min(d_min_values)))
         if info.get('success'):
             successes += 1
         elif info.get('collision'):
@@ -135,7 +153,41 @@ def evaluate_holdout(env, policy, agent, device, n_episodes, scenario, base_seed
         'collision_rate': collisions / n_episodes,
         'timeout_rate': timeouts / n_episodes,
         'avg_reward': float(np.mean(rewards)),
+        'avg_steps': float(np.mean(step_counts)),
+        'avg_I_sp': float(np.mean(episode_avg_i_sp)) if episode_avg_i_sp else float('nan'),
+        'min_d_min': float(np.min(episode_min_d_min)) if episode_min_d_min else float('nan'),
     }
+
+
+HOLDOUT_CSV_FIELDS = [
+    ('success', 'success_rate'),
+    ('collision', 'collision_rate'),
+    ('timeout', 'timeout_rate'),
+    ('reward', 'avg_reward'),
+    ('avg_steps', 'avg_steps'),
+    ('avg_I_sp', 'avg_I_sp'),
+    ('min_d_min', 'min_d_min'),
+]
+
+
+def holdout_csv_columns(scenarios):
+    columns = []
+    for sc in scenarios:
+        columns.extend(f'holdout_{sc}_{csv_name}' for csv_name, _ in HOLDOUT_CSV_FIELDS)
+    return columns
+
+
+def empty_holdout_result():
+    return {result_key: float('nan') for _, result_key in HOLDOUT_CSV_FIELDS}
+
+
+def holdout_csv_row(holdout_per_scenario, scenarios):
+    row = []
+    for sc in scenarios:
+        result = holdout_per_scenario[sc]
+        for _, result_key in HOLDOUT_CSV_FIELDS:
+            row.append(f"{result[result_key]:.4f}")
+    return row
 
 
 UPDATE_DIAGNOSTIC_COLUMNS = [
@@ -230,23 +282,16 @@ def train(args):
     log_path = os.path.join('logs', f"training_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
     csv_file = open(log_path, 'w', newline='')
     csv_writer = csv.writer(csv_file)
-    # Dynamic CSV header: one 4-tuple per holdout scenario
-    holdout_cols = []
-    for sc in args.holdout_scenarios:
-        holdout_cols += [f'holdout_{sc}_success', f'holdout_{sc}_collision',
-                         f'holdout_{sc}_timeout', f'holdout_{sc}_reward']
     csv_writer.writerow([
         'episode', 'scenario', 'num_humans', 'human_vpref', 'is_replay_update',
         'steps', 'reward', 'success', 'collision', 'timeout', 'comfort',
         *UPDATE_DIAGNOSTIC_COLUMNS,
         'is_best_checkpoint', 'best_reason',
-    ] + holdout_cols)
+    ] + holdout_csv_columns(args.holdout_scenarios))
     print(f"CSV log: {log_path}")
 
     # Multi-scenario holdout state: dict of per-scenario last results + best generalist
-    nan_result = {'success_rate': float('nan'), 'collision_rate': float('nan'),
-                  'timeout_rate': float('nan'), 'avg_reward': float('nan')}
-    last_holdout_per_scenario = {sc: dict(nan_result) for sc in args.holdout_scenarios}
+    last_holdout_per_scenario = {sc: empty_holdout_result() for sc in args.holdout_scenarios}
     best_holdout_min_success = -1.0  # generalist metric: min across scenarios
     best_holdout_score = (-1.0, -float('inf'), -float('inf'))  # (min_success, avg_reward, -collision_rate)
     holdout_eval_count = 0
@@ -451,11 +496,7 @@ def train(args):
                 print(f"  --> {best_reason}")
 
         # Per-episode CSV row (dynamic per-scenario holdout tail)
-        ho_row = []
-        for sc in args.holdout_scenarios:
-            r = last_holdout_per_scenario[sc]
-            ho_row += [f"{r['success_rate']:.4f}", f"{r['collision_rate']:.4f}",
-                       f"{r['timeout_rate']:.4f}", f"{r['avg_reward']:.4f}"]
+        ho_row = holdout_csv_row(last_holdout_per_scenario, args.holdout_scenarios)
         # Best-effort CSV write. On Colab the log dir sometimes lives behind a
         # FUSE mount (Drive) that can disconnect mid-run; if the underlying
         # write/flush fails, drop this row rather than tearing down the whole
@@ -647,9 +688,7 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
             'temporal_edges': torch.tensor(o['temporal_edges'], dtype=torch.float32, device=device),
         }
 
-    nan_result = {'success_rate': float('nan'), 'collision_rate': float('nan'),
-                  'timeout_rate': float('nan'), 'avg_reward': float('nan')}
-    last_holdout_per_scenario = {sc: dict(nan_result) for sc in args.holdout_scenarios}
+    last_holdout_per_scenario = {sc: empty_holdout_result() for sc in args.holdout_scenarios}
     best_holdout_min_success = -1.0
     best_holdout_score = (-1.0, -float('inf'), -float('inf'))
     holdout_eval_count = 0
@@ -780,11 +819,7 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
                                '(priority: min_success, tie-break: avg_reward, lower collision_rate)')
                 print(f"  --> {best_reason}")
 
-        ho_row = []
-        for sc in args.holdout_scenarios:
-            r = last_holdout_per_scenario[sc]
-            ho_row += [f"{r['success_rate']:.4f}", f"{r['collision_rate']:.4f}",
-                       f"{r['timeout_rate']:.4f}", f"{r['avg_reward']:.4f}"]
+        ho_row = holdout_csv_row(last_holdout_per_scenario, args.holdout_scenarios)
         try:
             csv_writer.writerow([
                 total_steps, scenario, H, vpref, int(is_replay_update), T,

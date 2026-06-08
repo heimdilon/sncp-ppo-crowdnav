@@ -6,7 +6,7 @@ import sys
 
 import torch
 
-from sncp_ppo.train import _train_vectorized, step_to_phase, SCENARIO_HOLDOUT_CONFIG
+from sncp_ppo.train import _train_vectorized, evaluate_holdout, step_to_phase, SCENARIO_HOLDOUT_CONFIG
 
 
 VECTOR_LOG_HEADER = [
@@ -15,8 +15,11 @@ VECTOR_LOG_HEADER = [
     'entropy', 'approx_kl', 'std_linear', 'std_angular', 'return_rms_std',
     'is_best_checkpoint', 'best_reason',
     'holdout_easy_success', 'holdout_easy_collision', 'holdout_easy_timeout',
-    'holdout_easy_reward', 'holdout_hard_success', 'holdout_hard_collision',
-    'holdout_hard_timeout', 'holdout_hard_reward',
+    'holdout_easy_reward', 'holdout_easy_avg_steps', 'holdout_easy_avg_I_sp',
+    'holdout_easy_min_d_min',
+    'holdout_hard_success', 'holdout_hard_collision',
+    'holdout_hard_timeout', 'holdout_hard_reward', 'holdout_hard_avg_steps',
+    'holdout_hard_avg_I_sp', 'holdout_hard_min_d_min',
 ]
 
 
@@ -115,8 +118,37 @@ def test_vectorized_runs_with_curriculum_holdout_and_saves(tmp_path):
     assert rows[-1]['is_best_checkpoint'] == '1'
     assert rows[-1]['holdout_easy_success'] != 'nan'
     assert rows[-1]['holdout_hard_success'] != 'nan'
+    for key in ['holdout_easy_avg_steps', 'holdout_hard_avg_I_sp', 'holdout_hard_min_d_min']:
+        assert rows[-1][key] not in ('', None, 'nan')
+        assert float(rows[-1][key]) == float(rows[-1][key])
     _assert_finite_update_diagnostics(rows[-1])
     assert save_path.exists() or os.path.exists(str(save_path).replace('.pt', '_final.pt'))
+
+
+def test_evaluate_holdout_returns_behavior_diagnostics():
+    from crowd_sim.crowd_env import CrowdSimEnv
+    from sncp_ppo.models import SNCPPolicy
+    from sncp_ppo.ppo import PPOAgent
+
+    device = torch.device('cpu')
+    env = CrowdSimEnv(num_humans=1, scenario='easy', max_time=1.0)
+    policy = SNCPPolicy(robot_vpref=env.robot_vpref, robot_wmax=env.robot_wmax).to(device)
+    agent = PPOAgent(policy=policy, epochs=1, batch_size=2, seq_len=4)
+
+    result = evaluate_holdout(
+        env,
+        policy,
+        agent,
+        device,
+        n_episodes=1,
+        scenario='easy',
+        base_seed=123,
+    )
+
+    assert result['avg_steps'] > 0.0
+    assert result['avg_I_sp'] >= 0.0
+    assert result['min_d_min'] >= 0.0
+    assert result['avg_reward'] == result['avg_reward']
 
 
 def test_compute_total_updates_vectorized_vs_single():

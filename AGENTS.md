@@ -30,6 +30,9 @@
   N=1 timeout 60%. v17 implements the next single-variable candidate: configurable `comfort_coeff` with
   v15/v16 default **6.0**, and the Colab run set to **5.0** while keeping replay 0.20, max_time 50,
   approach 1, non-reactive pedestrians, speed parity, and AutoNCP unchanged.
+  User-provided v17 stdout through update ~1120 (~92%) shows technical stability but weak performance:
+  best generalist min stayed at 16% from update 310, and circle/N=10 holdouts remained mostly 0-2%.
+  Treat v17 as likely failed unless final artifacts contradict that; download CSV/checkpoint for diagnosis.
 - **Workflow:** training runs on **Google Colab** (local GPU is too slow); commits go **directly to
   `main`**, which Colab pulls. TDD is used for all code changes. See §6–§7.
 - **Custom map testing:** `custom_map_app/index.html` is a static browser editor for hand-authored
@@ -244,7 +247,9 @@ CrowdSimEnv(num_humans=5, time_step=0.25, max_time=50.0, scenario='circle',
   subsequences); KL early-stop (`target_kl`, default 0.01); return RMS normalization; clipped value loss.
 - **Training CSV diagnostics (v16+):** rows include `is_replay_update`, `entropy`, `approx_kl`,
   `std_linear`, `std_angular`, and `return_rms_std` so replay fraction and policy-std drift are auditable
-  from the CSV, not only from stdout.
+  from the CSV, not only from stdout. Newer logs also include holdout `avg_steps`, `avg_I_sp`, and
+  `min_d_min` per scenario in addition to success/collision/timeout/reward, so a `min_success=0` can be
+  diagnosed as timeout/freezing vs collision vs social-distance behavior.
 - Robust saves: `torch.save` wrapped in try/except with a `/content` fallback (Colab disconnect safety).
   A `_final.pt` variant may also be written.
 
@@ -384,7 +389,7 @@ success collapsing toward 0 with rising timeout. If seen, lower the comfort coef
 
 ---
 
-## 11. Tests (`pytest`, ~99 passing)
+## 11. Tests (`pytest`, ~100 passing)
 
 | File | Covers |
 |---|---|
@@ -397,12 +402,12 @@ success collapsing toward 0 with rising timeout. If seen, lower the comfort coef
 | `test_reward_paper.py` | goal +20, collision −20, default **comfort −6·I_sp**, configurable v17 comfort coefficient, **approach 1·Δd**, max_time 50 |
 | `test_pedestrian_reactive.py` | **default is non-reactive**; reactive flag still works (keeps more clearance) |
 | `test_speed_parity.py` | every scenario's `human_vpref ≤ robot_vpref` |
-| `test_vec_curriculum.py` | `step_to_phase` boundaries/values, parity, N=10 holdout, vectorized replay selection/logging, vectorized run smoke, `compute_total_updates` |
+| `test_vec_curriculum.py` | `step_to_phase` boundaries/values, parity, N=10 holdout, vectorized replay selection/logging, holdout behavioral diagnostics, vectorized run smoke, `compute_total_updates` |
 | `test_vec_gae.py`, `test_vec_buffer.py` | GAE + buffer correctness |
 | `test_train_config.py` | training parser exposes `--comfort_coeff` while defaulting to v15/v16 coefficient 6.0 |
 | `test_train_eta.py` | training ETA output |
 | `test_eval_report.py` | density-sweep report aggregation, artifact writing, nav-time plot, v15/v16 comparison gates, and CLI argument wiring |
-| `test_training_log_report.py` | training CSV diagnostics: best/final holdout, replay fraction, collapse report, CLI |
+| `test_training_log_report.py` | training CSV diagnostics: best/final holdout, replay fraction, collapse report, per-scenario failure profile, CLI |
 | `test_artifact_verifier.py` | final v16 artifact completeness and gate verification |
 | `test_post_run_pipeline.py` | one-command post-run pipeline orchestration and current Colab eval/training-cell wiring |
 | `test_v16_run_readiness.py` | pre-A100 current-run notebook/baseline readiness checks |
@@ -444,14 +449,18 @@ assert the old value** (they are intentional guards, not bugs) and keep the suit
 Goal: recover v15's genuine avoidance while reducing the timeout/freezing introduced by v16 replay, then
 lift N=10. The next run should still change **one variable only**.
 
-1. **v17 comfort-tuning code is ready on `main`; Colab run pending.**
+1. **v17 comfort-tuning code is ready on `main`; Colab run in progress / likely weak from stdout.**
    Implementation: `CrowdSimEnv(..., comfort_coeff=6.0)` preserves v15/v16 by default; `sncp_ppo.train`
    exposes `--comfort_coeff`; the Colab full-training cell now writes `checkpoints/sncp_ppo_v17.pt`,
    uses `COMFORT_COEFF = 5.0`, passes `--comfort_coeff 5.0`, evaluates into `eval_v17/`, and preserves
    the v17 artifact bundle. Local verification: custom comfort test failed red, parser test failed red,
    notebook/readiness tests failed red against v16 config, then all passed after implementation.
    Targeted suite: `28 passed`; v17 vectorized smoke with `--comfort_coeff 5.0` exited 0 and logged replay
-   phase shifts; full regression: `94 passed in 32.89s`.
+   phase shifts; full regression at implementation time: `94 passed in 32.89s`. Later user stdout through
+   update ~1120 showed stable PPO (`std` about `[0.156, 0.239]`, KL mostly low) but no generalist lift:
+   best min remained 16% from update 310 and N=10/circle holdouts stayed mostly 0-2%.
+   Final verdict still requires the downloaded checkpoint, training CSV, density sweep, trajectories,
+   and artifact verifier output.
 2. **Experiment hypothesis: relax comfort `-6 -> -5`, keep everything else fixed.**
    Evidence: v16 preserved wide detours and lowered `I_sp` versus v15, but success fell where timeout rose
    (N=1 timeout 60%, N=5/8 timeout 26%) and low-density collision was already very low (N=1 collision 4%).
@@ -464,6 +473,10 @@ lift N=10. The next run should still change **one variable only**.
 4. **High-density capacity remains unproven.** v16 N=10 collision stayed high (44%) but capacity is not
    proven as the bottleneck because the same checkpoint already fails lower-density timeout/success gates.
    Keep AutoNCP unchanged until replay + over-conservatism evidence is exhausted.
+5. **Before v18, analyze the completed v17 CSV with the per-scenario failure profile.** New training logs
+   include holdout success/collision/timeout/reward/avg_steps/avg_I_sp/min_d_min; `analyze_training_log.py`
+   writes those into `training_diagnostics.md/json`. Use that evidence to separate collision-dominant N=10
+   failure from timeout/freezing or easy/hard forgetting before changing another training variable.
 
 Re-evaluate every candidate with the same §9 criteria and `eval_v15/` baseline: success across
 N=1/3/5/8/10, collision, timeout/freezing, nav-time above the v14 121.5-step beeline, low `I_sp`, and
