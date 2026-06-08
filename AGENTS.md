@@ -20,23 +20,34 @@
   PDF `s12369-026-01389-9.pdf` in repo root, **git-ignored**).
 - Stack: Python, PyTorch, Gymnasium, **`ncps`** (Liquid Time-Constant / Neural Circuit Policies), pytest.
 - Robot = **TurtleBot3 Waffle**, max linear speed **0.26 m/s** (real hardware), wmax 1.8, radius 0.3.
-- **Current head state: v17 code-ready / Colab run pending.** v15 proved *genuine*
-  collision-avoidance + social-distance keeping (it detours around pedestrians) — the long-standing
-  "beeline" problem is solved. v16 added vectorized anti-forgetting replay
+- **Current head state: v18 reward-restoration candidate code-ready / Colab run pending.** v15 proved
+  *genuine* collision-avoidance + social-distance keeping (it detours around pedestrians) - the
+  long-standing "beeline" problem is solved. v16 added vectorized anti-forgetting replay
   (`--curriculum_replay_ratio=0.20`) and did reduce the v15 late-collapse failure mode, but the final
   artifact gate is **fail**: `eval_v16/comparison_vs_v15.md` shows success regressions at N=1/5/8 and no
   N=10 lift. Real avoidance is still preserved (wide-detour trajectories, nav-time 166-182 steps vs the
   v14 121.5-step beeline, lower `I_sp`), but v16 is over-conservative and timeout-heavy, especially
-  N=1 timeout 60%. v17 implements the next single-variable candidate: configurable `comfort_coeff` with
-  v15/v16 default **6.0**, and the Colab run set to **5.0** while keeping replay 0.20, max_time 50,
-  approach 1, non-reactive pedestrians, speed parity, and AutoNCP unchanged.
-  User-provided v17 stdout through update ~1120 (~92%) shows technical stability but weak performance:
-  best generalist min stayed at 16% from update 310, and circle/N=10 holdouts remained mostly 0-2%.
-  Treat v17 as likely failed unless final artifacts contradict that; download CSV/checkpoint for diagnosis.
+  **N=1 timeout 60% with `I_sp≈0.009`** (nothing to avoid → goal-reaching itself is broken). v17 tested
+  comfort **6.0 -> 5.0** but produced no usable checkpoint/artifacts; treat it as **discarded/no-artifact
+  fail**.
+- **v18 = paper-faithful goal-reward restoration (the previous "max_time 50→60" pick is rejected as a
+  symptom fix).** v18 changes ONE concept vs v16: `crowd_env.py` `r_g` → paper Eq 18 — approach
+  coefficient `1 → 2·Δd` and the ad-hoc `-weight*|angle_diff|` heading penalty REMOVED (the paper has no
+  heading term). Comfort `6.0`, `max_time 50`, replay `0.20`, non-reactive pedestrians, speed parity,
+  AutoNCP all unchanged. Rationale: the N=1 timeout (above) is a goal-reaching breakdown, not avoidance;
+  v15 had halved the progress reward AND added a heading penalty (up to 0.157/step) larger than the max
+  per-step progress reward (0.065 at 0.26 m/s), so the policy optimised heading over arrival. **NB:** the
+  "reward eliminated at v13" conclusion (§3) is over-generalised — v13 tested the paper reward in an
+  *infeasible* env (non-reactive peds at 0.5 m/s, ~2× robot), and the heading penalty (added in the v15
+  bundle) was never ablated; the paper `r_g` has never been tested in the *feasible* (parity) env. v18
+  tests exactly that untested combination. High-density collisions remain a separate issue (crowd
+  reactivity / comfort / speed) deferred to the v19/v20 roadmap (§13).
 - **Workflow:** training runs on **Google Colab** (local GPU is too slow); commits go **directly to
   `main`**, which Colab pulls. TDD is used for all code changes. See §6–§7.
 - **Custom map testing:** `custom_map_app/index.html` is a static browser editor for hand-authored
-  scenarios; it exports JSON consumed by `evaluate_custom_scenario.py`.
+  scenarios; it exports JSON consumed by `evaluate_custom_scenario.py`. The custom evaluator now records
+  raw actions, clipped env actions, linear/angular speed traces, and braking metrics so "doesn't stop /
+  doesn't reverse / turns too mildly before collision" can be measured instead of guessed.
 - **Detailed cross-session log** lives OUTSIDE the repo in the Claude auto-memory (§11).
 
 ---
@@ -135,9 +146,16 @@ valuable context — it records what was *ruled out*, not just what was tried.
 | **v14** | **Two changes:** (a) **reactive** pedestrians (`human_dodge_robot=True`, cooperative crowd); (b) **true sparse NCP** (`AutoNCP`, replacing dense `FullyConnected` LTC) | Hit **~100%** — but trajectory/density analysis showed the robot **BEELINES** (straight line, constant 121.5 steps, the crowd yields). **Critical realization:** the paper uses **invisible-robot** pedestrians (CrowdNav default), so v14's reactivity made the task *easier* and the 100% is **not comparable** to the paper. The real gap is robot **speed**. The reactivity recommendation was a fidelity mistake; the NCP change was correct and kept. |
 | **v15** | **Revert to non-reactive** + **speed parity** (peds ≤0.26) + **strong comfort** (−6·I_sp) + **approach halved** (1·Δd) + **density curriculum to N=10** | ✅ genuine avoidance (detours, low I_sp). ⚠️ modest (peak 66%) + late collapse (no replay). See §2. |
 | **v16** | **Single variable:** vectorized anti-forgetting replay ratio 0.20; env/reward/model unchanged from v15 | ✅ collapse/stability improved (best holdout min 56%, final min 46%, stable std). ✅ real detours preserved. ❌ density sweep failed vs v15: N=1/5/8 success regressed, N=10 did not improve, N=1 timeout 60%. |
+| **v18** | **Single concept:** `r_g` → paper Eq 18 (approach `1 → 2·Δd`, **remove** the ad-hoc `-weight·|angle_diff|` heading penalty). Comfort 6.0 / max_time 50 / replay 0.20 / non-reactive / parity / AutoNCP unchanged. | _Colab run pending._ Hypothesis: the N=1 60%-timeout (with `I_sp≈0.009`, nothing to avoid) is a goal-reaching breakdown caused by the halved progress reward + a heading penalty that exceeds the max per-step progress reward, not by avoidance. Expect timeout↓ at low/mid density. |
 
-**Two bottlenecks were experimentally eliminated** (observation, reward-shaping). The dominant factors
-turned out to be **environment realism** (pedestrian reactivity) and **robot speed** — not the policy.
+**The "reward eliminated at v13" conclusion was over-generalised.** v13 tested the paper reward in an
+*infeasible* env (non-reactive pedestrians at ~0.5 m/s, ~2× the robot — it physically could not dodge),
+so *no* reward could have helped there. When v15 made the env feasible (speed parity ≤0.26) it
+*simultaneously* moved the reward away from the paper (approach 2→1, comfort 2→6, **added** a heading
+penalty). So the paper goal-reward has **never** been tested in the feasible env, and the heading
+penalty has **never** been ablated — that gap is exactly what v18 closes. Genuinely eliminated
+bottlenecks: **observation** (v12) and **LR-scheduler bug** (v11). Confirmed *high-density* factors:
+**pedestrian reactivity** and **robot speed** (these bound N=8–10, not the N=1 timeout).
 
 ---
 
@@ -285,19 +303,19 @@ honestly: real hardware speed + the chosen pedestrian model.
 
 **Training (Colab — the normal path; local GPU is ~5–7 s/step, too slow for full runs):**
 1. `sncp_ppo_colab.ipynb` cell-4: `git pull` (gets latest `main`).
-2. Run `python verify_v16_run_ready.py`; `eval_v17/run_readiness.md` should report `Overall status: pass`.
+2. Run `python verify_v16_run_ready.py`; `eval_v18/run_readiness.md` should report `Overall status: pass`.
 3. cell-14: launches `python -m sncp_ppo.train …` (A100, ~3–4 h). Edit `SAVE_PATH`, `--num_humans`,
-   `--total_steps`, `--holdout_scenarios`, `--curriculum_replay_ratio`, and `--comfort_coeff` there.
-   Current = v17 (num_humans 10, total_steps 2.5M, replay 0.20, comfort 5.0, holdout
-   `easy hard circle`, save path `checkpoints/sncp_ppo_v17.pt`). The cell raises `SystemExit` on a
-   nonzero training subprocess exit, so do not evaluate a failed run.
+   `--total_steps`, `--holdout_scenarios`, `--curriculum_replay_ratio`, `--comfort_coeff`, and
+   `--max_time` there. Current = v18 (num_humans 10, total_steps 2.5M, replay 0.20, comfort 6.0,
+   max_time 60.0, holdout `easy hard circle`, save path `checkpoints/sncp_ppo_v18.pt`). The cell raises
+   `SystemExit` on a nonzero training subprocess exit, so do not evaluate a failed run.
 4. cell-17: post-run evaluation pipeline (loads the saved best checkpoint, density sweep,
    v15 comparison, training diagnostics, artifact verification).
 5. Persist-results cell: set `DOWNLOAD = True` before the Colab session ends; it downloads the checkpoint,
-   latest training CSV, training curve, and `eval_v17_artifacts.zip` containing the full evidence bundle.
+   latest training CSV, training curve, and `eval_v18_artifacts.zip` containing the full evidence bundle.
 6. Put downloaded files under `colabout/`, then stage them into canonical paths:
-   `python stage_colab_run_artifacts.py --version 17`. This copies `sncp_ppo_v17.pt` to `checkpoints/`,
-   the latest `training_*.csv` to `logs/`, and extracts `eval_v17_artifacts.zip` to `eval_v17/`.
+   `python stage_colab_run_artifacts.py --version 18`. This copies `sncp_ppo_v18.pt` to `checkpoints/`,
+   the latest `training_*.csv` to `logs/`, and extracts `eval_v18_artifacts.zip` to `eval_v18/`.
    The command refuses to overwrite existing files unless `--overwrite` is passed.
 7. See `docs/superpowers/plans/2026-06-06-v16-colab-runbook.md` for the exact post-run artifact
    sequence and verdict gates.
@@ -305,14 +323,11 @@ honestly: real hardware speed + the chosen pedestrian model.
 **Local eval / viz (fast, inference only):**
 ```bash
 python verify_v16_run_ready.py
-python run_v17_review.py --stage_colab
-python run_post_eval.py --version 17 --training_csv logs/<training_csv>.csv
-python select_v18_candidate.py --version 17
-python verify_v18_ready.py
-python evaluate_policy_report.py --checkpoint checkpoints/sncp_ppo_v17.pt --output_dir eval_v17 --densities 1 3 5 8 10 --scenario hard --n_episodes 50 --seed 100 --trajectory_densities 5 10
-python compare_policy_reports.py --baseline eval_v15/density_sweep.json --candidate eval_v17/density_sweep.json --output eval_v17/comparison_vs_v15.md
-python analyze_training_log.py --csv logs/<training_csv>.csv --output_dir eval_v17
-python verify_v16_artifacts.py --checkpoint checkpoints/sncp_ppo_v17.pt --eval_dir eval_v17 --output eval_v17/artifact_verification.md
+python run_post_eval.py --version 18 --training_csv logs/<training_csv>.csv
+python evaluate_policy_report.py --checkpoint checkpoints/sncp_ppo_v18.pt --output_dir eval_v18 --densities 1 3 5 8 10 --scenario hard --n_episodes 50 --seed 100 --trajectory_densities 5 10
+python compare_policy_reports.py --baseline eval_v15/density_sweep.json --candidate eval_v18/density_sweep.json --output eval_v18/comparison_vs_v15.md
+python analyze_training_log.py --csv logs/<training_csv>.csv --output_dir eval_v18
+python verify_v16_artifacts.py --checkpoint checkpoints/sncp_ppo_v18.pt --eval_dir eval_v18 --output eval_v18/artifact_verification.md
 python test_eval.py --checkpoint <ckpt>.pt --num_humans 5 --scenario hard --n_episodes 50 --seed 100
 python visualize_trajectory.py --checkpoint <ckpt>.pt --num_humans 5 --scenario hard --seed 100 --output traj.png
 python visualize_trajectory_gif.py --checkpoint <ckpt>.pt --num_humans 10 --scenario hard --seed 100 --output anim.gif
@@ -321,25 +336,16 @@ python visualize_trajectory_gif.py --checkpoint <ckpt>.pt --num_humans 10 --scen
   `checkpoints/sncp_ppo_v<N>.pt` and `eval_v<N>/`, then runs the density report, v15 comparison,
   training diagnostics, and artifact verification in order. It uses the newest `logs/training_*.csv`
   if `--training_csv` is omitted, but pass the exact Colab CSV when local smoke logs also exist.
-- `run_v17_review.py --stage_colab` is the preferred end-to-end v17 review command after downloads are
-  placed in `colabout/`: it stages Colab artifacts, reruns post-eval, writes `v18_decision.md/json`,
-  and writes `v18_ready.md`. A failed v17 comparison does not stop the review; the final exit code comes
-  from the pre-v18 artifact gate.
+- `run_v17_review.py --stage_colab` exists for the discarded v17/no-artifact branch but should not be
+  the normal path now. Use `run_post_eval.py --version 18` after the v18 run.
 - `run_v16_post_eval.py` remains as the legacy/back-compatible direct pipeline entry point.
-- `select_v18_candidate.py --version 17` consumes `eval_v17/density_sweep.json` and
-  `eval_v17/training_diagnostics.json`, writes `eval_v17/v18_decision.md/json`, and maps the evidence
-  to one v18 branch (`max_time=60`, high-density exposure, replay 0.30, or no further comfort
-  relaxation). It does not replace manual trajectory inspection.
-- `verify_v18_ready.py` is a pre-v18 artifact gate: it requires the v17 checkpoint, completed eval
-  artifacts, valid trajectory PNGs, and a non-waiting `v18_decision.json` before any v18 notebook/code
-  edit or A100 launch.
 - `verify_v16_run_ready.py` is the pre-A100 readiness gate; despite the legacy filename, it checks the
-  current v17 notebook training config, fail-fast guard, evaluation pipeline wiring, and committed v15
+  current v18 notebook training config, fail-fast guard, evaluation pipeline wiring, and committed v15
   density baseline.
 - `evaluate_policy_report.py` is the underlying manual density-report command: it holds `scenario=hard`
   fixed, sweeps density N=1/3/5/8/10, writes `density_sweep.csv/json/png` + `report.md`, and generates
   N=5/N=10 trajectory PNGs. The pipeline calls it before judging success so nav-time and `I_sp` are visible.
-- `compare_policy_reports.py` compares the candidate density sweep (currently `eval_v17/density_sweep.json`)
+- `compare_policy_reports.py` compares the candidate density sweep (currently `eval_v18/density_sweep.json`)
   against the committed `eval_v15/density_sweep.json` and writes the pass/warn/fail gate report,
   including success, collision, timeout/freezing, nav-time, and `I_sp` deltas.
 - `analyze_training_log.py` summarizes best vs final holdout from the training CSV and flags late
@@ -359,12 +365,13 @@ python visualize_trajectory_gif.py --checkpoint <ckpt>.pt --num_humans 10 --scen
 custom_map_app/index.html
 
 # Put exported JSON under custom_scenarios/, then run:
-python evaluate_custom_scenario.py --scenario custom_scenarios/example_crossing.json --checkpoint checkpoints/sncp_ppo_v17.pt --output custom_eval/example_crossing.png --summary custom_eval/example_crossing.json --gif custom_eval/example_crossing.gif
+python evaluate_custom_scenario.py --scenario custom_scenarios/example_crossing.json --checkpoint checkpoints/sncp_ppo_v16.pt --output custom_eval/example_crossing.png --summary custom_eval/example_crossing.json --gif custom_eval/example_crossing.gif
 ```
 - The editor controls robot start, robot heading, robot goal, human positions, human headings, per-human
   speeds, human goals, motion model (`linear` vs `sfm`), max time, and timestep. It warns on initial
   overlaps and speeds above TurtleBot parity. It exports a ready command that writes PNG, JSON summary,
-  and optional GIF trajectory artifacts. `custom_eval/` is git-ignored runtime output.
+  and optional GIF trajectory artifacts. The JSON summary includes raw/clipped actions, linear/angular
+  speed traces, and braking metrics. `custom_eval/` is git-ignored runtime output.
 
 ---
 
@@ -421,7 +428,7 @@ success collapsing toward 0 with rising timeout. If seen, lower the comfort coef
 | `test_env_velocity.py` | velocity/observation correctness |
 | `test_model.py` | policy forward pass (shapes + action limits) |
 | `test_ncp_wiring.py` | encoders are sparse AutoNCP (not dense); proj reads motor `output_dim`; node inter-layer sized; forward intact |
-| `test_reward_paper.py` | goal +20, collision −20, default **comfort −6·I_sp**, configurable v17 comfort coefficient, **approach 1·Δd**, max_time 50 |
+| `test_reward_paper.py` | goal +20, collision −20, default **comfort −6·I_sp**, configurable comfort coefficient, **approach 2·Δd (paper Eq 18)**, **no `angle_diff` heading penalty** (`test_no_orientation_penalty`), max_time 50 |
 | `test_pedestrian_reactive.py` | **default is non-reactive**; reactive flag still works (keeps more clearance) |
 | `test_speed_parity.py` | every scenario's `human_vpref ≤ robot_vpref` |
 | `test_vec_curriculum.py` | `step_to_phase` boundaries/values, parity, N=10 holdout, vectorized replay selection/logging, holdout behavioral diagnostics, vectorized run smoke, `compute_total_updates` |
@@ -470,47 +477,47 @@ assert the old value** (they are intentional guards, not bugs) and keep the suit
 
 ---
 
-## 13. v17 roadmap (next experiment)
+## 13. v18 roadmap (next experiment)
 
-Goal: recover v15's genuine avoidance while reducing the timeout/freezing introduced by v16 replay, then
-lift N=10. The next run should still change **one variable only**.
+Goal: reduce the timeout-limited low/mid-density failures (the dominant gap to the paper) while keeping
+v15/v16's genuine avoidance. The A100 run changes **one concept only** relative to the v16 baseline.
 
-1. **v17 comfort-tuning code is ready on `main`; Colab run in progress / likely weak from stdout.**
-   Implementation: `CrowdSimEnv(..., comfort_coeff=6.0)` preserves v15/v16 by default; `sncp_ppo.train`
-   exposes `--comfort_coeff`; the Colab full-training cell now writes `checkpoints/sncp_ppo_v17.pt`,
-   uses `COMFORT_COEFF = 5.0`, passes `--comfort_coeff 5.0`, evaluates into `eval_v17/`, and preserves
-   the v17 artifact bundle. Local verification: custom comfort test failed red, parser test failed red,
-   notebook/readiness tests failed red against v16 config, then all passed after implementation.
-   Targeted suite: `28 passed`; v17 vectorized smoke with `--comfort_coeff 5.0` exited 0 and logged replay
-   phase shifts; full regression at implementation time: `94 passed in 32.89s`. Later user stdout through
-   update ~1120 showed stable PPO (`std` about `[0.156, 0.239]`, KL mostly low) but no generalist lift:
-   best min remained 16% from update 310 and N=10/circle holdouts stayed mostly 0-2%.
-   Final verdict still requires the downloaded checkpoint, training CSV, density sweep, trajectories,
-   and artifact verifier output.
-2. **Experiment hypothesis: relax comfort `-6 -> -5`, keep everything else fixed.**
-   Evidence: v16 preserved wide detours and lowered `I_sp` versus v15, but success fell where timeout rose
-   (N=1 timeout 60%, N=5/8 timeout 26%) and low-density collision was already very low (N=1 collision 4%).
-   That points to over-conservative behavior, not a beeline regression. Relaxing comfort moves slightly
-   back toward the paper's baseline comfort coefficient while keeping the real-avoidance mechanism.
-   Keep `max_time=50`, `approach=1`, non-reactive pedestrians, speed parity, AutoNCP, and replay 0.20.
-3. **Alternative later candidate: `max_time` 50 -> 60 s.** Do not combine this with comfort tuning in the
-   same run. It may expose whether the policy is merely slow, but it can also mask freezing, so prefer
-   comfort tuning first unless the user explicitly wants a cap-only experiment.
-4. **High-density capacity remains unproven.** v16 N=10 collision stayed high (44%) but capacity is not
-   proven as the bottleneck because the same checkpoint already fails lower-density timeout/success gates.
-   Keep AutoNCP unchanged until replay + over-conservatism evidence is exhausted.
-5. **Before v18, analyze the completed v17 CSV with the per-scenario failure profile.** New training logs
-   include holdout success/collision/timeout/reward/avg_steps/avg_I_sp/min_d_min; `analyze_training_log.py`
-   writes those into `training_diagnostics.md/json`. Use that evidence to separate collision-dominant N=10
-   failure from timeout/freezing or easy/hard forgetting before changing another training variable.
-6. **Use the v18 decision gates before any new A100 run.** See
-   `docs/superpowers/plans/2026-06-08-v18-decision-gates.md`. It maps final v17 artifacts to exactly one
-   next single-variable branch: `max_time=60`, higher high-density exposure, replay 0.30, or no further
-   comfort relaxation. Do not start v18 from stdout alone.
+1. **v17 is discarded: comfort 6.0 -> 5.0 produced no usable checkpoint/artifacts.** User-provided stdout
+   through update ~1120 showed stable PPO (`std` about `[0.156, 0.239]`, KL mostly low) but weak behavior:
+   best generalist min stayed at 16% from update 310, and N=10/circle holdouts stayed mostly 0-2%. The user
+   confirmed there is no v17 checkpoint to evaluate. Do not wait for `eval_v17/`; do not lower comfort to
+   4.0; do not treat comfort 5.0 as the base for v18.
+2. **v18 = paper-faithful goal-reward restoration (NOT the earlier max-time pick).** The change is in
+   `crowd_sim/crowd_env.py` `r_g`: approach coefficient `1 → 2·Δd` and the ad-hoc `-weight·|angle_diff|`
+   heading penalty REMOVED, i.e. exactly paper Eq 18. The Colab full-training cell keeps every other v16
+   setting: `SAVE_PATH='checkpoints/sncp_ppo_v18.pt'`, `COMFORT_COEFF=6.0`, `MAX_TIME=50.0`, replay 0.20,
+   non-reactive pedestrians, speed parity, AutoNCP. (`max_time` stays 50 on purpose — extending it would
+   mask freezing rather than cure it.) `test_reward_paper.py` now guards the new values
+   (`test_approach_coefficient_is_2`, `test_no_orientation_penalty`).
+3. **Why the reward and not max-time?** The dominant low-density failure is timeout with **nothing to
+   avoid** (N=1: 60% timeout, 4% collision, `I_sp≈0.009`). That is a goal-reaching breakdown, and its
+   cause is mechanical: v15 halved the progress reward to `1·Δd` (max +0.065/step at 0.26 m/s) and added a
+   heading penalty up to `0.157`/step — so progress-while-turning was net-negative and the policy
+   optimised heading over arrival. v18 doubles the clean progress signal and deletes the confounding
+   penalty. Accept gate: timeout↓ at low/mid N, success↑, `I_sp` stays low, and trajectories still detour
+   at high N. Read nav-time **per density** — a near-straight N=1 route is correct (efficiency), so do
+   NOT treat it as a beeline regression (the blanket no-beeline gate in `eval_report.py` is density-blind).
+3b. **Roadmap after v18 (remaining paper divergences, in order):** (i) comfort `-6*I_sp` + unbounded
+   `I_sp` vs paper `-2` + `I_sp∈[0,1]` → clamp `I_sp` and/or lower coeff toward 2; (ii) **crowd reactivity**
+   — the paper's 93–95% at N=10–20 needs ORCA peds that yield; non-reactive peds bound high-N; (iii) action
+   space `v≥0` (no reverse). Do (i) first; (ii) is the biggest high-density lever but also the biggest
+   fidelity decision.
+4. **New custom-map evidence: action-space / braking may be a bottleneck.** The user observed in a custom
+   GIF that the robot does not stop/reverse and only turns mildly before collision. This matches the current
+   action space: actor linear speed is `sigmoid * vpref` and env/training clips linear speed to `[0, 0.26]`,
+   so reverse is impossible. The custom evaluator now records raw actions, clipped env actions, linear and
+   angular speed traces, and braking metrics. Inspect these before considering action-space changes.
+5. **Do not change AutoNCP capacity yet.** v16 N=10 collision stayed high, but capacity is not proven as the
+   bottleneck while low-density timeout and action/braking diagnostics remain unresolved.
 
-Re-evaluate every candidate with the same §9 criteria and `eval_v15/` baseline: success across
-N=1/3/5/8/10, collision, timeout/freezing, nav-time above the v14 121.5-step beeline, low `I_sp`, and
-trajectory plots routing around clusters.
+Re-evaluate every candidate with the same Section 9 criteria and `eval_v15/` baseline: success across
+N=1/3/5/8/10, collision, timeout/freezing, nav-time above the v14 121.5-step beeline, low `I_sp`, action
+traces showing braking/turning when needed, and trajectory plots routing around clusters.
 
 ---
 

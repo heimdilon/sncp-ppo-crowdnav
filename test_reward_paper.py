@@ -59,24 +59,56 @@ def test_custom_comfort_coeff_controls_Isp(monkeypatch):
     assert np.isclose(info['comfort'], -5.0 * 0.5)
 
 
-def test_approach_coefficient_is_1():
-    """Dense approach shaping = 1.0 * delta-distance (v15: halved from 2.0 so
-    detours around people are not over-penalized vs the straight line)."""
+def test_approach_coefficient_is_2():
+    """Dense approach shaping = 2.0 * delta-distance (paper Eq 18).
+
+    v18 restores the paper coefficient. v15 had halved it to 1.0 (on the mistaken
+    belief that it would "stop over-penalising detours" — but potential-based
+    shaping telescopes to k*(d_0 - d_final) regardless of path, so halving just
+    uniformly starves the progress signal). The paper introduces this exact term
+    to fix the sparse-reward failure where the robot "may only learn to avoid
+    humans without making progress toward the target" (Sec 4.2)."""
     env = CrowdSimEnv(num_humans=1, scenario='easy')
     env.reset(seed=2)
     # Push the only human far away so comfort ~0 and isolate the approach term.
     env.humans_px[:] = 100.0
     env.humans_py[:] = 100.0
-    # Place the goal 1 m ahead (+x), robot heading +x, drive at vpref.
+    # Place the goal 1 m ahead (+x), robot heading +x (aligned -> no heading
+    # term either way), drive at vpref.
     env.robot_gx, env.robot_gy = env.robot_px + 1.0, env.robot_py
     env.robot_theta = 0.0
     prev = np.hypot(env.robot_px - env.robot_gx, env.robot_py - env.robot_gy)
     _, reward, *_ = env.step(np.array([env.robot_vpref, 0.0], dtype=np.float32))
     moved = prev - np.hypot(env.robot_px - env.robot_gx, env.robot_py - env.robot_gy)
     assert moved > 0, "robot did not move toward goal"
-    # reward ~= 1.0*moved (minus tiny orientation/comfort). ~1x, not ~2x.
-    assert reward < 1.6 * moved, f"approach looks like 2x ({reward} vs moved {moved})"
-    assert reward > 0.5 * moved
+    # reward ~= 2.0*moved (paper Eq 18), not ~1x.
+    assert np.isclose(reward, 2.0 * moved, atol=1e-4), f"approach not ~2x: {reward} vs 2*{moved}"
+
+
+def test_no_orientation_penalty():
+    """Paper Eq 18 has NO heading/orientation term.
+
+    v18 removes the impl's ad-hoc `-weight*|angle_diff|` shaping. That term
+    penalised the very maneuvering avoidance requires and (at coeff 1.0) exceeded
+    the max per-step progress reward, making progress-while-turning net-negative.
+    With pedestrians far away (comfort ~0), the dense reward must equal exactly
+    2*delta-distance even when the robot's heading is misaligned with the goal."""
+    env = CrowdSimEnv(num_humans=1, scenario='easy')
+    env.reset(seed=3)
+    env.humans_px[:] = 100.0
+    env.humans_py[:] = 100.0
+    # Robot at origin facing +x; goal at 45 deg (heading misaligned by ~45 deg).
+    env.robot_px, env.robot_py = 0.0, 0.0
+    env.robot_gx, env.robot_gy = 3.0, 3.0
+    env.robot_theta = 0.0
+    prev = np.hypot(env.robot_px - env.robot_gx, env.robot_py - env.robot_gy)
+    _, reward, *_ = env.step(np.array([env.robot_vpref, 0.0], dtype=np.float32))
+    moved = prev - np.hypot(env.robot_px - env.robot_gx, env.robot_py - env.robot_gy)
+    assert moved > 0, "robot did not move closer to goal"
+    # No orientation penalty: reward is exactly 2*moved despite the misalignment.
+    assert np.isclose(reward, 2.0 * moved, atol=1e-4), (
+        f"orientation penalty still present: reward {reward} != 2*moved {2.0 * moved}"
+    )
 
 
 def test_max_time_default_is_50():

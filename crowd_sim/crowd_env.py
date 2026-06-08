@@ -380,27 +380,30 @@ class CrowdSimEnv(gym.Env):
         timeout = self.current_time >= self.max_time
         
         # Calculate Reward components
-        # 1. Goal approaching reward. Terminal goal = +50 (a single success is
-        # worth ~3× a typical timeout reward, enough to dominate the stall
-        # attractor without making collision -20 look "affordable" relative to
-        # +100 — the 100.0 setting caused HARD-phase collision rates to spike
-        # to 65-95% as agents charged through humans toward the goal).
-        # Approach coefficient lowered 10 → 5 so the dense shaping does not
-        # drown out the sparse goal signal. Orientation penalty weight 0.3 →
-        # 0.05 so that the maximum per-step orientation cost (~0.15) stays
-        # well under the maximum per-step approach reward (~0.33 at v_max),
-        # preventing the "rotate toward goal but don't move" equilibrium.
+        # 1. Goal reward (paper Eq 18, r_g). Reaching the goal yields +20; every
+        # other step yields 2 * (how much closer to the goal we got this step).
+        # This is potential-based shaping — it telescopes to 2*(d_0 - d_final),
+        # so it never changes the optimal policy regardless of the path taken —
+        # and the paper relies on it to solve the sparse-reward failure its
+        # authors call out explicitly: the agent "may only learn to avoid humans
+        # without making progress toward the target" (Sec 4.2).
+        #
+        # v15 had drifted away from the paper here in two ways that together
+        # caused v16's timeout-dominant failure (N=1 timeout 60% with I_sp≈0.009,
+        # i.e. nothing to avoid — pure goal-reaching breakdown):
+        #   (a) coefficient halved 2.0 → 1.0 (a misreading of potential shaping:
+        #       halving cannot "spare detours", it only uniformly starves the
+        #       progress gradient to max +0.065/step at 0.26 m/s); and
+        #   (b) an ad-hoc heading penalty `-weight*|angle_diff|` (NOT in the
+        #       paper), up to 0.157/step — larger than the entire max progress
+        #       reward — which made progress-while-turning net-negative and
+        #       taught the policy to optimise heading over arrival.
+        # v18 restores the paper's r_g exactly: coefficient 2.0, no heading term.
         if reached_goal:
             r_g = 20.0
         else:
             prev_dist_to_goal = np.hypot(prev_rx - self.robot_gx, prev_ry - self.robot_gy)
-            r_g = 1.0 * (prev_dist_to_goal - dist_to_goal)
-
-            angle_to_goal = np.arctan2(self.robot_gy - self.robot_py, self.robot_gx - self.robot_px)
-            angle_diff = angle_to_goal - self.robot_theta
-            angle_diff = (angle_diff + np.pi) % (2.0 * np.pi) - np.pi
-            weight = 0.05 * np.clip((d_min - 0.6) / 1.4, 0.0, 1.0)
-            r_g -= weight * np.abs(angle_diff)
+            r_g = 2.0 * (prev_dist_to_goal - dist_to_goal)
 
         # 2. Collision penalty. Raised 20 → 25 to keep deterrence after the
         # goal reward was reduced 100 → 50; ratio collision/goal stays similar
