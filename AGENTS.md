@@ -307,6 +307,7 @@ honestly: real hardware speed + the chosen pedestrian model.
 python verify_v16_run_ready.py
 python run_post_eval.py --version 17 --training_csv logs/<training_csv>.csv
 python select_v18_candidate.py --version 17
+python verify_v18_ready.py
 python evaluate_policy_report.py --checkpoint checkpoints/sncp_ppo_v17.pt --output_dir eval_v17 --densities 1 3 5 8 10 --scenario hard --n_episodes 50 --seed 100 --trajectory_densities 5 10
 python compare_policy_reports.py --baseline eval_v15/density_sweep.json --candidate eval_v17/density_sweep.json --output eval_v17/comparison_vs_v15.md
 python analyze_training_log.py --csv logs/<training_csv>.csv --output_dir eval_v17
@@ -324,6 +325,9 @@ python visualize_trajectory_gif.py --checkpoint <ckpt>.pt --num_humans 10 --scen
   `eval_v17/training_diagnostics.json`, writes `eval_v17/v18_decision.md/json`, and maps the evidence
   to one v18 branch (`max_time=60`, high-density exposure, replay 0.30, or no further comfort
   relaxation). It does not replace manual trajectory inspection.
+- `verify_v18_ready.py` is a pre-v18 artifact gate: it requires the v17 checkpoint, completed eval
+  artifacts, valid trajectory PNGs, and a non-waiting `v18_decision.json` before any v18 notebook/code
+  edit or A100 launch.
 - `verify_v16_run_ready.py` is the pre-A100 readiness gate; despite the legacy filename, it checks the
   current v17 notebook training config, fail-fast guard, evaluation pipeline wiring, and committed v15
   density baseline.
@@ -425,6 +429,7 @@ success collapsing toward 0 with rising timeout. If seen, lower the comfort coef
 | `test_post_run_pipeline.py` | one-command post-run pipeline orchestration and current Colab eval/training-cell wiring |
 | `test_v16_run_readiness.py` | pre-A100 current-run notebook/baseline readiness checks |
 | `test_v18_decision.py` | v18 branch selection from completed density sweep + training diagnostics |
+| `test_v18_gate.py` | pre-v18 artifact gate requiring v17 eval artifacts, trajectories, and decision report |
 | `test_colab_artifact_staging.py` | Colab artifact staging: checkpoint/CSV copy, eval zip extraction, overwrite guard, zip traversal rejection |
 | `test_custom_scenario.py` | custom scenario JSON loading, env application, per-human speeds, linear motion, episode-runner metrics, PNG/GIF artifact rendering |
 | `test_custom_map_app.py` | static custom map editor exposes required controls and PNG/JSON/GIF evaluation command wiring |

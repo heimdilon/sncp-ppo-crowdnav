@@ -34,12 +34,15 @@ Then run or re-run locally:
 python stage_colab_run_artifacts.py --version 17
 python run_post_eval.py --version 17 --training_csv logs/training_20260608_070945.csv
 python select_v18_candidate.py --version 17
+python verify_v18_ready.py
 ```
 
 The version-aware post-run wrapper derives `checkpoints/sncp_ppo_v17.pt` and `eval_v17/`, then
 regenerates the density sweep, v15 comparison, training diagnostics, and artifact verification.
 The v18 selector then writes `eval_v17/v18_decision.md/json`; use it as a structured summary, not a
 replacement for inspecting the trajectory plots.
+The v18 readiness gate writes `eval_v17/v18_ready.md` and fails until all required v17 artifacts,
+trajectory PNGs, and a non-waiting v18 decision are present.
 
 The active v17 run started before the new holdout `avg_steps/avg_I_sp/min_d_min` CSV columns were
 added. Its CSV should still have per-scenario success/collision/timeout/reward, and the density
@@ -146,6 +149,7 @@ Before editing code or Colab for v18:
 - Inspect `eval_v17/density_sweep.csv` for success, collision, timeout, avg success steps, I_sp.
 - Inspect `eval_v17/traj_hard_n5.png` and `eval_v17/traj_hard_n10.png`.
 - Generate and attach `eval_v17/v18_decision.md`.
+- Generate and attach `eval_v17/v18_ready.md`.
 - State which branch above is supported by evidence.
 - State the single variable to change.
 - Smoke-test locally before A100.
