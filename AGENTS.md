@@ -295,7 +295,11 @@ honestly: real hardware speed + the chosen pedestrian model.
    v15 comparison, training diagnostics, artifact verification).
 5. Persist-results cell: set `DOWNLOAD = True` before the Colab session ends; it downloads the checkpoint,
    latest training CSV, training curve, and `eval_v17_artifacts.zip` containing the full evidence bundle.
-6. See `docs/superpowers/plans/2026-06-06-v16-colab-runbook.md` for the exact post-run artifact
+6. Put downloaded files under `colabout/`, then stage them into canonical paths:
+   `python stage_colab_run_artifacts.py --version 17`. This copies `sncp_ppo_v17.pt` to `checkpoints/`,
+   the latest `training_*.csv` to `logs/`, and extracts `eval_v17_artifacts.zip` to `eval_v17/`.
+   The command refuses to overwrite existing files unless `--overwrite` is passed.
+7. See `docs/superpowers/plans/2026-06-06-v16-colab-runbook.md` for the exact post-run artifact
    sequence and verdict gates.
 
 **Local eval / viz (fast, inference only):**
@@ -329,6 +333,8 @@ python visualize_trajectory_gif.py --checkpoint <ckpt>.pt --num_humans 10 --scen
   non-empty required files, valid PNG signatures, collapse flag, and replay ratio.
 - **Checkpoint naming:** `checkpoints/sncp_ppo_v<N>.pt`. Bump the version for each experiment so prior
   results are preserved (v13, v14, v15, …). Downloaded checkpoints often land at repo root or `colabout/`.
+- `stage_colab_run_artifacts.py --version <N>` is the preferred way to canonicalize Colab downloads before
+  running post-run analysis; it avoids accidentally evaluating a stale checkpoint or latest local smoke CSV.
 - `test_eval.py --num_humans` must match the intended density; scenario sets speed + layout.
 
 **Custom map tester (manual model probes):**
@@ -389,7 +395,7 @@ success collapsing toward 0 with rising timeout. If seen, lower the comfort coef
 
 ---
 
-## 11. Tests (`pytest`, ~100 passing)
+## 11. Tests (`pytest`, ~103 passing)
 
 | File | Covers |
 |---|---|
@@ -411,6 +417,7 @@ success collapsing toward 0 with rising timeout. If seen, lower the comfort coef
 | `test_artifact_verifier.py` | final v16 artifact completeness and gate verification |
 | `test_post_run_pipeline.py` | one-command post-run pipeline orchestration and current Colab eval/training-cell wiring |
 | `test_v16_run_readiness.py` | pre-A100 current-run notebook/baseline readiness checks |
+| `test_colab_artifact_staging.py` | Colab artifact staging: checkpoint/CSV copy, eval zip extraction, overwrite guard, zip traversal rejection |
 | `test_custom_scenario.py` | custom scenario JSON loading, env application, per-human speeds, linear motion, episode-runner metrics, PNG/GIF artifact rendering |
 | `test_custom_map_app.py` | static custom map editor exposes required controls and PNG/JSON/GIF evaluation command wiring |
 | `test_eval.py` | (CLI eval script, not a pytest module) |
