@@ -477,6 +477,10 @@ lift N=10. The next run should still change **one variable only**.
    include holdout success/collision/timeout/reward/avg_steps/avg_I_sp/min_d_min; `analyze_training_log.py`
    writes those into `training_diagnostics.md/json`. Use that evidence to separate collision-dominant N=10
    failure from timeout/freezing or easy/hard forgetting before changing another training variable.
+6. **Use the v18 decision gates before any new A100 run.** See
+   `docs/superpowers/plans/2026-06-08-v18-decision-gates.md`. It maps final v17 artifacts to exactly one
+   next single-variable branch: `max_time=60`, higher high-density exposure, replay 0.30, or no further
+   comfort relaxation. Do not start v18 from stdout alone.
 
 Re-evaluate every candidate with the same §9 criteria and `eval_v15/` baseline: success across
 N=1/3/5/8/10, collision, timeout/freezing, nav-time above the v14 121.5-step beeline, low `I_sp`, and
@@ -497,6 +501,6 @@ trajectory plots routing around clusters.
 - **In-repo design docs:** `docs/superpowers/specs/` (e.g. `2026-06-05-v15-social-navigation-design.md`) and
   `docs/superpowers/plans/` (e.g. `2026-06-05-v15-social-navigation.md`,
   `2026-06-06-v16-colab-runbook.md`, `2026-06-08-v17-comfort-tuning.md`) — specs, step-by-step plans,
-  and the current Colab handoff.
+  and the current Colab handoff. `2026-06-08-v18-decision-gates.md` is the current pre-v18 review gate.
 - **Paper:** `s12369-026-01389-9.pdf` (repo root, git-ignored).
 - **README.md:** user-facing but **stale (v6-era)** — update pending; trust AGENTS.md/code/memory for current values.
