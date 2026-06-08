@@ -332,11 +332,12 @@ python visualize_trajectory_gif.py --checkpoint <ckpt>.pt --num_humans 10 --scen
 custom_map_app/index.html
 
 # Put exported JSON under custom_scenarios/, then run:
-python evaluate_custom_scenario.py --scenario custom_scenarios/example_crossing.json --checkpoint checkpoints/sncp_ppo_v17.pt --output custom_eval/example_crossing.png --summary custom_eval/example_crossing.json
+python evaluate_custom_scenario.py --scenario custom_scenarios/example_crossing.json --checkpoint checkpoints/sncp_ppo_v17.pt --output custom_eval/example_crossing.png --summary custom_eval/example_crossing.json --gif custom_eval/example_crossing.gif
 ```
 - The editor controls robot start, robot heading, robot goal, human positions, human headings, per-human
   speeds, human goals, motion model (`linear` vs `sfm`), max time, and timestep. It warns on initial
-  overlaps and speeds above TurtleBot parity. `custom_eval/` is git-ignored runtime output.
+  overlaps and speeds above TurtleBot parity. It exports a ready command that writes PNG, JSON summary,
+  and optional GIF trajectory artifacts. `custom_eval/` is git-ignored runtime output.
 
 ---
 
@@ -383,7 +384,7 @@ success collapsing toward 0 with rising timeout. If seen, lower the comfort coef
 
 ---
 
-## 11. Tests (`pytest`, ~98 passing)
+## 11. Tests (`pytest`, ~99 passing)
 
 | File | Covers |
 |---|---|
@@ -405,8 +406,8 @@ success collapsing toward 0 with rising timeout. If seen, lower the comfort coef
 | `test_artifact_verifier.py` | final v16 artifact completeness and gate verification |
 | `test_post_run_pipeline.py` | one-command post-run pipeline orchestration and current Colab eval/training-cell wiring |
 | `test_v16_run_readiness.py` | pre-A100 current-run notebook/baseline readiness checks |
-| `test_custom_scenario.py` | custom scenario JSON loading, env application, per-human speeds, linear motion, episode-runner metrics |
-| `test_custom_map_app.py` | static custom map editor exposes required controls and evaluation command wiring |
+| `test_custom_scenario.py` | custom scenario JSON loading, env application, per-human speeds, linear motion, episode-runner metrics, PNG/GIF artifact rendering |
+| `test_custom_map_app.py` | static custom map editor exposes required controls and PNG/JSON/GIF evaluation command wiring |
 | `test_eval.py` | (CLI eval script, not a pytest module) |
 
 Run all: `python -m pytest -q`. After any reward/curriculum/default change, **update the tests that

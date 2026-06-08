@@ -147,3 +147,45 @@ def test_custom_episode_runner_records_metrics_and_paths():
     assert len(result["human_paths"]) == 1
     assert len(result["human_paths"][0]) == 4
     assert "avg_I_sp" in result
+
+
+def test_custom_gif_renderer_writes_animated_gif(tmp_path):
+    from evaluate_custom_scenario import render_custom_gif
+
+    scenario = load_custom_scenario(
+        {
+            "version": 1,
+            "name": "gif smoke",
+            "time_step": 0.25,
+            "max_time": 1.0,
+            "human_motion_model": "linear",
+            "robot": {
+                "position": {"x": -1.0, "y": 0.0},
+                "goal": {"x": 1.0, "y": 0.0},
+                "theta": 0.0,
+            },
+            "humans": [
+                {
+                    "id": "h1",
+                    "position": {"x": 0.0, "y": 1.0},
+                    "theta": 0.0,
+                    "speed": 0.0,
+                }
+            ],
+        }
+    )
+    result = {
+        "steps": 3,
+        "done_reason": "max_steps",
+        "avg_I_sp": 0.0,
+        "robot_path": [[-1.0, 0.0], [-0.8, 0.0], [-0.6, 0.0], [-0.4, 0.0]],
+        "robot_headings": [0.0, 0.0, 0.0, 0.0],
+        "human_paths": [[[0.0, 1.0], [0.0, 1.0], [0.0, 1.0], [0.0, 1.0]]],
+        "human_headings": [[0.0, 0.0, 0.0, 0.0]],
+    }
+    gif_path = tmp_path / "custom.gif"
+
+    render_custom_gif(result, scenario, gif_path, fps=8, step_skip=1)
+
+    assert gif_path.read_bytes()[:6] in (b"GIF87a", b"GIF89a")
+    assert gif_path.stat().st_size > 1000

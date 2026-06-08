@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 import matplotlib.pyplot as plt
+import matplotlib.animation as animation
 import matplotlib.patches as patches
 import numpy as np
 import torch
@@ -182,15 +183,116 @@ def render_custom_trajectory(
     plt.close(fig)
 
 
+def render_custom_gif(
+    result: dict,
+    scenario: CustomScenario,
+    output_path: str | Path,
+    fps: int = 12,
+    step_skip: int = 2,
+) -> None:
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fps = max(1, int(fps))
+    step_skip = max(1, int(step_skip))
+
+    robot_path = np.asarray(result["robot_path"], dtype=float)
+    robot_headings = np.asarray(result["robot_headings"], dtype=float)
+    human_paths = [np.asarray(path, dtype=float) for path in result["human_paths"]]
+    human_headings = [np.asarray(headings, dtype=float) for headings in result["human_headings"]]
+    frame_count = len(robot_path)
+    animated_indices = list(range(0, frame_count, step_skip))
+    if animated_indices[-1] != frame_count - 1:
+        animated_indices.append(frame_count - 1)
+
+    fig, ax = plt.subplots(figsize=(8, 8))
+    ax.set_xlim(-6, 6)
+    ax.set_ylim(-6, 6)
+    ax.set_aspect("equal")
+    ax.grid(True, linestyle=":", alpha=0.5)
+    ax.set_title(f"{scenario.name} | {result['done_reason']} | I_sp={result['avg_I_sp']:.3f}")
+    ax.set_xlabel("x (m)")
+    ax.set_ylabel("y (m)")
+    ax.scatter(scenario.robot.gx, scenario.robot.gy, color="#d22f27", marker="*", s=170, label="Goal")
+    ax.scatter(robot_path[0, 0], robot_path[0, 1], color="#1f9d55", s=55, label="Robot start")
+
+    robot_line, = ax.plot([], [], color="#1f9d55", linewidth=2.5, label="Robot")
+    robot_body = patches.Circle((robot_path[0, 0], robot_path[0, 1]), radius=0.3, color="#1f9d55", alpha=0.45)
+    ax.add_patch(robot_body)
+    robot_dir, = ax.plot([], [], color="#1f9d55", linewidth=2.0)
+
+    palette = ["#2457c5", "#b73a8c", "#d18410", "#2b8c7f", "#6f4dbd", "#687076"]
+    human_lines = []
+    human_bodies = []
+    comfort_ellipses = []
+    human_dirs = []
+    for i, path in enumerate(human_paths):
+        color = palette[i % len(palette)]
+        line, = ax.plot([], [], linestyle="--", color=color, alpha=0.8, linewidth=1.3)
+        body = patches.Circle((path[0, 0], path[0, 1]), radius=0.3, color=color, alpha=0.55)
+        ellipse = patches.Ellipse(
+            (path[0, 0], path[0, 1]),
+            width=2.0,
+            height=1.5,
+            angle=0.0,
+            color=color,
+            alpha=0.10,
+            fill=True,
+        )
+        direction, = ax.plot([], [], color=color, linewidth=1.5)
+        human_lines.append(line)
+        human_bodies.append(body)
+        comfort_ellipses.append(ellipse)
+        human_dirs.append(direction)
+        ax.add_patch(ellipse)
+        ax.add_patch(body)
+
+    ax.legend(loc="upper left")
+
+    def animate(frame_index: int):
+        idx = animated_indices[frame_index]
+        robot_line.set_data(robot_path[: idx + 1, 0], robot_path[: idx + 1, 1])
+        rx, ry = robot_path[idx]
+        robot_body.set_center((rx, ry))
+        theta = robot_headings[idx]
+        robot_dir.set_data([rx, rx + 0.45 * np.cos(theta)], [ry, ry + 0.45 * np.sin(theta)])
+
+        for i, path in enumerate(human_paths):
+            human_lines[i].set_data(path[: idx + 1, 0], path[: idx + 1, 1])
+            hx, hy = path[idx]
+            human_bodies[i].set_center((hx, hy))
+            h_theta = human_headings[i][idx]
+            comfort_ellipses[i].center = (hx + 0.5 * np.cos(h_theta), hy + 0.5 * np.sin(h_theta))
+            comfort_ellipses[i].angle = np.degrees(h_theta)
+            human_dirs[i].set_data(
+                [hx, hx + 0.45 * np.cos(h_theta)],
+                [hy, hy + 0.45 * np.sin(h_theta)],
+            )
+
+        return [robot_line, robot_body, robot_dir] + human_lines + human_bodies + comfort_ellipses + human_dirs
+
+    ani = animation.FuncAnimation(
+        fig,
+        animate,
+        frames=len(animated_indices),
+        interval=int(1000 / fps),
+        blit=True,
+    )
+    ani.save(output_path, writer="pillow", fps=fps)
+    plt.close(fig)
+
+
 def run_custom_checkpoint(
     scenario_path: str | Path,
     checkpoint_path: str | Path,
     output_path: str | Path,
     summary_path: str | Path | None = None,
+    gif_path: str | Path | None = None,
     seed: int | None = None,
     max_steps: int | None = None,
     device: str = "auto",
     deterministic: bool = True,
+    gif_fps: int = 12,
+    gif_step_skip: int = 2,
 ) -> dict:
     scenario = load_custom_scenario(scenario_path)
     env = create_custom_env(scenario, seed=seed)
@@ -202,6 +304,8 @@ def run_custom_checkpoint(
     )
     result = run_episode_with_action_provider(env, action_provider, max_steps=max_steps)
     render_custom_trajectory(result, scenario, output_path)
+    if gif_path is not None:
+        render_custom_gif(result, scenario, gif_path, fps=gif_fps, step_skip=gif_step_skip)
     if summary_path is not None:
         summary_path = Path(summary_path)
         summary_path.parent.mkdir(parents=True, exist_ok=True)
@@ -215,10 +319,13 @@ def main() -> None:
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--output", type=Path, default=Path("custom_eval/trajectory.png"))
     parser.add_argument("--summary", type=Path, default=Path("custom_eval/summary.json"))
+    parser.add_argument("--gif", type=Path, default=None)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max_steps", type=int, default=None)
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--stochastic", action="store_true", help="sample actions instead of using policy mean")
+    parser.add_argument("--gif_fps", type=int, default=12)
+    parser.add_argument("--gif_step_skip", type=int, default=2)
     args = parser.parse_args()
 
     result = run_custom_checkpoint(
@@ -226,10 +333,13 @@ def main() -> None:
         checkpoint_path=args.checkpoint,
         output_path=args.output,
         summary_path=args.summary,
+        gif_path=args.gif,
         seed=args.seed,
         max_steps=args.max_steps,
         device=args.device,
         deterministic=not args.stochastic,
+        gif_fps=args.gif_fps,
+        gif_step_skip=args.gif_step_skip,
     )
     print(
         "Custom eval | "
@@ -239,6 +349,8 @@ def main() -> None:
     )
     print(f"Trajectory: {args.output}")
     print(f"Summary: {args.summary}")
+    if args.gif is not None:
+        print(f"GIF: {args.gif}")
 
 
 if __name__ == "__main__":

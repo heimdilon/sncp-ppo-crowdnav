@@ -295,7 +295,7 @@ function updateTextOutputs() {
   document.getElementById("evalCommand").value =
     `python evaluate_custom_scenario.py --scenario custom_scenarios/${safeName}.json ` +
     `--checkpoint checkpoints/sncp_ppo_v17.pt --output custom_eval/${safeName}.png ` +
-    `--summary custom_eval/${safeName}.json`;
+    `--summary custom_eval/${safeName}.json --gif custom_eval/${safeName}.gif`;
 }
 
 function updateWarnings() {

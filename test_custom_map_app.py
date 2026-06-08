@@ -27,5 +27,6 @@ def test_custom_map_app_exposes_map_controls():
     assert "theta_deg" in script
     assert "human_motion_model" in script
     assert "evaluate_custom_scenario.py" in script
+    assert "--gif custom_eval/" in script
     assert "draw({ table: false })" in script
     assert "grid" in styles
