@@ -35,9 +35,8 @@ EVALUATION_TOKENS = (
     "EVAL_OUT = 'eval_v17'",
     "EVAL_SEED = 100",
     "EVAL_EPISODES = 50",
-    "run_v16_post_eval.py",
-    "'--checkpoint', CHECKPOINT",
-    "'--output_dir', EVAL_OUT",
+    "run_post_eval.py",
+    "'--version', '17'",
     "'--densities', '1', '3', '5', '8', '10'",
     "'--scenario', 'hard'",
     "'--n_episodes', str(EVAL_EPISODES)",
@@ -110,7 +109,7 @@ def verify_v16_run_ready(repo_root: str | Path = ".") -> V16RunReadinessSummary:
 
     required_files = (
         repo_root / "sncp_ppo_colab.ipynb",
-        repo_root / "run_v16_post_eval.py",
+        repo_root / "run_post_eval.py",
         repo_root / "eval_v15" / "density_sweep.json",
     )
     for path in required_files:

@@ -181,6 +181,36 @@ def test_post_eval_cli_uses_latest_training_csv_and_returns_status(tmp_path, mon
     assert "Overall status: warn" in capsys.readouterr().out
 
 
+def test_versioned_post_eval_cli_derives_paths_from_version(tmp_path, monkeypatch, capsys):
+    import run_post_eval
+
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    latest = log_dir / "training_20260608_070945.csv"
+    latest.write_text("header\n", encoding="utf-8")
+    captured = {}
+
+    def fake_run_post_eval(**kwargs):
+        captured.update(kwargs)
+        return run_post_eval.PostRunResult(
+            status="pass",
+            output_dir=kwargs["output_dir"],
+            comparison_report=kwargs["output_dir"] / "comparison_vs_v15.md",
+            training_report=kwargs["output_dir"] / "training_diagnostics.md",
+            artifact_report=kwargs["output_dir"] / "artifact_verification.md",
+        )
+
+    monkeypatch.setattr(run_post_eval, "run_post_eval", fake_run_post_eval)
+
+    exit_code = run_post_eval.main(["--version", "17", "--log_dir", str(log_dir)])
+
+    assert exit_code == 0
+    assert captured["checkpoint_path"] == Path("checkpoints/sncp_ppo_v17.pt")
+    assert captured["output_dir"] == Path("eval_v17")
+    assert captured["training_csv"] == latest
+    assert "Overall status: pass" in capsys.readouterr().out
+
+
 def test_colab_v17_eval_cell_uses_post_run_pipeline():
     code_sources = _colab_code_sources()
     eval_cells = [source for source in code_sources if "CHECKPOINT = 'checkpoints/sncp_ppo_v17.pt'" in source]
@@ -188,9 +218,9 @@ def test_colab_v17_eval_cell_uses_post_run_pipeline():
     assert len(eval_cells) == 1
     eval_cell = eval_cells[0]
     assert "EVAL_OUT = 'eval_v17'" in eval_cell
-    assert "run_v16_post_eval.py" in eval_cell
-    assert "'--checkpoint', CHECKPOINT" in eval_cell
-    assert "'--output_dir', EVAL_OUT" in eval_cell
+    assert "run_post_eval.py" in eval_cell
+    assert "'--version', '17'" in eval_cell
+    assert "run_v16_post_eval.py" not in eval_cell
     assert "evaluate_policy_report.py" not in eval_cell
     assert "compare_policy_reports.py" not in eval_cell
 

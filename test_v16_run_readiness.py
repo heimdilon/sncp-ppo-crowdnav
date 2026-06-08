@@ -32,7 +32,7 @@ def test_v17_run_readiness_flags_stale_notebook(tmp_path):
         ]
     }
     (tmp_path / "sncp_ppo_colab.ipynb").write_text(json.dumps(notebook), encoding="utf-8")
-    (tmp_path / "run_v16_post_eval.py").write_text("stub\n", encoding="utf-8")
+    (tmp_path / "run_post_eval.py").write_text("stub\n", encoding="utf-8")
     baseline_dir = tmp_path / "eval_v15"
     baseline_dir.mkdir()
     (baseline_dir / "density_sweep.json").write_text(
@@ -45,7 +45,7 @@ def test_v17_run_readiness_flags_stale_notebook(tmp_path):
     assert summary.status == "fail"
     assert any("REPLAY_RATIO = 0.20" in note for note in summary.notes)
     assert any("COMFORT_COEFF = 5.0" in note for note in summary.notes)
-    assert any("run_v16_post_eval.py" in note for note in summary.notes)
+    assert any("run_post_eval.py" in note for note in summary.notes)
     assert any("baseline densities" in note for note in summary.notes)
 
 

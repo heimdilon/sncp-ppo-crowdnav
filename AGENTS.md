@@ -305,7 +305,7 @@ honestly: real hardware speed + the chosen pedestrian model.
 **Local eval / viz (fast, inference only):**
 ```bash
 python verify_v16_run_ready.py
-python run_v16_post_eval.py --checkpoint checkpoints/sncp_ppo_v17.pt --output_dir eval_v17
+python run_post_eval.py --version 17 --training_csv logs/<training_csv>.csv
 python evaluate_policy_report.py --checkpoint checkpoints/sncp_ppo_v17.pt --output_dir eval_v17 --densities 1 3 5 8 10 --scenario hard --n_episodes 50 --seed 100 --trajectory_densities 5 10
 python compare_policy_reports.py --baseline eval_v15/density_sweep.json --candidate eval_v17/density_sweep.json --output eval_v17/comparison_vs_v15.md
 python analyze_training_log.py --csv logs/<training_csv>.csv --output_dir eval_v17
@@ -314,9 +314,11 @@ python test_eval.py --checkpoint <ckpt>.pt --num_humans 5 --scenario hard --n_ep
 python visualize_trajectory.py --checkpoint <ckpt>.pt --num_humans 5 --scenario hard --seed 100 --output traj.png
 python visualize_trajectory_gif.py --checkpoint <ckpt>.pt --num_humans 10 --scenario hard --seed 100 --output anim.gif
 ```
-- `run_v16_post_eval.py` is the preferred one-command post-run pipeline; it runs the density report,
-  v15 comparison, training diagnostics, and artifact verification in order, using the newest
-  `logs/training_*.csv` by default.
+- `run_post_eval.py --version <N>` is the preferred one-command post-run pipeline; it derives
+  `checkpoints/sncp_ppo_v<N>.pt` and `eval_v<N>/`, then runs the density report, v15 comparison,
+  training diagnostics, and artifact verification in order. It uses the newest `logs/training_*.csv`
+  if `--training_csv` is omitted, but pass the exact Colab CSV when local smoke logs also exist.
+- `run_v16_post_eval.py` remains as the legacy/back-compatible direct pipeline entry point.
 - `verify_v16_run_ready.py` is the pre-A100 readiness gate; despite the legacy filename, it checks the
   current v17 notebook training config, fail-fast guard, evaluation pipeline wiring, and committed v15
   density baseline.

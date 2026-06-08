@@ -31,11 +31,12 @@ eval_v17_artifacts.zip              # if the post-run cell completed
 Then run or re-run locally:
 
 ```bash
-python run_v16_post_eval.py --checkpoint checkpoints/sncp_ppo_v17.pt --training_csv logs/training_20260608_070945.csv --output_dir eval_v17
-python compare_policy_reports.py --baseline eval_v15/density_sweep.json --candidate eval_v17/density_sweep.json --output eval_v17/comparison_vs_v15.md
-python analyze_training_log.py --csv logs/training_20260608_070945.csv --output_dir eval_v17
-python verify_v16_artifacts.py --checkpoint checkpoints/sncp_ppo_v17.pt --eval_dir eval_v17 --output eval_v17/artifact_verification.md
+python stage_colab_run_artifacts.py --version 17
+python run_post_eval.py --version 17 --training_csv logs/training_20260608_070945.csv
 ```
+
+The version-aware post-run wrapper derives `checkpoints/sncp_ppo_v17.pt` and `eval_v17/`, then
+regenerates the density sweep, v15 comparison, training diagnostics, and artifact verification.
 
 The active v17 run started before the new holdout `avg_steps/avg_I_sp/min_d_min` CSV columns were
 added. Its CSV should still have per-scenario success/collision/timeout/reward, and the density
