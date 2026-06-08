@@ -348,7 +348,17 @@ python -m sncp_ppo.train --num_envs 16 --horizon 128 --total_steps 2500000 --eva
 After training:
 
 ```bash
-python run_v16_post_eval.py --checkpoint checkpoints/sncp_ppo_v17.pt --training_csv logs/<v17_training_csv>.csv --output_dir eval_v17
+python run_v17_review.py --stage_colab
+```
+
+This stages the Colab downloads from `colabout/`, regenerates the density sweep and v15 comparison,
+writes the v18 branch decision, and runs the pre-v18 artifact gate. If the artifacts are already staged,
+the explicit equivalent is:
+
+```bash
+python run_post_eval.py --version 17 --training_csv logs/<v17_training_csv>.csv
+python select_v18_candidate.py --version 17
+python verify_v18_ready.py
 ```
 
 - [ ] **Step 3: Judge v17**
@@ -362,6 +372,8 @@ eval_v17/training_diagnostics.md
 eval_v17/density_sweep.csv
 eval_v17/traj_hard_n5.png
 eval_v17/traj_hard_n10.png
+eval_v17/v18_decision.md
+eval_v17/v18_ready.md
 ```
 
 Required to accept v17:

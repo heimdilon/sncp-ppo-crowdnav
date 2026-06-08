@@ -212,13 +212,14 @@ def update_diagnostic_row(policy, agent):
     ]
 
 
-def make_env(num_humans, scenario, seed, comfort_coeff=6.0):
+def make_env(num_humans, scenario, seed, comfort_coeff=6.0, max_time=50.0):
     """Factory for a single CrowdSimEnv, used by SyncVectorEnv."""
     def _thunk():
         env = CrowdSimEnv(
             num_humans=num_humans,
             scenario=scenario,
             comfort_coeff=comfort_coeff,
+            max_time=max_time,
         )
         env.reset(seed=seed)
         return env
@@ -241,6 +242,7 @@ def train(args):
         num_humans=args.num_humans,
         scenario='easy',
         comfort_coeff=args.comfort_coeff,
+        max_time=args.max_time,
     )
 
     # 2. Create SNCP policy and PPO agent
@@ -660,6 +662,7 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
 
     N, T = args.num_envs, args.horizon
     comfort_coeff = getattr(args, 'comfort_coeff', 6.0)
+    max_time = getattr(args, 'max_time', 50.0)
 
     def set_envs_vpref(envs, vpref):
         for sub_env in envs.envs:
@@ -673,6 +676,7 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
                     scenario,
                     args.seed + i,
                     comfort_coeff=comfort_coeff,
+                    max_time=max_time,
                 )
                 for i in range(N)
             ]
@@ -696,6 +700,7 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
         num_humans=args.num_humans,
         scenario='circle',
         comfort_coeff=comfort_coeff,
+        max_time=max_time,
     )
 
     scenario, H, vpref = step_to_phase(0, args.total_steps, args.num_humans)
@@ -909,6 +914,9 @@ def build_parser():
     parser.add_argument('--comfort_coeff', type=float, default=6.0,
                         help='Social-pressure comfort penalty coefficient. '
                              'v15/v16 default is 6.0; v17 candidate uses 5.0.')
+    parser.add_argument('--max_time', type=float, default=50.0,
+                        help='Episode time limit in seconds. v15/v16 default is '
+                             '50.0; max-time candidates should pass 60.0 explicitly.')
 
     # Curriculum thresholds (inclusive) — 5-phase: 10%/25%/50%/75%/100%
     parser.add_argument('--curriculum_easy_until', type=int, default=None,

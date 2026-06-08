@@ -25,6 +25,10 @@ from sncp_ppo.ppo import PPOAgent
 ActionProvider = Callable[[dict[str, np.ndarray], int], np.ndarray]
 
 
+def _rounded_float(value: float) -> float:
+    return float(round(float(value), 6))
+
+
 def run_episode_with_action_provider(
     env,
     action_provider: ActionProvider,
@@ -42,6 +46,10 @@ def run_episode_with_action_provider(
     rewards: list[float] = []
     min_distances: list[float] = []
     social_pressures: list[float] = []
+    raw_actions: list[list[float]] = []
+    env_actions: list[list[float]] = []
+    linear_speeds: list[float] = []
+    angular_speeds: list[float] = []
     info = {
         "success": False,
         "collision": False,
@@ -52,8 +60,9 @@ def run_episode_with_action_provider(
     done_reason = "max_steps"
 
     for step_index in range(limit):
-        action = np.asarray(action_provider(obs, step_index), dtype=np.float32)
-        obs, reward, terminated, truncated, info = env.step(action)
+        raw_action = np.asarray(action_provider(obs, step_index), dtype=np.float32)
+        env_action = PPOAgent.clip_action_for_env(raw_action, env.robot_vpref, env.robot_wmax)
+        obs, reward, terminated, truncated, info = env.step(env_action)
 
         robot_path.append([float(env.robot_px), float(env.robot_py)])
         robot_headings.append(float(env.robot_theta))
@@ -63,6 +72,10 @@ def run_episode_with_action_provider(
         rewards.append(float(reward))
         min_distances.append(float(info["d_min"]))
         social_pressures.append(float(info["I_sp"]))
+        raw_actions.append([_rounded_float(raw_action[0]), _rounded_float(raw_action[1])])
+        env_actions.append([_rounded_float(env_action[0]), _rounded_float(env_action[1])])
+        linear_speeds.append(_rounded_float(env_action[0]))
+        angular_speeds.append(_rounded_float(env_action[1]))
 
         if terminated or truncated:
             if bool(info["success"]):
@@ -76,6 +89,8 @@ def run_episode_with_action_provider(
             break
 
     finite_distances = [d for d in min_distances if np.isfinite(d)]
+    one_second_window = max(1, int(np.ceil(1.0 / env.time_step)))
+    final_linear_window = linear_speeds[-one_second_window:]
     return {
         "steps": len(rewards),
         "time_sec": float(len(rewards) * env.time_step),
@@ -86,6 +101,14 @@ def run_episode_with_action_provider(
         "total_reward": float(np.sum(rewards)) if rewards else 0.0,
         "avg_I_sp": float(np.mean(social_pressures)) if social_pressures else 0.0,
         "min_d_min": float(np.min(finite_distances)) if finite_distances else None,
+        "raw_actions": raw_actions,
+        "env_actions": env_actions,
+        "linear_speeds": linear_speeds,
+        "angular_speeds": angular_speeds,
+        "min_linear_speed": float(np.min(linear_speeds)) if linear_speeds else None,
+        "final_1s_avg_linear_speed": (
+            float(np.mean(final_linear_window)) if final_linear_window else None
+        ),
         "robot_path": robot_path,
         "robot_headings": robot_headings,
         "human_paths": human_paths,

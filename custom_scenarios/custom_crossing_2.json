@@ -1,0 +1,138 @@
+{
+  "version": 1,
+  "name": "custom_crossing_2",
+  "time_step": 0.25,
+  "max_time": 50,
+  "human_motion_model": "linear",
+  "human_dodge_robot": false,
+  "robot": {
+    "position": {
+      "x": -5,
+      "y": 0
+    },
+    "goal": {
+      "x": 5.1,
+      "y": 0
+    },
+    "theta_deg": 0
+  },
+  "humans": [
+    {
+      "id": "h1",
+      "position": {
+        "x": 2.3,
+        "y": -3.1
+      },
+      "theta_deg": 132,
+      "speed": 0.2,
+      "goal": {
+        "x": -3.7,
+        "y": 3.5
+      }
+    },
+    {
+      "id": "h2",
+      "position": {
+        "x": -3.4,
+        "y": -2.2
+      },
+      "theta_deg": 53,
+      "speed": 0.2,
+      "goal": {
+        "x": 0.9,
+        "y": 3.6
+      }
+    },
+    {
+      "id": "h3",
+      "position": {
+        "x": -0.5,
+        "y": -4.7
+      },
+      "theta_deg": 72,
+      "speed": 0.18,
+      "goal": {
+        "x": 2.6,
+        "y": 4.6
+      }
+    },
+    {
+      "id": "h4",
+      "position": {
+        "x": 4,
+        "y": -2.6
+      },
+      "theta_deg": 153,
+      "speed": 0.18,
+      "goal": {
+        "x": -4.8,
+        "y": 1.9
+      }
+    },
+    {
+      "id": "h5",
+      "position": {
+        "x": 4,
+        "y": 0.1
+      },
+      "theta_deg": -179,
+      "speed": 0.18,
+      "goal": {
+        "x": -3.5,
+        "y": 0
+      }
+    },
+    {
+      "id": "h6",
+      "position": {
+        "x": 4.4,
+        "y": -1.6
+      },
+      "theta_deg": -165,
+      "speed": 0.18,
+      "goal": {
+        "x": -1.1,
+        "y": -3.1
+      }
+    },
+    {
+      "id": "h7",
+      "position": {
+        "x": -3.2,
+        "y": 2.3
+      },
+      "theta_deg": 0,
+      "speed": 0.18,
+      "goal": {
+        "x": 4,
+        "y": 2.3
+      }
+    },
+    {
+      "id": "h8",
+      "position": {
+        "x": 3.2,
+        "y": 3.1
+      },
+      "theta_deg": -133,
+      "speed": 0.18,
+      "goal": {
+        "x": -2.9,
+        "y": -3.4
+      }
+    },
+    {
+      "id": "h9",
+      "position": {
+        "x": -1.1,
+        "y": 3.9
+      },
+      "theta_deg": -60,
+      "speed": 0.18,
+      "goal": {
+        "x": 3.1,
+        "y": -3.5
+      }
+    }
+  ]
+}

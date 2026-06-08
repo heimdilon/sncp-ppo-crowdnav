@@ -300,3 +300,15 @@ def test_vectorized_replay_updates_are_logged(tmp_path):
     assert any(row['is_replay_update'] == '0' for row in rows)
     for row in rows:
         _assert_finite_update_diagnostics(row)
+
+
+def test_make_env_accepts_max_time_override():
+    from sncp_ppo.train import make_env
+
+    thunk = make_env(num_humans=1, scenario='easy', seed=123, max_time=60.0)
+    env = thunk()
+
+    try:
+        assert env.max_time == 60.0
+    finally:
+        env.close()

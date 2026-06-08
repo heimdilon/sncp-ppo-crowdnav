@@ -149,6 +149,40 @@ def test_custom_episode_runner_records_metrics_and_paths():
     assert "avg_I_sp" in result
 
 
+def test_custom_episode_runner_records_action_trace_and_braking_metrics():
+    from evaluate_custom_scenario import run_episode_with_action_provider
+
+    scenario = load_custom_scenario(
+        {
+            "version": 1,
+            "name": "action trace smoke",
+            "time_step": 0.25,
+            "max_time": 2.0,
+            "human_motion_model": "linear",
+            "robot": {
+                "position": {"x": -1.0, "y": 0.0},
+                "goal": {"x": 1.0, "y": 0.0},
+                "theta": 0.0,
+            },
+            "humans": [],
+        }
+    )
+    env = create_custom_env(scenario, seed=5)
+
+    result = run_episode_with_action_provider(
+        env,
+        action_provider=lambda obs, step_index: np.array([0.26, (-1) ** step_index], dtype=np.float32),
+        max_steps=3,
+    )
+
+    assert result["raw_actions"] == [[0.26, 1.0], [0.26, -1.0], [0.26, 1.0]]
+    assert result["env_actions"] == [[0.26, 1.0], [0.26, -1.0], [0.26, 1.0]]
+    assert result["linear_speeds"] == [0.26, 0.26, 0.26]
+    assert result["angular_speeds"] == [1.0, -1.0, 1.0]
+    assert result["min_linear_speed"] == 0.26
+    assert result["final_1s_avg_linear_speed"] == 0.26
+
+
 def test_custom_gif_renderer_writes_animated_gif(tmp_path):
     from evaluate_custom_scenario import render_custom_gif
 

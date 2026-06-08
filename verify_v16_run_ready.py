@@ -12,7 +12,7 @@ from sncp_ppo.run_readiness import verify_v16_run_ready, write_readiness_report
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Preflight-check current Colab run configuration.")
     parser.add_argument("--repo_root", type=Path, default=Path("."))
-    parser.add_argument("--output", type=Path, default=Path("eval_v17/run_readiness.md"))
+    parser.add_argument("--output", type=Path, default=Path("eval_v18/run_readiness.md"))
     return parser
 
 
