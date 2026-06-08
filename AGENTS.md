@@ -305,6 +305,7 @@ honestly: real hardware speed + the chosen pedestrian model.
 **Local eval / viz (fast, inference only):**
 ```bash
 python verify_v16_run_ready.py
+python run_v17_review.py --stage_colab
 python run_post_eval.py --version 17 --training_csv logs/<training_csv>.csv
 python select_v18_candidate.py --version 17
 python verify_v18_ready.py
@@ -320,6 +321,10 @@ python visualize_trajectory_gif.py --checkpoint <ckpt>.pt --num_humans 10 --scen
   `checkpoints/sncp_ppo_v<N>.pt` and `eval_v<N>/`, then runs the density report, v15 comparison,
   training diagnostics, and artifact verification in order. It uses the newest `logs/training_*.csv`
   if `--training_csv` is omitted, but pass the exact Colab CSV when local smoke logs also exist.
+- `run_v17_review.py --stage_colab` is the preferred end-to-end v17 review command after downloads are
+  placed in `colabout/`: it stages Colab artifacts, reruns post-eval, writes `v18_decision.md/json`,
+  and writes `v18_ready.md`. A failed v17 comparison does not stop the review; the final exit code comes
+  from the pre-v18 artifact gate.
 - `run_v16_post_eval.py` remains as the legacy/back-compatible direct pipeline entry point.
 - `select_v18_candidate.py --version 17` consumes `eval_v17/density_sweep.json` and
   `eval_v17/training_diagnostics.json`, writes `eval_v17/v18_decision.md/json`, and maps the evidence
@@ -427,6 +432,7 @@ success collapsing toward 0 with rising timeout. If seen, lower the comfort coef
 | `test_training_log_report.py` | training CSV diagnostics: best/final holdout, replay fraction, collapse report, per-scenario failure profile, CLI |
 | `test_artifact_verifier.py` | final v16 artifact completeness and gate verification |
 | `test_post_run_pipeline.py` | one-command post-run pipeline orchestration and current Colab eval/training-cell wiring |
+| `test_v17_review_pipeline.py` | end-to-end v17 artifact staging, post-eval, v18 decision, and gate orchestration |
 | `test_v16_run_readiness.py` | pre-A100 current-run notebook/baseline readiness checks |
 | `test_v18_decision.py` | v18 branch selection from completed density sweep + training diagnostics |
 | `test_v18_gate.py` | pre-v18 artifact gate requiring v17 eval artifacts, trajectories, and decision report |

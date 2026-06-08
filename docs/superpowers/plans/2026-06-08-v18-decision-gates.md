@@ -31,6 +31,13 @@ eval_v17_artifacts.zip              # if the post-run cell completed
 Then run or re-run locally:
 
 ```bash
+python run_v17_review.py --stage_colab
+```
+
+That command stages the Colab downloads, regenerates the post-run evidence, writes the v18 decision,
+and runs the pre-v18 artifact gate. The equivalent explicit sequence is:
+
+```bash
 python stage_colab_run_artifacts.py --version 17
 python run_post_eval.py --version 17 --training_csv logs/training_20260608_070945.csv
 python select_v18_candidate.py --version 17
