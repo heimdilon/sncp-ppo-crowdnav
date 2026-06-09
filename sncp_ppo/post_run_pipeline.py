@@ -58,6 +58,7 @@ def run_v16_post_eval(
     robot_vpref: float = 0.26,
     human_vpref_override: float | None = None,
     max_time: float = 50.0,
+    human_goal_noise: float = 0.0,
     expected_replay_ratio: float = 0.20,
     replay_tolerance: float = 0.10,
     report_runner: ReportRunner = run_report,
@@ -79,6 +80,7 @@ def run_v16_post_eval(
         robot_vpref=robot_vpref,
         human_vpref_override=human_vpref_override,
         max_time=max_time,
+        human_goal_noise=human_goal_noise,
     )
 
     comparison = compare_density_sweeps(

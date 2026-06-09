@@ -424,6 +424,7 @@ def evaluate_density(
     robot_vpref: float = 0.26,
     human_vpref_override: float | None = None,
     max_time: float = 50.0,
+    human_goal_noise: float = 0.0,
 ) -> list[EpisodeResult]:
     """Run deterministic policy episodes for one density/scenario pair.
 
@@ -442,7 +443,7 @@ def evaluate_density(
     env = CrowdSimEnv(
         num_humans=num_humans, scenario=scenario,
         robot_vpref=robot_vpref, human_vpref_override=human_vpref_override,
-        max_time=max_time,
+        max_time=max_time, human_goal_noise=human_goal_noise,
     )
     policy = SNCPPolicy(robot_vpref=env.robot_vpref, robot_wmax=env.robot_wmax).to(device)
     policy.load_state_dict(torch.load(checkpoint_path, map_location=device))
@@ -501,6 +502,7 @@ def render_trajectory(
     robot_vpref: float = 0.26,
     human_vpref_override: float | None = None,
     max_time: float = 50.0,
+    human_goal_noise: float = 0.0,
 ) -> None:
     from visualize_trajectory import run_and_visualize
 
@@ -513,6 +515,7 @@ def render_trajectory(
         robot_vpref=robot_vpref,
         human_vpref_override=human_vpref_override,
         max_time=max_time,
+        human_goal_noise=human_goal_noise,
     )
 
 
@@ -529,6 +532,7 @@ def run_report(
     robot_vpref: float = 0.26,
     human_vpref_override: float | None = None,
     max_time: float = 50.0,
+    human_goal_noise: float = 0.0,
     evaluator: Evaluator = evaluate_density,
     trajectory_renderer: TrajectoryRenderer = render_trajectory,
 ) -> dict[str, Path | list[Path]]:
@@ -552,6 +556,7 @@ def run_report(
             robot_vpref=robot_vpref,
             human_vpref_override=human_vpref_override,
             max_time=max_time,
+            human_goal_noise=human_goal_noise,
         )
         summaries.append(
             summarize_density(
@@ -573,6 +578,7 @@ def run_report(
             robot_vpref=robot_vpref,
             human_vpref_override=human_vpref_override,
             max_time=max_time,
+            human_goal_noise=human_goal_noise,
         )
         trajectory_paths.append(output_path)
 

@@ -22,14 +22,15 @@ def set_seed(seed):
 
 def run_and_visualize(model_path='checkpoints/sncp_ppo.pt', output_image='trajectory_plot.png',
                       num_humans=5, scenario='circle', seed=42,
-                      robot_vpref=0.26, human_vpref_override=None, max_time=50.0):
+                      robot_vpref=0.26, human_vpref_override=None, max_time=50.0,
+                      human_goal_noise=0.0):
     set_seed(seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device} | seed={seed} | num_humans={num_humans}")
 
     env = CrowdSimEnv(num_humans=num_humans, scenario=scenario,
                       robot_vpref=robot_vpref, human_vpref_override=human_vpref_override,
-                      max_time=max_time)
+                      max_time=max_time, human_goal_noise=human_goal_noise)
     
     # Initialize policy and agent
     policy = SNCPPolicy(robot_vpref=env.robot_vpref, robot_wmax=env.robot_wmax).to(device)

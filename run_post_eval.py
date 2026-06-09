@@ -45,6 +45,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="If set, force a flat pedestrian speed (parity regime, e.g. 1.0).")
     parser.add_argument("--max_time", type=float, default=50.0,
                         help="Episode time cap for eval; match the training regime.")
+    parser.add_argument("--human_goal_noise", type=float, default=0.0,
+                        help="Pedestrian goal noise; match the training regime (paper run uses ~2.0).")
     parser.add_argument("--expected_replay_ratio", type=float, default=0.20)
     parser.add_argument("--replay_tolerance", type=float, default=0.10)
     return parser
@@ -69,6 +71,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         robot_vpref=args.robot_vpref,
         human_vpref_override=args.human_vpref_override,
         max_time=args.max_time,
+        human_goal_noise=args.human_goal_noise,
         expected_replay_ratio=args.expected_replay_ratio,
         replay_tolerance=args.replay_tolerance,
     )

@@ -23,6 +23,21 @@ def test_robot_vpref_param_scales_action_space_and_policy():
     assert np.isclose(policy.robot_vpref, 1.0)
 
 
+def test_goal_noise_breaks_antipodal_funneling():
+    """With human_goal_noise>0, circle-crossing goals are perturbed off the exact
+    antipodal point, so pedestrian paths no longer all funnel through (0,0) —
+    matching the paper's spread human trajectories. Default (0) stays antipodal."""
+    env = CrowdSimEnv(num_humans=10, scenario='circle', human_goal_noise=2.0)
+    env.reset(seed=5)
+    offset = np.hypot(env.humans_gx + env.humans_px, env.humans_gy + env.humans_py)
+    assert offset.mean() > 0.3, f"goals still ~antipodal: mean offset {offset.mean():.2f}"
+
+    env0 = CrowdSimEnv(num_humans=10, scenario='circle')  # default goal noise 0.0
+    env0.reset(seed=5)
+    off0 = np.hypot(env0.humans_gx + env0.humans_px, env0.humans_gy + env0.humans_py)
+    assert np.allclose(off0, 0.0), "default should keep exact antipodal goals"
+
+
 def test_human_vpref_override_forces_parity_speed():
     """human_vpref_override forces a flat pedestrian speed across scenarios AND
     lands in humans_vpref (what the motion model reads), so it is genuinely

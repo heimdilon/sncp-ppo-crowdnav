@@ -21,6 +21,7 @@ class CrowdSimEnv(gym.Env):
         human_motion_model='orca',
         robot_vpref=0.26,
         human_vpref_override=None,
+        human_goal_noise=0.0,
     ):
         super(CrowdSimEnv, self).__init__()
 
@@ -36,6 +37,12 @@ class CrowdSimEnv(gym.Env):
         # genuinely applied (a bare `env.human_vpref = ...` after reset does not
         # update humans_vpref — a latent gotcha this bypasses).
         self.human_vpref_override = human_vpref_override
+        # Circle-crossing goals are antipodal (goal = -start), so EVERY path
+        # passes through the exact center (0,0) and the crowd funnels into a
+        # clump there — unlike the paper, whose human trajectories spread across
+        # the central region. human_goal_noise > 0 perturbs each goal by
+        # uniform(-noise, noise) per axis so the crossings spread out (paper-like).
+        self.human_goal_noise = human_goal_noise
         # When True (default), robot start/goal and pedestrian spawns are
         # randomized every reset (circle-crossing with random antipodal points).
         # When False, the legacy fixed (0,-4)->(0,4) scene is reproduced exactly.
@@ -174,8 +181,11 @@ class CrowdSimEnv(gym.Env):
                             break
                     self.humans_px[i] = px
                     self.humans_py[i] = py
-                    self.humans_gx[i] = -px
-                    self.humans_gy[i] = -py
+                    gnoise = self.human_goal_noise
+                    nx = self.np_random.uniform(-gnoise, gnoise) if gnoise > 0 else 0.0
+                    ny = self.np_random.uniform(-gnoise, gnoise) if gnoise > 0 else 0.0
+                    self.humans_gx[i] = -px + nx
+                    self.humans_gy[i] = -py + ny
                     dx = self.humans_gx[i] - self.humans_px[i]
                     dy = self.humans_gy[i] - self.humans_py[i]
                     self.humans_theta[i] = np.arctan2(dy, dx)

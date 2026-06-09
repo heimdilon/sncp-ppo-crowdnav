@@ -213,7 +213,7 @@ def update_diagnostic_row(policy, agent):
 
 
 def make_env(num_humans, scenario, seed, comfort_coeff=6.0, max_time=50.0,
-             robot_vpref=0.26, human_vpref_override=None):
+             robot_vpref=0.26, human_vpref_override=None, human_goal_noise=0.0):
     """Factory for a single CrowdSimEnv, used by SyncVectorEnv."""
     def _thunk():
         env = CrowdSimEnv(
@@ -223,6 +223,7 @@ def make_env(num_humans, scenario, seed, comfort_coeff=6.0, max_time=50.0,
             max_time=max_time,
             robot_vpref=robot_vpref,
             human_vpref_override=human_vpref_override,
+            human_goal_noise=human_goal_noise,
         )
         env.reset(seed=seed)
         return env
@@ -248,6 +249,7 @@ def train(args):
         max_time=args.max_time,
         robot_vpref=args.robot_vpref,
         human_vpref_override=args.human_vpref_override,
+        human_goal_noise=args.human_goal_noise,
     )
 
     # 2. Create SNCP policy and PPO agent
@@ -670,6 +672,7 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
     max_time = getattr(args, 'max_time', 50.0)
     robot_vpref = getattr(args, 'robot_vpref', 0.26)
     human_vpref_override = getattr(args, 'human_vpref_override', None)
+    human_goal_noise = getattr(args, 'human_goal_noise', 0.0)
 
     def set_envs_vpref(envs, vpref):
         for sub_env in envs.envs:
@@ -686,6 +689,7 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
                     max_time=max_time,
                     robot_vpref=robot_vpref,
                     human_vpref_override=human_vpref_override,
+                    human_goal_noise=human_goal_noise,
                 )
                 for i in range(N)
             ]
@@ -712,6 +716,7 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
         max_time=max_time,
         robot_vpref=robot_vpref,
         human_vpref_override=human_vpref_override,
+        human_goal_noise=human_goal_noise,
     )
 
     scenario, H, vpref = step_to_phase(0, args.total_steps, args.num_humans)
@@ -935,6 +940,10 @@ def build_parser():
                         help='If set, force a flat pedestrian speed across all scenarios '
                              '(parity regime, e.g. 1.0 for paper reproduction). Default None '
                              'keeps the per-scenario speeds.')
+    parser.add_argument('--human_goal_noise', type=float, default=0.0,
+                        help='Per-axis uniform noise on circle-crossing pedestrian goals so '
+                             'they do not all funnel through the exact center (paper-like '
+                             'spread). 0 = exact antipodal (legacy). Paper regime uses ~2.0.')
 
     # Curriculum thresholds (inclusive) — 5-phase: 10%/25%/50%/75%/100%
     parser.add_argument('--curriculum_easy_until', type=int, default=None,

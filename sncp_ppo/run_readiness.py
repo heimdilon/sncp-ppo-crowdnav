@@ -19,6 +19,7 @@ TRAINING_TOKENS = (
     "MAX_TIME = 15.0",
     "ROBOT_VPREF = 1.0",
     "HUMAN_VPREF = 1.0",
+    "HUMAN_GOAL_NOISE = 2.0",
     "SAVE_PATH = 'checkpoints/sncp_ppo_v21.pt'",
     "'--num_envs', str(NUM_ENVS)",
     "'--horizon', str(HORIZON)",
@@ -29,6 +30,7 @@ TRAINING_TOKENS = (
     "'--max_time', str(MAX_TIME)",
     "'--robot_vpref', str(ROBOT_VPREF)",
     "'--human_vpref_override', str(HUMAN_VPREF)",
+    "'--human_goal_noise', str(HUMAN_GOAL_NOISE)",
     "'--holdout_scenarios', 'easy', 'hard', 'circle'",
     "'--holdout_episodes', '50'",
     "'--save_path', SAVE_PATH",
@@ -49,6 +51,7 @@ EVALUATION_TOKENS = (
     "'--trajectory_densities', '5', '10'",
     "'--robot_vpref', '1.0'",
     "'--human_vpref_override', '1.0'",
+    "'--human_goal_noise', '2.0'",
     "'--max_time', '15.0'",
 )
 

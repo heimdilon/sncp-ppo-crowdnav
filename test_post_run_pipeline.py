@@ -239,8 +239,10 @@ def test_colab_v21_training_cell_fails_fast_and_preserves_single_variable_config
     assert "MAX_TIME = 15.0" in train_cell
     assert "ROBOT_VPREF = 1.0" in train_cell
     assert "HUMAN_VPREF = 1.0" in train_cell
+    assert "HUMAN_GOAL_NOISE = 2.0" in train_cell
     assert "'--robot_vpref', str(ROBOT_VPREF)" in train_cell
     assert "'--human_vpref_override', str(HUMAN_VPREF)" in train_cell
+    assert "'--human_goal_noise', str(HUMAN_GOAL_NOISE)" in train_cell
     assert "'--curriculum_replay_ratio', str(REPLAY_RATIO)" in train_cell
     assert "'--comfort_coeff', str(COMFORT_COEFF)" in train_cell
     assert "'--max_time', str(MAX_TIME)" in train_cell
