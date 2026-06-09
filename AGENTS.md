@@ -20,7 +20,19 @@
   PDF `s12369-026-01389-9.pdf` in repo root, **git-ignored**).
 - Stack: Python, PyTorch, Gymnasium, **`ncps`** (Liquid Time-Constant / Neural Circuit Policies), pytest.
 - Robot = **TurtleBot3 Waffle**, max linear speed **0.26 m/s** (real hardware), wmax 1.8, radius 0.3.
-- **Current head state: v18 reward-restoration candidate code-ready / Colab run pending.** v15 proved
+- **Current head state: v18 COMPLETE — the breakthrough run (new baseline).** v18 restored the goal
+  reward `r_g` to the paper (approach `1→2·Δd`, removed the non-paper heading penalty) and is the
+  **first run to PASS the full artifact gate** (`eval_v18/artifact_verification.md` = pass; comparison
+  vs v15 = pass at every density). Density sweep success vs v16: N=1 36→**66%**, N=3 62→**86%**, N=5
+  56→**86%**, N=8 40→**70%**, N=10 44→**64%**, with **timeout collapsing** (e.g. N=1 60→20%, N=5
+  26→4%) and collision falling at high N (N=10 46→34% vs v15). Best generalist min **56→70%** (easy 100
+  / hard 82 / circle/N=10 70). Nav-time 152-170 stays well above the 121.5 beeline and trajectories
+  still arc around the crowd (`eval_v18/traj_hard_n10.png`), so the more decisive policy did NOT
+  regress to beelining. **This empirically confirms the diagnosis: the drifted `r_g` (not capacity,
+  not observation) was the cause of the timeout-dominant plateau.** Checkpoint `checkpoints/sncp_ppo_v18.pt`,
+  CSV `logs/training_20260608_170436.csv`, artifacts `eval_v18/`. Next lever = high-density collision
+  (N=8/10 still 26/34%) via the v19 comfort/I_sp fix, then ORCA pedestrians (§13).
+- **(historical) v18 hypothesis context.** v15 proved
   *genuine* collision-avoidance + social-distance keeping (it detours around pedestrians) - the
   long-standing "beeline" problem is solved. v16 added vectorized anti-forgetting replay
   (`--curriculum_replay_ratio=0.20`) and did reduce the v15 late-collapse failure mode, but the final
@@ -146,7 +158,7 @@ valuable context — it records what was *ruled out*, not just what was tried.
 | **v14** | **Two changes:** (a) **reactive** pedestrians (`human_dodge_robot=True`, cooperative crowd); (b) **true sparse NCP** (`AutoNCP`, replacing dense `FullyConnected` LTC) | Hit **~100%** — but trajectory/density analysis showed the robot **BEELINES** (straight line, constant 121.5 steps, the crowd yields). **Critical realization:** the paper uses **invisible-robot** pedestrians (CrowdNav default), so v14's reactivity made the task *easier* and the 100% is **not comparable** to the paper. The real gap is robot **speed**. The reactivity recommendation was a fidelity mistake; the NCP change was correct and kept. |
 | **v15** | **Revert to non-reactive** + **speed parity** (peds ≤0.26) + **strong comfort** (−6·I_sp) + **approach halved** (1·Δd) + **density curriculum to N=10** | ✅ genuine avoidance (detours, low I_sp). ⚠️ modest (peak 66%) + late collapse (no replay). See §2. |
 | **v16** | **Single variable:** vectorized anti-forgetting replay ratio 0.20; env/reward/model unchanged from v15 | ✅ collapse/stability improved (best holdout min 56%, final min 46%, stable std). ✅ real detours preserved. ❌ density sweep failed vs v15: N=1/5/8 success regressed, N=10 did not improve, N=1 timeout 60%. |
-| **v18** | **Single concept:** `r_g` → paper Eq 18 (approach `1 → 2·Δd`, **remove** the ad-hoc `-weight·|angle_diff|` heading penalty). Comfort 6.0 / max_time 50 / replay 0.20 / non-reactive / parity / AutoNCP unchanged. | _Colab run pending._ Hypothesis: the N=1 60%-timeout (with `I_sp≈0.009`, nothing to avoid) is a goal-reaching breakdown caused by the halved progress reward + a heading penalty that exceeds the max per-step progress reward, not by avoidance. Expect timeout↓ at low/mid density. |
+| **v18** | **Single concept:** `r_g` → paper Eq 18 (approach `1 → 2·Δd`, **remove** the ad-hoc `-weight·|angle_diff|` heading penalty). Comfort 6.0 / max_time 50 / replay 0.20 / non-reactive / parity / AutoNCP unchanged. | ✅ **BREAKTHROUGH — first run to PASS the artifact gate.** Density sweep (vs v16): N=1 36→**66%**, N=3 62→**86%**, N=5 56→**86%**, N=8 40→**70%**, N=10 44→**64%**; **timeout collapsed** (60→20 / 30→10 / 26→4 / 26→4 / 12→2%); collision also fell at high N (44→34% at N=10). Best generalist min **56→70%** (easy 100 / hard 82 / circle 70). Nav-time 152-170 = still detours (well above 121.5 beeline), low `I_sp`, std stable, no collapse. **Diagnosis confirmed: `r_g` WAS the bottleneck.** |
 
 **The "reward eliminated at v13" conclusion was over-generalised.** v13 tested the paper reward in an
 *infeasible* env (non-reactive pedestrians at ~0.5 m/s, ~2× the robot — it physically could not dodge),
