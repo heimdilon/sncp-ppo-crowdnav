@@ -19,6 +19,8 @@ class CrowdSimEnv(gym.Env):
         randomize_layout=True,
         comfort_coeff=6.0,
         human_motion_model='orca',
+        robot_vpref=0.26,
+        human_vpref_override=None,
     ):
         super(CrowdSimEnv, self).__init__()
 
@@ -27,6 +29,13 @@ class CrowdSimEnv(gym.Env):
         if human_motion_model not in ('sfm', 'linear', 'orca'):
             raise ValueError("human_motion_model must be 'sfm', 'linear', or 'orca'")
         self.human_motion_model = human_motion_model
+        # When set, ALL pedestrians use this preferred speed regardless of
+        # scenario (used for the paper-reproduction regime: parity at the robot's
+        # 1.0 m/s). It overrides the scenario speed in reset() AND lands in the
+        # humans_vpref array the motion models actually read, so the speed is
+        # genuinely applied (a bare `env.human_vpref = ...` after reset does not
+        # update humans_vpref — a latent gotcha this bypasses).
+        self.human_vpref_override = human_vpref_override
         # When True (default), robot start/goal and pedestrian spawns are
         # randomized every reset (circle-crossing with random antipodal points).
         # When False, the legacy fixed (0,-4)->(0,4) scene is reproduced exactly.
@@ -36,9 +45,10 @@ class CrowdSimEnv(gym.Env):
         self.max_time = max_time
         self.comfort_coeff = comfort_coeff
         
-        # Robot physical parameters (Turtlebot3 Waffle)
+        # Robot physical parameters (Turtlebot3 Waffle by default; the
+        # paper-reproduction run overrides robot_vpref to the paper's 1.0 m/s).
         self.robot_radius = 0.3
-        self.robot_vpref = 0.26  # max speed of Waffle (m/s)
+        self.robot_vpref = robot_vpref  # max speed (m/s); Waffle hardware = 0.26
         self.robot_wmax = 1.8    # max angular speed (rad/s)
         
         # Human physical parameters
@@ -135,6 +145,11 @@ class CrowdSimEnv(gym.Env):
         else:
             self.human_vpref = 0.26
             scenario_type = self.scenario
+
+        # Paper-reproduction regime: force a flat pedestrian speed (parity with
+        # the faster robot) across all scenarios/phases.
+        if self.human_vpref_override is not None:
+            self.human_vpref = float(self.human_vpref_override)
 
         self.humans_vpref = np.full(self.num_humans, self.human_vpref, dtype=float)
         

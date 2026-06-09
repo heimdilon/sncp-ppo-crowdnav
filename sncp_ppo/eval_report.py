@@ -421,8 +421,15 @@ def evaluate_density(
     scenario: str,
     n_episodes: int,
     seed: int,
+    robot_vpref: float = 0.26,
+    human_vpref_override: float | None = None,
+    max_time: float = 50.0,
 ) -> list[EpisodeResult]:
-    """Run deterministic policy episodes for one density/scenario pair."""
+    """Run deterministic policy episodes for one density/scenario pair.
+
+    robot_vpref / human_vpref_override / max_time let the eval match the regime
+    the checkpoint was TRAINED in (e.g. the paper-reproduction run uses robot
+    1.0 m/s + parity pedestrians); defaults preserve the TurtleBot regime."""
 
     import torch
 
@@ -432,7 +439,11 @@ def evaluate_density(
 
     _set_seed(seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    env = CrowdSimEnv(num_humans=num_humans, scenario=scenario)
+    env = CrowdSimEnv(
+        num_humans=num_humans, scenario=scenario,
+        robot_vpref=robot_vpref, human_vpref_override=human_vpref_override,
+        max_time=max_time,
+    )
     policy = SNCPPolicy(robot_vpref=env.robot_vpref, robot_wmax=env.robot_wmax).to(device)
     policy.load_state_dict(torch.load(checkpoint_path, map_location=device))
     policy.train(False)
@@ -487,6 +498,9 @@ def render_trajectory(
     num_humans: int,
     scenario: str,
     seed: int,
+    robot_vpref: float = 0.26,
+    human_vpref_override: float | None = None,
+    max_time: float = 50.0,
 ) -> None:
     from visualize_trajectory import run_and_visualize
 
@@ -496,6 +510,9 @@ def render_trajectory(
         num_humans=num_humans,
         scenario=scenario,
         seed=seed,
+        robot_vpref=robot_vpref,
+        human_vpref_override=human_vpref_override,
+        max_time=max_time,
     )
 
 
@@ -509,6 +526,9 @@ def run_report(
     seed: int,
     trajectory_densities: Sequence[int] = (),
     baseline_nav_steps: float = 121.5,
+    robot_vpref: float = 0.26,
+    human_vpref_override: float | None = None,
+    max_time: float = 50.0,
     evaluator: Evaluator = evaluate_density,
     trajectory_renderer: TrajectoryRenderer = render_trajectory,
 ) -> dict[str, Path | list[Path]]:
@@ -529,6 +549,9 @@ def run_report(
             scenario=scenario,
             n_episodes=n_episodes,
             seed=seed,
+            robot_vpref=robot_vpref,
+            human_vpref_override=human_vpref_override,
+            max_time=max_time,
         )
         summaries.append(
             summarize_density(
@@ -547,6 +570,9 @@ def run_report(
             num_humans=int(num_humans),
             scenario=scenario,
             seed=seed,
+            robot_vpref=robot_vpref,
+            human_vpref_override=human_vpref_override,
+            max_time=max_time,
         )
         trajectory_paths.append(output_path)
 

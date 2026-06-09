@@ -39,6 +39,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--n_episodes", type=int, default=50)
     parser.add_argument("--seed", type=int, default=100)
     parser.add_argument("--trajectory_densities", type=int, nargs="*", default=[5, 10])
+    parser.add_argument("--robot_vpref", type=float, default=0.26,
+                        help="Robot max speed; the paper-reproduction run uses 1.0 to match the paper.")
+    parser.add_argument("--human_vpref_override", type=float, default=None,
+                        help="If set, force a flat pedestrian speed (parity regime, e.g. 1.0).")
+    parser.add_argument("--max_time", type=float, default=50.0,
+                        help="Episode time cap for eval; match the training regime.")
     parser.add_argument("--expected_replay_ratio", type=float, default=0.20)
     parser.add_argument("--replay_tolerance", type=float, default=0.10)
     return parser
@@ -60,6 +66,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         n_episodes=args.n_episodes,
         seed=args.seed,
         trajectory_densities=args.trajectory_densities,
+        robot_vpref=args.robot_vpref,
+        human_vpref_override=args.human_vpref_override,
+        max_time=args.max_time,
         expected_replay_ratio=args.expected_replay_ratio,
         replay_tolerance=args.replay_tolerance,
     )

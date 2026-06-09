@@ -212,7 +212,8 @@ def update_diagnostic_row(policy, agent):
     ]
 
 
-def make_env(num_humans, scenario, seed, comfort_coeff=6.0, max_time=50.0):
+def make_env(num_humans, scenario, seed, comfort_coeff=6.0, max_time=50.0,
+             robot_vpref=0.26, human_vpref_override=None):
     """Factory for a single CrowdSimEnv, used by SyncVectorEnv."""
     def _thunk():
         env = CrowdSimEnv(
@@ -220,6 +221,8 @@ def make_env(num_humans, scenario, seed, comfort_coeff=6.0, max_time=50.0):
             scenario=scenario,
             comfort_coeff=comfort_coeff,
             max_time=max_time,
+            robot_vpref=robot_vpref,
+            human_vpref_override=human_vpref_override,
         )
         env.reset(seed=seed)
         return env
@@ -243,6 +246,8 @@ def train(args):
         scenario='easy',
         comfort_coeff=args.comfort_coeff,
         max_time=args.max_time,
+        robot_vpref=args.robot_vpref,
+        human_vpref_override=args.human_vpref_override,
     )
 
     # 2. Create SNCP policy and PPO agent
@@ -663,6 +668,8 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
     N, T = args.num_envs, args.horizon
     comfort_coeff = getattr(args, 'comfort_coeff', 6.0)
     max_time = getattr(args, 'max_time', 50.0)
+    robot_vpref = getattr(args, 'robot_vpref', 0.26)
+    human_vpref_override = getattr(args, 'human_vpref_override', None)
 
     def set_envs_vpref(envs, vpref):
         for sub_env in envs.envs:
@@ -677,6 +684,8 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
                     args.seed + i,
                     comfort_coeff=comfort_coeff,
                     max_time=max_time,
+                    robot_vpref=robot_vpref,
+                    human_vpref_override=human_vpref_override,
                 )
                 for i in range(N)
             ]
@@ -701,6 +710,8 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
         scenario='circle',
         comfort_coeff=comfort_coeff,
         max_time=max_time,
+        robot_vpref=robot_vpref,
+        human_vpref_override=human_vpref_override,
     )
 
     scenario, H, vpref = step_to_phase(0, args.total_steps, args.num_humans)
@@ -917,6 +928,13 @@ def build_parser():
     parser.add_argument('--max_time', type=float, default=50.0,
                         help='Episode time limit in seconds. v15/v16 default is '
                              '50.0; max-time candidates should pass 60.0 explicitly.')
+    parser.add_argument('--robot_vpref', type=float, default=0.26,
+                        help='Robot max speed (m/s). TurtleBot3 Waffle hardware = 0.26; '
+                             'the paper-reproduction run passes 1.0 to match the paper.')
+    parser.add_argument('--human_vpref_override', type=float, default=None,
+                        help='If set, force a flat pedestrian speed across all scenarios '
+                             '(parity regime, e.g. 1.0 for paper reproduction). Default None '
+                             'keeps the per-scenario speeds.')
 
     # Curriculum thresholds (inclusive) — 5-phase: 10%/25%/50%/75%/100%
     parser.add_argument('--curriculum_easy_until', type=int, default=None,

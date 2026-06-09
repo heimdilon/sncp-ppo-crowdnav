@@ -168,7 +168,7 @@ def test_run_report_writes_sweep_artifacts_and_trajectory_manifest(tmp_path):
     checkpoint.write_bytes(b"fake checkpoint")
     calls = []
 
-    def fake_evaluator(*, checkpoint_path, num_humans, scenario, n_episodes, seed):
+    def fake_evaluator(*, checkpoint_path, num_humans, scenario, n_episodes, seed, **_kwargs):
         calls.append((checkpoint_path, num_humans, scenario, n_episodes, seed))
         return [
             EpisodeResult(
@@ -191,7 +191,7 @@ def test_run_report_writes_sweep_artifacts_and_trajectory_manifest(tmp_path):
             ),
         ]
 
-    def fake_trajectory_renderer(*, checkpoint_path, output_path, num_humans, scenario, seed):
+    def fake_trajectory_renderer(*, checkpoint_path, output_path, num_humans, scenario, seed, **_kwargs):
         output_path.write_text(
             f"{checkpoint_path.name} {num_humans} {scenario} {seed}",
             encoding="utf-8",

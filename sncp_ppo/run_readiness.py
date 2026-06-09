@@ -16,8 +16,10 @@ TRAINING_TOKENS = (
     "TARGET_KL = 0.01",
     "REPLAY_RATIO = 0.20",
     "COMFORT_COEFF = 6.0",
-    "MAX_TIME = 50.0",
-    "SAVE_PATH = 'checkpoints/sncp_ppo_v20.pt'",
+    "MAX_TIME = 15.0",
+    "ROBOT_VPREF = 1.0",
+    "HUMAN_VPREF = 1.0",
+    "SAVE_PATH = 'checkpoints/sncp_ppo_v21.pt'",
     "'--num_envs', str(NUM_ENVS)",
     "'--horizon', str(HORIZON)",
     "'--total_steps', str(TOTAL_STEPS)",
@@ -25,6 +27,8 @@ TRAINING_TOKENS = (
     "'--curriculum_replay_ratio', str(REPLAY_RATIO)",
     "'--comfort_coeff', str(COMFORT_COEFF)",
     "'--max_time', str(MAX_TIME)",
+    "'--robot_vpref', str(ROBOT_VPREF)",
+    "'--human_vpref_override', str(HUMAN_VPREF)",
     "'--holdout_scenarios', 'easy', 'hard', 'circle'",
     "'--holdout_episodes', '50'",
     "'--save_path', SAVE_PATH",
@@ -33,16 +37,19 @@ TRAINING_TOKENS = (
 )
 
 EVALUATION_TOKENS = (
-    "CHECKPOINT = 'checkpoints/sncp_ppo_v20.pt'",
-    "EVAL_OUT = 'eval_v20'",
+    "CHECKPOINT = 'checkpoints/sncp_ppo_v21.pt'",
+    "EVAL_OUT = 'eval_v21'",
     "EVAL_SEED = 100",
     "EVAL_EPISODES = 50",
     "run_post_eval.py",
-    "'--version', '20'",
+    "'--version', '21'",
     "'--densities', '1', '3', '5', '8', '10'",
     "'--scenario', 'hard'",
     "'--n_episodes', str(EVAL_EPISODES)",
     "'--trajectory_densities', '5', '10'",
+    "'--robot_vpref', '1.0'",
+    "'--human_vpref_override', '1.0'",
+    "'--max_time', '15.0'",
 )
 
 
@@ -121,13 +128,13 @@ def verify_v16_run_ready(repo_root: str | Path = ".") -> V16RunReadinessSummary:
     cells = _load_notebook(repo_root / "sncp_ppo_colab.ipynb") or []
     training_cell = _find_unique_cell(
         cells,
-        "SAVE_PATH = 'checkpoints/sncp_ppo_v20.pt'",
+        "SAVE_PATH = 'checkpoints/sncp_ppo_v21.pt'",
         notes,
         "v17 training",
     )
     evaluation_cell = _find_unique_cell(
         cells,
-        "CHECKPOINT = 'checkpoints/sncp_ppo_v20.pt'",
+        "CHECKPOINT = 'checkpoints/sncp_ppo_v21.pt'",
         notes,
         "v17 evaluation",
     )
@@ -136,7 +143,7 @@ def verify_v16_run_ready(repo_root: str | Path = ".") -> V16RunReadinessSummary:
 
     densities = _baseline_densities(repo_root / "eval_v15" / "density_sweep.json", notes)
     if not notes:
-        notes.append("PASS: v20 Colab training and evaluation configuration is ready")
+        notes.append("PASS: v21 Colab training and evaluation configuration is ready")
 
     return V16RunReadinessSummary(
         status=_status(notes),
