@@ -335,8 +335,15 @@ class CrowdSimEnv(gym.Env):
             # the robot (d_hr < 0.1m), which would otherwise dominate the reward.
             inv_d_hr = min(1.0 / (d_hr + 1e-5), 10.0)
             I_sp += inv_d_hr * I_2
-            
-        return I_sp
+
+        # v19: clamp to the paper's stated range (Sec 3.3: "Isp ranges from 0 to
+        # 1"). The summed 1/d_hr term is otherwise unbounded, so a close cluster
+        # could push I_sp to ~8 and make the comfort penalty (-comfort_coeff*I_sp)
+        # spike to ~-48/step during exploration — drowning the -20 collision
+        # signal and over-teaching caution. Bounding it keeps collision the
+        # dominant "do not hit" signal while preserving the distance-keeping
+        # gradient at the comfort_coeff (unchanged at 6.0) multiplier.
+        return float(np.clip(I_sp, 0.0, 1.0))
 
     def step(self, action):
         # Action is [v, w]

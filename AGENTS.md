@@ -30,8 +30,12 @@
   still arc around the crowd (`eval_v18/traj_hard_n10.png`), so the more decisive policy did NOT
   regress to beelining. **This empirically confirms the diagnosis: the drifted `r_g` (not capacity,
   not observation) was the cause of the timeout-dominant plateau.** Checkpoint `checkpoints/sncp_ppo_v18.pt`,
-  CSV `logs/training_20260608_170436.csv`, artifacts `eval_v18/`. Next lever = high-density collision
-  (N=8/10 still 26/34%) via the v19 comfort/I_sp fix, then ORCA pedestrians (§13).
+  CSV `logs/training_20260608_170436.csv`, artifacts `eval_v18/`.
+- **v19 = code-ready / Colab run pending.** Single variable vs v18: clamp `I_sp` to `[0,1]` (paper Sec 3.3)
+  in `crowd_env.py::_compute_social_pressure`; `comfort_coeff` stays 6.0. Targets the remaining
+  high-density collision (N=8/10 ~26/34%) by stopping the unbounded comfort spike (~`-48`/step) from
+  drowning the `-20` collision signal. Notebook/readiness/tests bumped to v19; gate = pass; 123 tests pass.
+  The bigger high-density lever (ORCA pedestrians) is still §13's v20.
 - **(historical) v18 hypothesis context.** v15 proved
   *genuine* collision-avoidance + social-distance keeping (it detours around pedestrians) - the
   long-standing "beeline" problem is solved. v16 added vectorized anti-forgetting replay
@@ -158,6 +162,7 @@ valuable context — it records what was *ruled out*, not just what was tried.
 | **v14** | **Two changes:** (a) **reactive** pedestrians (`human_dodge_robot=True`, cooperative crowd); (b) **true sparse NCP** (`AutoNCP`, replacing dense `FullyConnected` LTC) | Hit **~100%** — but trajectory/density analysis showed the robot **BEELINES** (straight line, constant 121.5 steps, the crowd yields). **Critical realization:** the paper uses **invisible-robot** pedestrians (CrowdNav default), so v14's reactivity made the task *easier* and the 100% is **not comparable** to the paper. The real gap is robot **speed**. The reactivity recommendation was a fidelity mistake; the NCP change was correct and kept. |
 | **v15** | **Revert to non-reactive** + **speed parity** (peds ≤0.26) + **strong comfort** (−6·I_sp) + **approach halved** (1·Δd) + **density curriculum to N=10** | ✅ genuine avoidance (detours, low I_sp). ⚠️ modest (peak 66%) + late collapse (no replay). See §2. |
 | **v16** | **Single variable:** vectorized anti-forgetting replay ratio 0.20; env/reward/model unchanged from v15 | ✅ collapse/stability improved (best holdout min 56%, final min 46%, stable std). ✅ real detours preserved. ❌ density sweep failed vs v15: N=1/5/8 success regressed, N=10 did not improve, N=1 timeout 60%. |
+| **v19** | **Single variable:** clamp `I_sp` to `[0,1]` (paper Sec 3.3) in `_compute_social_pressure`. `comfort_coeff` stays 6.0; everything else = v18. | _Colab run pending._ Targets the remaining gap (high-density collision N=8/10 ~26/34%): unbounded `I_sp` let comfort spike to ~`-48`/step and drown the `-20` collision signal; bounding it keeps collision the dominant "do not hit" signal. Expect N=8/10 collision↓ without timeout returning. |
 | **v18** | **Single concept:** `r_g` → paper Eq 18 (approach `1 → 2·Δd`, **remove** the ad-hoc `-weight·|angle_diff|` heading penalty). Comfort 6.0 / max_time 50 / replay 0.20 / non-reactive / parity / AutoNCP unchanged. | ✅ **BREAKTHROUGH — first run to PASS the artifact gate.** Density sweep (vs v16): N=1 36→**66%**, N=3 62→**86%**, N=5 56→**86%**, N=8 40→**70%**, N=10 44→**64%**; **timeout collapsed** (60→20 / 30→10 / 26→4 / 26→4 / 12→2%); collision also fell at high N (44→34% at N=10). Best generalist min **56→70%** (easy 100 / hard 82 / circle 70). Nav-time 152-170 = still detours (well above 121.5 beeline), low `I_sp`, std stable, no collapse. **Diagnosis confirmed: `r_g` WAS the bottleneck.** |
 
 **The "reward eliminated at v13" conclusion was over-generalised.** v13 tested the paper reward in an
@@ -440,7 +445,7 @@ success collapsing toward 0 with rising timeout. If seen, lower the comfort coef
 | `test_env_velocity.py` | velocity/observation correctness |
 | `test_model.py` | policy forward pass (shapes + action limits) |
 | `test_ncp_wiring.py` | encoders are sparse AutoNCP (not dense); proj reads motor `output_dim`; node inter-layer sized; forward intact |
-| `test_reward_paper.py` | goal +20, collision −20, default **comfort −6·I_sp**, configurable comfort coefficient, **approach 2·Δd (paper Eq 18)**, **no `angle_diff` heading penalty** (`test_no_orientation_penalty`), max_time 50 |
+| `test_reward_paper.py` | goal +20, collision −20, default **comfort −6·I_sp**, configurable comfort coefficient, **approach 2·Δd (paper Eq 18)**, **no `angle_diff` heading penalty** (`test_no_orientation_penalty`), **`I_sp` clamped to [0,1]** (`test_isp_bounded_to_unit_interval`, v19), max_time 50 |
 | `test_pedestrian_reactive.py` | **default is non-reactive**; reactive flag still works (keeps more clearance) |
 | `test_speed_parity.py` | every scenario's `human_vpref ≤ robot_vpref` |
 | `test_vec_curriculum.py` | `step_to_phase` boundaries/values, parity, N=10 holdout, vectorized replay selection/logging, holdout behavioral diagnostics, vectorized run smoke, `compute_total_updates` |

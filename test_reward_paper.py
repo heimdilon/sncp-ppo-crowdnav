@@ -111,6 +111,36 @@ def test_no_orientation_penalty():
     )
 
 
+def test_isp_bounded_to_unit_interval():
+    """I_sp is clamped to [0,1] (paper Sec 3.3: 'Isp ranges from 0 to 1').
+
+    v19: the impl summed an unbounded per-human term (1/d_hr, capped at 10) over
+    the crowd, so a close pedestrian could drive I_sp far above 1 and make the
+    comfort penalty (-comfort_coeff * I_sp) spike to -48+/step during training,
+    drowning the -20 collision signal. Clamping restores the paper's range and
+    lets the collision penalty stay the dominant 'do not hit' signal."""
+    env = CrowdSimEnv(num_humans=5, scenario='hard')
+    env.reset(seed=1)
+    # One pedestrian almost on top of the robot, the rest far away, so the close
+    # one dominates omega and the raw (unclamped) I_sp would be ~8 >> 1.
+    env.humans_px[:] = 100.0
+    env.humans_py[:] = 100.0
+    env.humans_px[0] = env.robot_px + 0.05
+    env.humans_py[0] = env.robot_py
+    i_sp = env._compute_social_pressure()
+    assert 0.0 <= i_sp <= 1.0, f"I_sp not clamped to [0,1]: {i_sp}"
+    # The pile-up should saturate the clamp (proves the raw value exceeded 1).
+    assert i_sp >= 0.99, f"I_sp not saturated near 1 for a close pedestrian: {i_sp}"
+
+
+def test_comfort_coeff_default_unchanged_in_v19():
+    """v19 changes ONLY the I_sp range, not the comfort coefficient: default
+    stays 6.0 (lowering it would reduce the caution v18 relies on and risk more
+    high-density collisions)."""
+    env = CrowdSimEnv(num_humans=5, scenario='hard')
+    assert env.comfort_coeff == 6.0
+
+
 def test_max_time_default_is_50():
     # 50s (200 steps, ~13m reach) gives the randomly-oriented robot room to turn
     # toward the goal + traverse ~8m + maneuver around pedestrians. 35s was too

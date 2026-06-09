@@ -17,7 +17,7 @@ TRAINING_TOKENS = (
     "REPLAY_RATIO = 0.20",
     "COMFORT_COEFF = 6.0",
     "MAX_TIME = 50.0",
-    "SAVE_PATH = 'checkpoints/sncp_ppo_v18.pt'",
+    "SAVE_PATH = 'checkpoints/sncp_ppo_v19.pt'",
     "'--num_envs', str(NUM_ENVS)",
     "'--horizon', str(HORIZON)",
     "'--total_steps', str(TOTAL_STEPS)",
@@ -33,12 +33,12 @@ TRAINING_TOKENS = (
 )
 
 EVALUATION_TOKENS = (
-    "CHECKPOINT = 'checkpoints/sncp_ppo_v18.pt'",
-    "EVAL_OUT = 'eval_v18'",
+    "CHECKPOINT = 'checkpoints/sncp_ppo_v19.pt'",
+    "EVAL_OUT = 'eval_v19'",
     "EVAL_SEED = 100",
     "EVAL_EPISODES = 50",
     "run_post_eval.py",
-    "'--version', '18'",
+    "'--version', '19'",
     "'--densities', '1', '3', '5', '8', '10'",
     "'--scenario', 'hard'",
     "'--n_episodes', str(EVAL_EPISODES)",
@@ -121,13 +121,13 @@ def verify_v16_run_ready(repo_root: str | Path = ".") -> V16RunReadinessSummary:
     cells = _load_notebook(repo_root / "sncp_ppo_colab.ipynb") or []
     training_cell = _find_unique_cell(
         cells,
-        "SAVE_PATH = 'checkpoints/sncp_ppo_v18.pt'",
+        "SAVE_PATH = 'checkpoints/sncp_ppo_v19.pt'",
         notes,
         "v17 training",
     )
     evaluation_cell = _find_unique_cell(
         cells,
-        "CHECKPOINT = 'checkpoints/sncp_ppo_v18.pt'",
+        "CHECKPOINT = 'checkpoints/sncp_ppo_v19.pt'",
         notes,
         "v17 evaluation",
     )
@@ -136,7 +136,7 @@ def verify_v16_run_ready(repo_root: str | Path = ".") -> V16RunReadinessSummary:
 
     densities = _baseline_densities(repo_root / "eval_v15" / "density_sweep.json", notes)
     if not notes:
-        notes.append("PASS: v18 Colab training and evaluation configuration is ready")
+        notes.append("PASS: v19 Colab training and evaluation configuration is ready")
 
     return V16RunReadinessSummary(
         status=_status(notes),
