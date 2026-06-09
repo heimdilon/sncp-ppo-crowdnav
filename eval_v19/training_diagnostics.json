@@ -1,0 +1,94 @@
+{
+  "csv_path": "logs/training_20260609_073534.csv",
+  "total_rows": 1221,
+  "evaluated_rows": 1202,
+  "holdout_scenarios": [
+    "easy",
+    "hard",
+    "circle"
+  ],
+  "observed_replay_ratio": 0.17772317772317772,
+  "best_step": 1679360,
+  "best_min_success": 0.68,
+  "best_success_by_scenario": {
+    "easy": 1.0,
+    "hard": 0.8,
+    "circle": 0.68
+  },
+  "best_collision_by_scenario": {
+    "easy": 0.0,
+    "hard": 0.04,
+    "circle": 0.18
+  },
+  "best_timeout_by_scenario": {
+    "easy": 0.0,
+    "hard": 0.16,
+    "circle": 0.14
+  },
+  "best_reward_by_scenario": {
+    "easy": 35.346,
+    "hard": 26.1293,
+    "circle": 18.4574
+  },
+  "best_avg_steps_by_scenario": {
+    "easy": 161.84,
+    "hard": 167.14,
+    "circle": 154.48
+  },
+  "best_avg_I_sp_by_scenario": {
+    "easy": 0.0,
+    "hard": 0.0052,
+    "circle": 0.0136
+  },
+  "best_min_d_min_by_scenario": {
+    "easy": 0.6769,
+    "hard": 0.5301,
+    "circle": 0.4992
+  },
+  "best_reason": "best updated (priority: min_success, tie-break: avg_reward, then lower collision_rate)",
+  "final_step": 2500608,
+  "final_min_success": 0.6,
+  "final_success_by_scenario": {
+    "easy": 1.0,
+    "hard": 0.88,
+    "circle": 0.6
+  },
+  "final_collision_by_scenario": {
+    "easy": 0.0,
+    "hard": 0.02,
+    "circle": 0.34
+  },
+  "final_timeout_by_scenario": {
+    "easy": 0.0,
+    "hard": 0.1,
+    "circle": 0.06
+  },
+  "final_reward_by_scenario": {
+    "easy": 35.3394,
+    "hard": 30.6978,
+    "circle": 13.1896
+  },
+  "final_avg_steps_by_scenario": {
+    "easy": 156.18,
+    "hard": 159.44,
+    "circle": 124.62
+  },
+  "final_avg_I_sp_by_scenario": {
+    "easy": 0.0,
+    "hard": 0.0015,
+    "circle": 0.0104
+  },
+  "final_min_d_min_by_scenario": {
+    "easy": 0.7621,
+    "hard": 0.5416,
+    "circle": 0.4889
+  },
+  "collapse_delta": -0.08000000000000007,
+  "collapse_detected": false,
+  "final_std_linear": 0.141753,
+  "final_std_angular": 0.239003,
+  "max_std_linear": 0.141784,
+  "max_std_angular": 0.239012,
+  "std_linear_delta": 0.006378999999999996,
+  "std_angular_delta": 0.01568899999999998
+}

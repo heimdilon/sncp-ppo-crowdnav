@@ -31,11 +31,14 @@
   regress to beelining. **This empirically confirms the diagnosis: the drifted `r_g` (not capacity,
   not observation) was the cause of the timeout-dominant plateau.** Checkpoint `checkpoints/sncp_ppo_v18.pt`,
   CSV `logs/training_20260608_170436.csv`, artifacts `eval_v18/`.
-- **v19 = code-ready / Colab run pending.** Single variable vs v18: clamp `I_sp` to `[0,1]` (paper Sec 3.3)
-  in `crowd_env.py::_compute_social_pressure`; `comfort_coeff` stays 6.0. Targets the remaining
-  high-density collision (N=8/10 ~26/34%) by stopping the unbounded comfort spike (~`-48`/step) from
-  drowning the `-20` collision signal. Notebook/readiness/tests bumped to v19; gate = pass; 123 tests pass.
-  The bigger high-density lever (ORCA pedestrians) is still §13's v20.
+- **v19 = COMPLETE, NEGATIVE result — v18 stays the baseline.** Clamping `I_sp` to `[0,1]` did NOT
+  reduce high-N collision (N=8/10 unchanged at 26/34%) and regressed success at every density (N=5 86→74,
+  N=8 70→52, N=10 64→48% vs v18); timeout partly returned. Best gen min 70→68%. **This is the useful
+  finding: two reward experiments now agree the remaining high-N collision is an ENVIRONMENT problem
+  (non-reactive SFM crowd collapsing to a center knot), not a reward one.** The reward/comfort dimension
+  is exhausted. The committed best checkpoint remains `checkpoints/sncp_ppo_v18.pt`. Artifacts (record):
+  `eval_v19/`, CSV `logs/training_20260609_073534.csv`. **Next = v20: ORCA pedestrians (navigable crowd),
+  the real high-density lever (§13).**
 - **(historical) v18 hypothesis context.** v15 proved
   *genuine* collision-avoidance + social-distance keeping (it detours around pedestrians) - the
   long-standing "beeline" problem is solved. v16 added vectorized anti-forgetting replay
@@ -162,7 +165,7 @@ valuable context — it records what was *ruled out*, not just what was tried.
 | **v14** | **Two changes:** (a) **reactive** pedestrians (`human_dodge_robot=True`, cooperative crowd); (b) **true sparse NCP** (`AutoNCP`, replacing dense `FullyConnected` LTC) | Hit **~100%** — but trajectory/density analysis showed the robot **BEELINES** (straight line, constant 121.5 steps, the crowd yields). **Critical realization:** the paper uses **invisible-robot** pedestrians (CrowdNav default), so v14's reactivity made the task *easier* and the 100% is **not comparable** to the paper. The real gap is robot **speed**. The reactivity recommendation was a fidelity mistake; the NCP change was correct and kept. |
 | **v15** | **Revert to non-reactive** + **speed parity** (peds ≤0.26) + **strong comfort** (−6·I_sp) + **approach halved** (1·Δd) + **density curriculum to N=10** | ✅ genuine avoidance (detours, low I_sp). ⚠️ modest (peak 66%) + late collapse (no replay). See §2. |
 | **v16** | **Single variable:** vectorized anti-forgetting replay ratio 0.20; env/reward/model unchanged from v15 | ✅ collapse/stability improved (best holdout min 56%, final min 46%, stable std). ✅ real detours preserved. ❌ density sweep failed vs v15: N=1/5/8 success regressed, N=10 did not improve, N=1 timeout 60%. |
-| **v19** | **Single variable:** clamp `I_sp` to `[0,1]` (paper Sec 3.3) in `_compute_social_pressure`. `comfort_coeff` stays 6.0; everything else = v18. | _Colab run pending._ Targets the remaining gap (high-density collision N=8/10 ~26/34%): unbounded `I_sp` let comfort spike to ~`-48`/step and drown the `-20` collision signal; bounding it keeps collision the dominant "do not hit" signal. Expect N=8/10 collision↓ without timeout returning. |
+| **v19** | **Single variable:** clamp `I_sp` to `[0,1]` (paper Sec 3.3) in `_compute_social_pressure`. `comfort_coeff` stays 6.0; everything else = v18. | ❌ **Negative result (v18 stays the baseline).** Hypothesis disproven: clamping `I_sp` did NOT reduce high-N collision (N=8 26→26%, N=10 34→34%, unchanged) and REGRESSED success everywhere (vs v18: N=5 86→74, N=8 70→52, N=10 64→48%); timeout partly returned (N=8 4→22%). Best gen min 70→68%. At N=10 the final policy even crept toward beeline (avg_steps 124≈121.5). **Lesson: high-N collision is an ENVIRONMENT problem (non-reactive SFM crowd), not a reward one — the reward/comfort dimension is exhausted. Next lever = ORCA pedestrians (v20).** |
 | **v18** | **Single concept:** `r_g` → paper Eq 18 (approach `1 → 2·Δd`, **remove** the ad-hoc `-weight·|angle_diff|` heading penalty). Comfort 6.0 / max_time 50 / replay 0.20 / non-reactive / parity / AutoNCP unchanged. | ✅ **BREAKTHROUGH — first run to PASS the artifact gate.** Density sweep (vs v16): N=1 36→**66%**, N=3 62→**86%**, N=5 56→**86%**, N=8 40→**70%**, N=10 44→**64%**; **timeout collapsed** (60→20 / 30→10 / 26→4 / 26→4 / 12→2%); collision also fell at high N (44→34% at N=10). Best generalist min **56→70%** (easy 100 / hard 82 / circle 70). Nav-time 152-170 = still detours (well above 121.5 beeline), low `I_sp`, std stable, no collapse. **Diagnosis confirmed: `r_g` WAS the bottleneck.** |
 
 **The "reward eliminated at v13" conclusion was over-generalised.** v13 tested the paper reward in an
