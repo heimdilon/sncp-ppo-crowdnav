@@ -37,8 +37,16 @@
   finding: two reward experiments now agree the remaining high-N collision is an ENVIRONMENT problem
   (non-reactive SFM crowd collapsing to a center knot), not a reward one.** The reward/comfort dimension
   is exhausted. The committed best checkpoint remains `checkpoints/sncp_ppo_v18.pt`. Artifacts (record):
-  `eval_v19/`, CSV `logs/training_20260609_073534.csv`. **Next = v20: ORCA pedestrians (navigable crowd),
-  the real high-density lever (§13).**
+  `eval_v19/`, CSV `logs/training_20260609_073534.csv`.
+- **v20 = code-ready / Colab run pending — ORCA pedestrians (the paper's CrowdSim regime).** Since v18/v19
+  proved the remaining high-N collision is an ENVIRONMENT problem, v20 swaps the pedestrian motion model
+  from Social Force to **ORCA** — a dependency-free pure-Python port (`crowd_sim/orca.py`, validated by
+  the canonical circle test in `test_orca.py`), no Python-RVO2 build. The env default is now
+  `human_motion_model='orca'`, so training AND evaluation run in the ORCA crowd. **The robot stays
+  invisible to pedestrians** (they avoid each other, not the robot — NOT v14's crowd-yields mistake);
+  ORCA only stops the SFM center-knot, opening navigable gaps at high density. ~3× the SFM per-step cost
+  (pure-Python LP) → expect ~5–6h on A100. Notebook/readiness/tests bumped to v20; gate=pass; 129 tests
+  pass. Judge v20 vs v18 knowing the crowd model changed (this is the move to the paper's env).
 - **(historical) v18 hypothesis context.** v15 proved
   *genuine* collision-avoidance + social-distance keeping (it detours around pedestrians) - the
   long-standing "beeline" problem is solved. v16 added vectorized anti-forgetting replay
@@ -165,6 +173,7 @@ valuable context — it records what was *ruled out*, not just what was tried.
 | **v14** | **Two changes:** (a) **reactive** pedestrians (`human_dodge_robot=True`, cooperative crowd); (b) **true sparse NCP** (`AutoNCP`, replacing dense `FullyConnected` LTC) | Hit **~100%** — but trajectory/density analysis showed the robot **BEELINES** (straight line, constant 121.5 steps, the crowd yields). **Critical realization:** the paper uses **invisible-robot** pedestrians (CrowdNav default), so v14's reactivity made the task *easier* and the 100% is **not comparable** to the paper. The real gap is robot **speed**. The reactivity recommendation was a fidelity mistake; the NCP change was correct and kept. |
 | **v15** | **Revert to non-reactive** + **speed parity** (peds ≤0.26) + **strong comfort** (−6·I_sp) + **approach halved** (1·Δd) + **density curriculum to N=10** | ✅ genuine avoidance (detours, low I_sp). ⚠️ modest (peak 66%) + late collapse (no replay). See §2. |
 | **v16** | **Single variable:** vectorized anti-forgetting replay ratio 0.20; env/reward/model unchanged from v15 | ✅ collapse/stability improved (best holdout min 56%, final min 46%, stable std). ✅ real detours preserved. ❌ density sweep failed vs v15: N=1/5/8 success regressed, N=10 did not improve, N=1 timeout 60%. |
+| **v20** | **Single variable:** pedestrian motion model SFM → **ORCA** (pure-Python `crowd_sim/orca.py`, the paper's CrowdSim regime). Env default `human_motion_model='orca'` so train+eval match. Robot stays INVISIBLE (peds avoid each other, not the robot). Everything else = v18. | _Colab run pending._ Targets high-N collision (v18/v19 proved it's an ENVIRONMENT problem): ORCA stops the crowd knotting at the antipodal-crossing center → navigable gaps. NOT v14's mistake (crowd does NOT yield to robot). ~3× SFM step cost → ~5–6h. Judge vs v18 understanding the crowd model changed (cross-env). |
 | **v19** | **Single variable:** clamp `I_sp` to `[0,1]` (paper Sec 3.3) in `_compute_social_pressure`. `comfort_coeff` stays 6.0; everything else = v18. | ❌ **Negative result (v18 stays the baseline).** Hypothesis disproven: clamping `I_sp` did NOT reduce high-N collision (N=8 26→26%, N=10 34→34%, unchanged) and REGRESSED success everywhere (vs v18: N=5 86→74, N=8 70→52, N=10 64→48%); timeout partly returned (N=8 4→22%). Best gen min 70→68%. At N=10 the final policy even crept toward beeline (avg_steps 124≈121.5). **Lesson: high-N collision is an ENVIRONMENT problem (non-reactive SFM crowd), not a reward one — the reward/comfort dimension is exhausted. Next lever = ORCA pedestrians (v20).** |
 | **v18** | **Single concept:** `r_g` → paper Eq 18 (approach `1 → 2·Δd`, **remove** the ad-hoc `-weight·|angle_diff|` heading penalty). Comfort 6.0 / max_time 50 / replay 0.20 / non-reactive / parity / AutoNCP unchanged. | ✅ **BREAKTHROUGH — first run to PASS the artifact gate.** Density sweep (vs v16): N=1 36→**66%**, N=3 62→**86%**, N=5 56→**86%**, N=8 40→**70%**, N=10 44→**64%**; **timeout collapsed** (60→20 / 30→10 / 26→4 / 26→4 / 12→2%); collision also fell at high N (44→34% at N=10). Best generalist min **56→70%** (easy 100 / hard 82 / circle 70). Nav-time 152-170 = still detours (well above 121.5 beeline), low `I_sp`, std stable, no collapse. **Diagnosis confirmed: `r_g` WAS the bottleneck.** |
 
@@ -449,7 +458,8 @@ success collapsing toward 0 with rising timeout. If seen, lower the comfort coef
 | `test_model.py` | policy forward pass (shapes + action limits) |
 | `test_ncp_wiring.py` | encoders are sparse AutoNCP (not dense); proj reads motor `output_dim`; node inter-layer sized; forward intact |
 | `test_reward_paper.py` | goal +20, collision −20, default **comfort −6·I_sp**, configurable comfort coefficient, **approach 2·Δd (paper Eq 18)**, **no `angle_diff` heading penalty** (`test_no_orientation_penalty`), **`I_sp` clamped to [0,1]** (`test_isp_bounded_to_unit_interval`, v19), max_time 50 |
-| `test_pedestrian_reactive.py` | **default is non-reactive**; reactive flag still works (keeps more clearance) |
+| `test_pedestrian_reactive.py` | **default `human_dodge_robot` is False**; the SFM reactive flag still works (clearance test pinned to `human_motion_model='sfm'`) |
+| `test_orca.py` | pure-Python ORCA: no-neighbor→pref vel, max-speed cap, head-on avoidance, **canonical circle-crossing test** (reach + collision-free), env default model is `orca`, env rollout keeps pedestrians separated in steady state |
 | `test_speed_parity.py` | every scenario's `human_vpref ≤ robot_vpref` |
 | `test_vec_curriculum.py` | `step_to_phase` boundaries/values, parity, N=10 holdout, vectorized replay selection/logging, holdout behavioral diagnostics, vectorized run smoke, `compute_total_updates` |
 | `test_vec_gae.py`, `test_vec_buffer.py` | GAE + buffer correctness |

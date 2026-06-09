@@ -4,6 +4,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
+from crowd_sim.orca import orca_velocities
+
 class CrowdSimEnv(gym.Env):
     metadata = {'render.modes': ['human', 'rgb_array']}
 
@@ -16,14 +18,14 @@ class CrowdSimEnv(gym.Env):
         human_dodge_robot=False,
         randomize_layout=True,
         comfort_coeff=6.0,
-        human_motion_model='sfm',
+        human_motion_model='orca',
     ):
         super(CrowdSimEnv, self).__init__()
 
         self.scenario = scenario  # 'easy', 'medium', 'hard', 'extreme', 'circle', 'random'
         self.human_dodge_robot = human_dodge_robot
-        if human_motion_model not in ('sfm', 'linear'):
-            raise ValueError("human_motion_model must be 'sfm' or 'linear'")
+        if human_motion_model not in ('sfm', 'linear', 'orca'):
+            raise ValueError("human_motion_model must be 'sfm', 'linear', or 'orca'")
         self.human_motion_model = human_motion_model
         # When True (default), robot start/goal and pedestrian spawns are
         # randomized every reset (circle-crossing with random antipodal points).
@@ -455,8 +457,13 @@ class CrowdSimEnv(gym.Env):
 
     def _move_humans(self):
         """
-        Updates pedestrian positions using a robust Social Force Model (SFM).
+        Updates pedestrian positions. Default is ORCA (v20, paper-faithful: the
+        same reciprocal collision avoidance CrowdSim uses); 'sfm' and 'linear'
+        are kept for the legacy/custom-map paths.
         """
+        if self.human_motion_model == 'orca':
+            self._move_humans_orca()
+            return
         if self.human_motion_model == 'linear':
             self._move_humans_linear()
             return
@@ -574,6 +581,47 @@ class CrowdSimEnv(gym.Env):
         self.humans_vy = new_vy
         self.humans_px = self.humans_px + new_vx * self.time_step
         self.humans_py = self.humans_py + new_vy * self.time_step
+
+    def _move_humans_orca(self):
+        """Move pedestrians with ORCA (v20): each avoids the OTHER pedestrians
+        reciprocally, heading to its own goal at its preferred speed.
+
+        The ROBOT is deliberately NOT a neighbour — pedestrians are invisible to
+        it ("invisible robot", the paper's CrowdNav regime), so the robot must
+        still do all of its own avoidance. ORCA only stops the crowd from
+        collapsing into an impassable knot at the antipodal-crossing center,
+        which is what the Social Force Model did and what blocked high density.
+        """
+        N = self.num_humans
+        pos = np.stack([self.humans_px, self.humans_py], axis=1)
+        vel = np.stack([self.humans_vx, self.humans_vy], axis=1)
+        radii = np.full(N, self.human_radius)
+        max_speeds = np.array([self._human_vpref(i) for i in range(N)], dtype=float)
+
+        pref = np.zeros((N, 2))
+        for i in range(N):
+            dx = self.humans_gx[i] - self.humans_px[i]
+            dy = self.humans_gy[i] - self.humans_py[i]
+            dist = np.hypot(dx, dy)
+            if dist >= 0.1:  # else stay at goal (pref velocity 0)
+                vpref_i = self._human_vpref(i)
+                pref[i, 0] = (dx / dist) * vpref_i
+                pref[i, 1] = (dy / dist) * vpref_i
+
+        new_vel = orca_velocities(
+            pos, vel, radii, pref, max_speeds,
+            time_horizon=3.0, time_step=self.time_step,
+        )
+        self.humans_vx = new_vel[:, 0]
+        self.humans_vy = new_vel[:, 1]
+        self.humans_px = self.humans_px + self.humans_vx * self.time_step
+        self.humans_py = self.humans_py + self.humans_vy * self.time_step
+
+        speed = np.hypot(self.humans_vx, self.humans_vy)
+        moving = speed > 0.01
+        self.humans_theta = np.where(
+            moving, np.arctan2(self.humans_vy, self.humans_vx), self.humans_theta
+        )
 
     def render(self, mode='human'):
         # For simple visual verification

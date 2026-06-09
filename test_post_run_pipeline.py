@@ -211,23 +211,23 @@ def test_versioned_post_eval_cli_derives_paths_from_version(tmp_path, monkeypatc
     assert "Overall status: pass" in capsys.readouterr().out
 
 
-def test_colab_v19_eval_cell_uses_post_run_pipeline():
+def test_colab_v20_eval_cell_uses_post_run_pipeline():
     code_sources = _colab_code_sources()
-    eval_cells = [source for source in code_sources if "CHECKPOINT = 'checkpoints/sncp_ppo_v19.pt'" in source]
+    eval_cells = [source for source in code_sources if "CHECKPOINT = 'checkpoints/sncp_ppo_v20.pt'" in source]
 
     assert len(eval_cells) == 1
     eval_cell = eval_cells[0]
-    assert "EVAL_OUT = 'eval_v19'" in eval_cell
+    assert "EVAL_OUT = 'eval_v20'" in eval_cell
     assert "run_post_eval.py" in eval_cell
-    assert "'--version', '19'" in eval_cell
+    assert "'--version', '20'" in eval_cell
     assert "run_v16_post_eval.py" not in eval_cell
     assert "evaluate_policy_report.py" not in eval_cell
     assert "compare_policy_reports.py" not in eval_cell
 
 
-def test_colab_v19_training_cell_fails_fast_and_preserves_single_variable_config():
+def test_colab_v20_training_cell_fails_fast_and_preserves_single_variable_config():
     code_sources = _colab_code_sources()
-    train_cells = [source for source in code_sources if "SAVE_PATH = 'checkpoints/sncp_ppo_v19.pt'" in source]
+    train_cells = [source for source in code_sources if "SAVE_PATH = 'checkpoints/sncp_ppo_v20.pt'" in source]
 
     assert len(train_cells) == 1
     train_cell = train_cells[0]

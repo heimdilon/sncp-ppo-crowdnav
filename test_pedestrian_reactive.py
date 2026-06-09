@@ -36,8 +36,12 @@ def test_reactive_pedestrians_keep_more_clearance():
     """With reactivity ON (explicit flag), a pedestrian on a collision course
     keeps a larger closest-approach distance than with it OFF — proof the
     avoidance force is actually applied, not just a flag toggled."""
-    reactive = CrowdSimEnv(num_humans=1, scenario='hard', human_dodge_robot=True)
-    nonreactive = CrowdSimEnv(num_humans=1, scenario='hard', human_dodge_robot=False)
+    # human_dodge_robot is an SFM-model feature; pin to 'sfm' (the ORCA default
+    # keeps the robot invisible to pedestrians regardless of the flag).
+    reactive = CrowdSimEnv(num_humans=1, scenario='hard', human_dodge_robot=True,
+                           human_motion_model='sfm')
+    nonreactive = CrowdSimEnv(num_humans=1, scenario='hard', human_dodge_robot=False,
+                              human_motion_model='sfm')
     d_reactive = _closest_approach(reactive)
     d_nonreactive = _closest_approach(nonreactive)
     assert d_reactive > d_nonreactive + 0.05, (
