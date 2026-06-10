@@ -53,15 +53,23 @@
   geometry**: a 0.6 m-wide robot needs >1.2 m between two pedestrians to thread, but the crowd packs to
   ~0.9 m, so a 0.26 m/s robot must circumnavigate and can't keep up. The paper hits 93–95% because its
   robot is 1.0 m/s. (Inspection GIFs: `crowd_orca_n10/n5.gif`, `crowd_sfm_n10.gif`, untracked.)
-- **v21 = code-ready / Colab run pending — paper reproduction (validation).** Robot 1.0 m/s
-  (`--robot_vpref 1.0`) + ORCA peds at parity (`--human_vpref_override 1.0`) + `--max_time 15`. New env
-  params `robot_vpref` / `human_vpref_override` (defaults 0.26 / None preserve the real-robot track) are
-  threaded through training AND the eval pipeline so eval matches the trained regime. If v21 reaches
-  ~90%+, the implementation is validated against the paper and robot speed was the real-robot ceiling.
-  Also adds **`human_goal_noise=2.0`** (a fidelity fix the user spotted: exact-antipodal goals made
-  every pedestrian path cross (0,0) so the crowd clumped at the center, unlike the paper's spread human
-  trajectories; perturbing the goals spreads the crossings — verified visually, `crowd_v21_paper_n10.gif`).
-  Notebook/readiness/tests bumped to v21; gate=pass; 133 tests pass. **v18 stays the 0.26 baseline.**
+- **v21 = COMPLETE, NEGATIVE for the validation hypothesis — paper regime does NOT validate at our
+  budget; v18 stays the baseline.** Setup: robot 1.0 m/s + ORCA peds at parity 1.0 + `max_time 15`
+  (60 steps) + `human_goal_noise 2.0` (fidelity fix the user spotted: exact-antipodal goals funneled
+  every pedestrian through (0,0); noise spreads the crossings like the paper — `crowd_v21_paper_n10.gif`).
+  Result: best within-regime holdout min **38%** (easy 84 / hard 52 / circle 38, at step 1.5M of 2.5M);
+  final min 10% — circle oscillated 2–38% the whole run (high variance around a low mean, no
+  consolidation; the "collapse" gate fired on best−final delta, but there was never a stable peak).
+  Density sweep (hard, 50 ep): N=1 **74%**, N=3 64%, N=5 48%, N=8 32%, N=10 **22%** — collision-dominated
+  at high N (58% at N=10), timeout flat ~20% at every N. **Interpretation: robot speed alone was NOT the
+  missing piece.** Parity also makes pedestrians 2–8× faster than the scenario speeds the model trained
+  on before, halves reaction time per encounter, and squeezes episodes to ≤60 steps; 2.5M PPO steps did
+  not crack it. The remaining gap to the paper's 93–95% now points at training budget/method (paper-scale
+  budget, possibly IL warm-start) rather than env fidelity. NOTE: the Colab eval cell "error" was
+  `run_post_eval.py` exiting 1 **by design** (verdict=fail), not a crash; the vs-v15 comparison and the
+  no-beeline gate are regime-invalid at 1.0 m/s (episode cap 60 < required 121.5+30 steps; CLI has no
+  `--baseline_nav_steps` override). Artifacts: `eval_v21/`, `checkpoints/sncp_ppo_v21.pt`,
+  CSV `logs/training_20260610_075806.csv`. **v18 stays the 0.26 real-robot baseline.**
 - **(historical) v18 hypothesis context.** v15 proved
   *genuine* collision-avoidance + social-distance keeping (it detours around pedestrians) - the
   long-standing "beeline" problem is solved. v16 added vectorized anti-forgetting replay
