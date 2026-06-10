@@ -12,6 +12,13 @@ Ladder (each probe differs from its predecessor by ~one concept):
   P4_v21_core     robot 1.0  + ORCA @ parity 1.0 + goal noise 2.0   (parity effect; v21 anchor)
   P5_paper_lr     P4 with LR 1e-4 (the paper's Table-1 value)       (LR effect)
 
+Run-1 lesson: cold-starting at fixed N=5 never bootstraps goal-reaching in ANY
+regime (even the v18-regime control stayed at 0% for 300k) — the curriculum's
+easy phase IS the bootstrap. Probes therefore warm up on easy/1 for the first
+--bootstrap_easy_steps before the pinned N=5 phase, and the trainer now logs
+per-update window outcomes (success/collision/timeout/reward) so short runs
+are readable between holdouts.
+
 Usage:
   python run_probes.py                 # run all five sequentially
   python run_probes.py --probes P4 P5  # subset
@@ -35,6 +42,7 @@ COMMON = [
     "--horizon", "128",
     "--fixed_scenario", "hard",
     "--num_humans", "5",
+    "--bootstrap_easy_steps", "150000",
     "--comfort_coeff", "6.0",
     "--curriculum_replay_ratio", "0.0",
     "--holdout_scenarios", "hard", "circle",

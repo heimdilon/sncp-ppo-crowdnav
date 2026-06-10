@@ -649,7 +649,8 @@ def step_to_phase(steps_seen, total_steps, final_num_humans):
 
 
 def select_vectorized_phase(steps_seen, total_steps, final_num_humans,
-                            replay_ratio=0.0, rng=random, fixed_scenario=None):
+                            replay_ratio=0.0, rng=random, fixed_scenario=None,
+                            bootstrap_easy_steps=0):
     """Select the next vectorized PPO update phase.
 
     With replay enabled, a fraction of update windows re-samples a uniformly
@@ -658,9 +659,16 @@ def select_vectorized_phase(steps_seen, total_steps, final_num_humans,
 
     fixed_scenario pins every update window to a single phase
     (scenario, final_num_humans, canonical scenario speed) and disables replay —
-    probe mode for short fixed-density attribution runs.
+    probe mode for short fixed-density attribution runs. bootstrap_easy_steps
+    prepends an easy/1 warmup before the pinned phase: probe run 1 showed that
+    cold-starting at fixed N=5 never bootstraps goal-reaching in ANY regime
+    (the curriculum's easy phase is the bootstrap), so probes without a warmup
+    measure exploration failure, not regime difficulty.
     """
     if fixed_scenario is not None:
+        if steps_seen < bootstrap_easy_steps:
+            _, easy_vpref = SCENARIO_HOLDOUT_CONFIG['easy']
+            return ('easy', 1, easy_vpref), False
         _, vpref = SCENARIO_HOLDOUT_CONFIG.get(fixed_scenario, (5, 0.26))
         return (fixed_scenario, final_num_humans, vpref), False
     phases = curriculum_phases(final_num_humans)
@@ -669,6 +677,24 @@ def select_vectorized_phase(steps_seen, total_steps, final_num_humans,
         replay_idx = rng.randint(0, current_idx - 1)
         return phases[replay_idx], True
     return phases[current_idx], False
+
+
+def _vec_episode_flags(info, i):
+    """(success, collision) flags for env i's just-finished episode.
+
+    gymnasium >=1.0 NEXT_STEP autoreset returns the final step's info directly
+    as stacked arrays; older SAME_STEP autoreset tucks it into `final_info`.
+    """
+    final_infos = info.get('final_info')
+    if final_infos is not None and final_infos[i] is not None:
+        fi = final_infos[i]
+        return bool(fi.get('success')), bool(fi.get('collision'))
+
+    def flag(key):
+        arr = info.get(key)
+        return bool(arr[i]) if arr is not None else False
+
+    return flag('success'), flag('collision')
 
 
 def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, csv_file):
@@ -689,6 +715,7 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
     human_goal_noise = getattr(args, 'human_goal_noise', 0.0)
     human_motion_model = getattr(args, 'human_motion_model', 'orca')
     fixed_scenario = getattr(args, 'fixed_scenario', None)
+    bootstrap_easy_steps = getattr(args, 'bootstrap_easy_steps', 0)
 
     def set_envs_vpref(envs, vpref):
         for sub_env in envs.envs:
@@ -738,10 +765,12 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
     )
 
     (scenario, H, vpref), _ = select_vectorized_phase(
-        0, args.total_steps, args.num_humans, fixed_scenario=fixed_scenario
+        0, args.total_steps, args.num_humans, fixed_scenario=fixed_scenario,
+        bootstrap_easy_steps=bootstrap_easy_steps,
     )
     envs, obs_np = build_envs(H, scenario, vpref)
     h = policy.init_hidden(batch_size=N, num_humans=H, device=device)
+    ep_return = np.zeros(N, dtype=np.float64)
 
     total_steps = 0
     update_idx = 0
@@ -761,6 +790,7 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
             replay_ratio=replay_ratio,
             rng=random,
             fixed_scenario=fixed_scenario,
+            bootstrap_easy_steps=bootstrap_easy_steps,
         )
         if next_H != H or next_scenario != scenario:
             replay_mark = " replay" if is_replay_update else ""
@@ -770,8 +800,11 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
             scenario, H, vpref = next_scenario, next_H, next_vpref
             envs, obs_np = build_envs(H, scenario, vpref)
             h = policy.init_hidden(batch_size=N, num_humans=H, device=device)
+            ep_return = np.zeros(N, dtype=np.float64)  # in-flight episodes discarded
 
         buf = VectorizedRolloutBuffer(num_envs=N, horizon=T)
+        win_counts = {'success': 0, 'collision': 0, 'timeout': 0}
+        win_returns = []
         for t in range(T):
             obs_t = to_tensor(obs_np)
             with torch.no_grad():
@@ -785,6 +818,17 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
             next_obs, reward, term, trunc, info = envs.step(act_np)
             done = np.logical_or(term, trunc)
             set_envs_vpref(envs, vpref)
+            ep_return += reward
+            for i in np.nonzero(done)[0]:
+                win_returns.append(float(ep_return[i]))
+                ep_return[i] = 0.0
+                success, collision = _vec_episode_flags(info, i)
+                if success:
+                    win_counts['success'] += 1
+                elif collision:
+                    win_counts['collision'] += 1
+                else:
+                    win_counts['timeout'] += 1
             done_t = torch.tensor(done, dtype=torch.float32, device=device)
             reward_t = torch.tensor(reward, dtype=torch.float32, device=device)
             mask_t = torch.tensor(1.0 - term.astype('float32'), device=device)
@@ -862,10 +906,22 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
                 print(f"  --> {best_reason}")
 
         ho_row = holdout_csv_row(last_holdout_per_scenario, args.holdout_scenarios)
+        # Outcomes of episodes that FINISHED inside this rollout window. Before
+        # this, update rows logged only PPO diagnostics and the holdout (every
+        # eval_freq_updates) was the sole outcome signal — too coarse to read
+        # short probe runs (probe run 1 lesson).
+        n_finished = len(win_returns)
+        if n_finished:
+            win_reward = f"{float(np.mean(win_returns)):.4f}"
+            win_success = f"{win_counts['success'] / n_finished:.4f}"
+            win_collision = f"{win_counts['collision'] / n_finished:.4f}"
+            win_timeout = f"{win_counts['timeout'] / n_finished:.4f}"
+        else:
+            win_reward = win_success = win_collision = win_timeout = ''
         try:
             csv_writer.writerow([
                 total_steps, scenario, H, vpref, int(is_replay_update), T,
-                '', '', '', '', '',
+                win_reward, win_success, win_collision, win_timeout, '',
                 *update_diagnostic_row(policy, agent),
                 is_best_checkpoint, best_reason,
             ] + ho_row)
@@ -980,6 +1036,11 @@ def build_parser():
                         help='Paper Eq 11 fidelity: expand edge inputs to the 256-dim encoding '
                              'with an MLP BEFORE the NCP encoders (v22 candidate). Default off '
                              'preserves the v14..v21 architecture and checkpoint compatibility.')
+    parser.add_argument('--bootstrap_easy_steps', type=int, default=0,
+                        help='Probe mode only: run an easy/1 warmup for this many env steps '
+                             'before the --fixed_scenario phase. Cold-starting at fixed N=5 '
+                             'never bootstraps goal-reaching (probe run 1), so attribution '
+                             'probes need an in-regime warmup.')
 
     # Curriculum thresholds (inclusive) — 5-phase: 10%/25%/50%/75%/100%
     parser.add_argument('--curriculum_easy_until', type=int, default=None,
