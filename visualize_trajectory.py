@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
 from crowd_sim.crowd_env import CrowdSimEnv
-from sncp_ppo.models import SNCPPolicy
+from sncp_ppo.models import SNCPPolicy, build_policy_for_checkpoint
 from sncp_ppo.ppo import PPOAgent
 
 
@@ -32,12 +32,16 @@ def run_and_visualize(model_path='checkpoints/sncp_ppo.pt', output_image='trajec
                       robot_vpref=robot_vpref, human_vpref_override=human_vpref_override,
                       max_time=max_time, human_goal_noise=human_goal_noise)
     
-    # Initialize policy and agent
-    policy = SNCPPolicy(robot_vpref=env.robot_vpref, robot_wmax=env.robot_wmax).to(device)
+    # Initialize policy and agent (architecture auto-detected from the checkpoint)
     if os.path.exists(model_path):
-        policy.load_state_dict(torch.load(model_path, map_location=device))
+        state_dict = torch.load(model_path, map_location=device)
+        policy = build_policy_for_checkpoint(
+            state_dict, robot_vpref=env.robot_vpref, robot_wmax=env.robot_wmax
+        ).to(device)
+        policy.load_state_dict(state_dict)
         print(f"Loaded policy from {model_path}")
     else:
+        policy = SNCPPolicy(robot_vpref=env.robot_vpref, robot_wmax=env.robot_wmax).to(device)
         print("Checkpoint not found. Running with uninitialized policy weights.")
         
     policy.train(False)  # inference mode

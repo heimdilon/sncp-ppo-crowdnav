@@ -213,7 +213,8 @@ def update_diagnostic_row(policy, agent):
 
 
 def make_env(num_humans, scenario, seed, comfort_coeff=6.0, max_time=50.0,
-             robot_vpref=0.26, human_vpref_override=None, human_goal_noise=0.0):
+             robot_vpref=0.26, human_vpref_override=None, human_goal_noise=0.0,
+             human_motion_model='orca'):
     """Factory for a single CrowdSimEnv, used by SyncVectorEnv."""
     def _thunk():
         env = CrowdSimEnv(
@@ -224,6 +225,7 @@ def make_env(num_humans, scenario, seed, comfort_coeff=6.0, max_time=50.0,
             robot_vpref=robot_vpref,
             human_vpref_override=human_vpref_override,
             human_goal_noise=human_goal_noise,
+            human_motion_model=human_motion_model,
         )
         env.reset(seed=seed)
         return env
@@ -250,10 +252,15 @@ def train(args):
         robot_vpref=args.robot_vpref,
         human_vpref_override=args.human_vpref_override,
         human_goal_noise=args.human_goal_noise,
+        human_motion_model=getattr(args, 'human_motion_model', 'orca'),
     )
 
     # 2. Create SNCP policy and PPO agent
-    policy = SNCPPolicy(robot_vpref=env.robot_vpref, robot_wmax=env.robot_wmax).to(device)
+    policy = SNCPPolicy(
+        robot_vpref=env.robot_vpref,
+        robot_wmax=env.robot_wmax,
+        pre_mlp=getattr(args, 'pre_mlp', False),
+    ).to(device)
     # Scheduled PPO updates for the LR scheduler. Vectorized mode does one
     # update per fixed-horizon rollout (total_steps // (num_envs*horizon)),
     # which is very different from the single-env episodes//update_freq. Using
@@ -642,13 +649,20 @@ def step_to_phase(steps_seen, total_steps, final_num_humans):
 
 
 def select_vectorized_phase(steps_seen, total_steps, final_num_humans,
-                            replay_ratio=0.0, rng=random):
+                            replay_ratio=0.0, rng=random, fixed_scenario=None):
     """Select the next vectorized PPO update phase.
 
     With replay enabled, a fraction of update windows re-samples a uniformly
     random earlier phase. The whole update still uses one phase, preserving the
     fixed human-count tensor shape expected by the vectorized rollout buffer.
+
+    fixed_scenario pins every update window to a single phase
+    (scenario, final_num_humans, canonical scenario speed) and disables replay —
+    probe mode for short fixed-density attribution runs.
     """
+    if fixed_scenario is not None:
+        _, vpref = SCENARIO_HOLDOUT_CONFIG.get(fixed_scenario, (5, 0.26))
+        return (fixed_scenario, final_num_humans, vpref), False
     phases = curriculum_phases(final_num_humans)
     current_idx = phase_index_for_steps(steps_seen, total_steps)
     if replay_ratio > 0.0 and current_idx > 0 and rng.random() < replay_ratio:
@@ -673,6 +687,8 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
     robot_vpref = getattr(args, 'robot_vpref', 0.26)
     human_vpref_override = getattr(args, 'human_vpref_override', None)
     human_goal_noise = getattr(args, 'human_goal_noise', 0.0)
+    human_motion_model = getattr(args, 'human_motion_model', 'orca')
+    fixed_scenario = getattr(args, 'fixed_scenario', None)
 
     def set_envs_vpref(envs, vpref):
         for sub_env in envs.envs:
@@ -690,6 +706,7 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
                     robot_vpref=robot_vpref,
                     human_vpref_override=human_vpref_override,
                     human_goal_noise=human_goal_noise,
+                    human_motion_model=human_motion_model,
                 )
                 for i in range(N)
             ]
@@ -717,9 +734,12 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
         robot_vpref=robot_vpref,
         human_vpref_override=human_vpref_override,
         human_goal_noise=human_goal_noise,
+        human_motion_model=human_motion_model,
     )
 
-    scenario, H, vpref = step_to_phase(0, args.total_steps, args.num_humans)
+    (scenario, H, vpref), _ = select_vectorized_phase(
+        0, args.total_steps, args.num_humans, fixed_scenario=fixed_scenario
+    )
     envs, obs_np = build_envs(H, scenario, vpref)
     h = policy.init_hidden(batch_size=N, num_humans=H, device=device)
 
@@ -740,6 +760,7 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
             args.num_humans,
             replay_ratio=replay_ratio,
             rng=random,
+            fixed_scenario=fixed_scenario,
         )
         if next_H != H or next_scenario != scenario:
             replay_mark = " replay" if is_replay_update else ""
@@ -944,6 +965,21 @@ def build_parser():
                         help='Per-axis uniform noise on circle-crossing pedestrian goals so '
                              'they do not all funnel through the exact center (paper-like '
                              'spread). 0 = exact antipodal (legacy). Paper regime uses ~2.0.')
+    parser.add_argument('--human_motion_model', type=str, default='orca',
+                        choices=['sfm', 'orca', 'linear'],
+                        help='Pedestrian motion model. Default orca (v20+, the paper\'s '
+                             'CrowdSim regime); sfm restores the v18 Social-Force crowd '
+                             'for ablation probes.')
+    parser.add_argument('--fixed_scenario', type=str, default=None,
+                        choices=['easy', 'easy_plus', 'medium', 'hard', 'extreme', 'circle', 'random'],
+                        help='Probe mode: pin EVERY vectorized update window to this single '
+                             'phase (scenario, --num_humans, canonical speed), bypassing the '
+                             '10/25/50/75%% curriculum and replay. For short fixed-density '
+                             'attribution runs; leave unset for real training.')
+    parser.add_argument('--pre_mlp', action='store_true',
+                        help='Paper Eq 11 fidelity: expand edge inputs to the 256-dim encoding '
+                             'with an MLP BEFORE the NCP encoders (v22 candidate). Default off '
+                             'preserves the v14..v21 architecture and checkpoint compatibility.')
 
     # Curriculum thresholds (inclusive) — 5-phase: 10%/25%/50%/75%/100%
     parser.add_argument('--curriculum_easy_until', type=int, default=None,

@@ -435,7 +435,7 @@ def evaluate_density(
     import torch
 
     from crowd_sim.crowd_env import CrowdSimEnv
-    from sncp_ppo.models import SNCPPolicy
+    from sncp_ppo.models import build_policy_for_checkpoint
     from sncp_ppo.ppo import PPOAgent
 
     _set_seed(seed)
@@ -445,8 +445,11 @@ def evaluate_density(
         robot_vpref=robot_vpref, human_vpref_override=human_vpref_override,
         max_time=max_time, human_goal_noise=human_goal_noise,
     )
-    policy = SNCPPolicy(robot_vpref=env.robot_vpref, robot_wmax=env.robot_wmax).to(device)
-    policy.load_state_dict(torch.load(checkpoint_path, map_location=device))
+    state_dict = torch.load(checkpoint_path, map_location=device)
+    policy = build_policy_for_checkpoint(
+        state_dict, robot_vpref=env.robot_vpref, robot_wmax=env.robot_wmax
+    ).to(device)
+    policy.load_state_dict(state_dict)
     policy.train(False)
     agent = PPOAgent(policy=policy)
     max_steps = int(env.max_time / env.time_step) + 1

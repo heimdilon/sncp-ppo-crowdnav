@@ -51,3 +51,4 @@ colabout/
 
 # --- Jupyter ---
 .ipynb_checkpoints/
+.pytest_tmp/

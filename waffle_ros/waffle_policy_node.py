@@ -8,7 +8,7 @@ import numpy as np
 import os
 
 # Import the model from our module
-from sncp_ppo.models import SNCPPolicy
+from sncp_ppo.models import SNCPPolicy, build_policy_for_checkpoint
 
 class WafflePolicyNode(Node):
     def __init__(self):
@@ -49,12 +49,16 @@ class WafflePolicyNode(Node):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.get_logger().info(f"Loading policy on device: {self.device}")
         
-        self.policy = SNCPPolicy(robot_vpref=self.robot_vpref, robot_wmax=self.robot_wmax).to(self.device)
         if os.path.exists(model_path):
-            self.policy.load_state_dict(torch.load(model_path, map_location=self.device))
+            state_dict = torch.load(model_path, map_location=self.device)
+            self.policy = build_policy_for_checkpoint(
+                state_dict, robot_vpref=self.robot_vpref, robot_wmax=self.robot_wmax
+            ).to(self.device)
+            self.policy.load_state_dict(state_dict)
             self.policy.eval()
             self.get_logger().info(f"Successfully loaded trained policy from {model_path}")
         else:
+            self.policy = SNCPPolicy(robot_vpref=self.robot_vpref, robot_wmax=self.robot_wmax).to(self.device)
             self.get_logger().warn(f"Checkpoint not found at {model_path}! Running with unitialized weights.")
             
         # Initialize policy hidden states

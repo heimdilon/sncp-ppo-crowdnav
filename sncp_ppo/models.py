@@ -16,12 +16,13 @@ def _orthogonal_linear(layer, gain):
 
 
 class SNCPPolicy(nn.Module):
-    def __init__(self, robot_vpref=0.26, robot_wmax=1.8):
+    def __init__(self, robot_vpref=0.26, robot_wmax=1.8, pre_mlp=False):
         super(SNCPPolicy, self).__init__()
-        
+
         self.robot_vpref = robot_vpref
         self.robot_wmax = robot_wmax
-        
+        self.pre_mlp = pre_mlp
+
         # 1. Robot Node Encoder (MLP)
         # Input robot_node: [dg_local_x, dg_local_y, v_linear, dist_to_goal, vpref, radius, w_angular] (dim 7)
         self.robot_mlp = nn.Sequential(
@@ -30,7 +31,7 @@ class SNCPPolicy(nn.Module):
             nn.Linear(64, 128),
             nn.ReLU()
         )
-        
+
         # 2. Temporal Edge Encoder — TRUE sparse NCP (AutoNCP), not a dense LTC.
         # The paper (Ao et al. 2026) claims Neural Circuit Policies but omits the
         # wiring parameters; we choose them for our problem. AutoNCP(units, motor)
@@ -38,15 +39,40 @@ class SNCPPolicy(nn.Module):
         # The LTC output is the MOTOR-neuron subset (output_dim), then projected to
         # 256. Seeded so the random topology is reproducible (the sparsity masks
         # are persisted inside the checkpoint's state_dict).
+        #
+        # pre_mlp=True restores the paper's Eq 11 ordering: the raw edge input is
+        # first expanded to the paper's encoding dimension (time edge = 256) by an
+        # MLP and the NCP consumes that embedding, instead of eating the raw 2-dim
+        # signal. Default False keeps every existing checkpoint loadable.
         self.temporal_wiring = AutoNCP(units=32, output_size=16, seed=48201)
-        self.temporal_ltc = LTC(input_size=2, units=self.temporal_wiring)
+        if pre_mlp:
+            self.temporal_pre_mlp = nn.Sequential(
+                nn.Linear(2, 128),
+                nn.ReLU(),
+                nn.Linear(128, 256),
+                nn.ReLU(),
+            )
+            self.temporal_ltc = LTC(input_size=256, units=self.temporal_wiring)
+        else:
+            self.temporal_ltc = LTC(input_size=2, units=self.temporal_wiring)
         self.temporal_proj = nn.Linear(self.temporal_wiring.output_dim, 256)
 
-        # 3. Spatial Edge Encoder — sparse NCP. input_size=6:
+        # 3. Spatial Edge Encoder — sparse NCP. Raw input dim 6:
         # [dx, dy, rel_vx, rel_vy, goal_dir_x, goal_dir_y] per human. Sized a bit
         # larger (48 units / 24 motor) since this encoder carries the crowd signal.
+        # The paper does not give the spatial-edge embedding size; with pre_mlp we
+        # use 256 symmetric to the time edge.
         self.spatial_wiring = AutoNCP(units=48, output_size=24, seed=48202)
-        self.spatial_ltc = LTC(input_size=6, units=self.spatial_wiring)
+        if pre_mlp:
+            self.spatial_pre_mlp = nn.Sequential(
+                nn.Linear(6, 128),
+                nn.ReLU(),
+                nn.Linear(128, 256),
+                nn.ReLU(),
+            )
+            self.spatial_ltc = LTC(input_size=256, units=self.spatial_wiring)
+        else:
+            self.spatial_ltc = LTC(input_size=6, units=self.spatial_wiring)
         self.spatial_proj = nn.Linear(self.spatial_wiring.output_dim, 256)
         
         # 4. Attention Pooling weights
@@ -89,6 +115,11 @@ class SNCPPolicy(nn.Module):
         for m in self.robot_mlp:
             if isinstance(m, nn.Linear):
                 _orthogonal_linear(m, gain=sqrt2)
+        if self.pre_mlp:
+            for mlp in (self.temporal_pre_mlp, self.spatial_pre_mlp):
+                for m in mlp:
+                    if isinstance(m, nn.Linear):
+                        _orthogonal_linear(m, gain=sqrt2)
         _orthogonal_linear(self.temporal_proj, gain=sqrt2)
         _orthogonal_linear(self.spatial_proj, gain=sqrt2)
         _orthogonal_linear(self.W_q, gain=sqrt2)
@@ -146,14 +177,19 @@ class SNCPPolicy(nn.Module):
         # 1. Robot Node Encoding
         v_m = self.robot_mlp(robot_node)  # [batch_size, 128]
         
-        # 2. Temporal Edge Encoding (LTC)
-        temporal_input = temporal_edges.unsqueeze(1)
+        # 2. Temporal Edge Encoding (LTC). With pre_mlp, the paper's Eq 11
+        # ordering: expand to the 256-dim encoding first, then the NCP.
+        temporal_features = self.temporal_pre_mlp(temporal_edges) if self.pre_mlp else temporal_edges
+        temporal_input = temporal_features.unsqueeze(1)
         h_temp = hidden_states['temporal_edge']
         m_rr_seq, h_temp_new = self.temporal_ltc(temporal_input, h_temp)
         m_rr = self.temporal_proj(m_rr_seq.squeeze(1))
-        
+
         # 3. Spatial Edge Encoding (LTC)
-        spatial_input = spatial_edges.reshape(batch_size * num_humans, 1, 6)
+        spatial_flat = spatial_edges.reshape(batch_size * num_humans, 6)
+        if self.pre_mlp:
+            spatial_flat = self.spatial_pre_mlp(spatial_flat)
+        spatial_input = spatial_flat.unsqueeze(1)
         h_spat = hidden_states['spatial_edge']
         if h_spat.dim() == 3:
             h_spat_flat = h_spat.reshape(batch_size * num_humans, -1)
@@ -203,5 +239,16 @@ class SNCPPolicy(nn.Module):
             'spatial_edge': h_spat_new,
             'node': h_node_new
         }
-        
+
         return mu, std, value, new_hidden_states
+
+
+def build_policy_for_checkpoint(state_dict, robot_vpref=0.26, robot_wmax=1.8):
+    """Construct an SNCPPolicy whose architecture matches a saved state dict.
+
+    Checkpoints are plain `policy.state_dict()` files; the only architecture
+    variant is the paper-Eq-11 pre-MLP (v22+), detectable from its keys. Old
+    checkpoints (v14..v21) have no `*_pre_mlp` keys and get the legacy layout.
+    """
+    pre_mlp = any(key.startswith('temporal_pre_mlp') for key in state_dict)
+    return SNCPPolicy(robot_vpref=robot_vpref, robot_wmax=robot_wmax, pre_mlp=pre_mlp)

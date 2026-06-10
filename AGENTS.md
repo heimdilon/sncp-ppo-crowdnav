@@ -70,6 +70,22 @@
   no-beeline gate are regime-invalid at 1.0 m/s (episode cap 60 < required 121.5+30 steps; CLI has no
   `--baseline_nav_steps` override). Artifacts: `eval_v21/`, `checkpoints/sncp_ppo_v21.pt`,
   CSV `logs/training_20260610_075806.csv`. **v18 stays the 0.26 real-robot baseline.**
+- **Faz 0 (post-v21 attribution, 2026-06-10) — probes + paper-fidelity fixes, IN PROGRESS.**
+  (1) **Oracle probe** (`_oracle_feasibility.py`, untracked): full-speed-to-goal blind policy shows
+  max_time 15 is GENEROUS (0 structural timeouts, avg 34/60 steps) — v21's flat ~20% timeout is
+  behavioral. The antipodal layout synchronizes every agent at the center (all paths are diameters,
+  parity speed ⇒ simultaneous arrival): blind crossing collides 62% (goal_noise 2) to 100%
+  (goal_noise 0, or any N=10). The task genuinely demands avoidance; the env is sound.
+  (2) **Probe mode** (`--fixed_scenario` pins one phase, `--human_motion_model` selects sfm/orca;
+  `run_probes.py` ladder): P1 v18-regime control / P2 speed-only / P3 +ORCA / P4 v21-core (parity) /
+  P5 P4+paper-LR-1e-4 — short fixed-density (hard, N=5, 300k) local runs to attribute the v21 failure
+  among its FIVE bundled variables. P1/P4/P2 running locally (RTX 3060 Ti, ~67 s/update).
+  (3) **Pre-MLP fidelity fix coded** (paper Eq 11: input→MLP-256→NCP; we historically fed raw 2/6-dim
+  inputs into the LTC): `SNCPPolicy(pre_mlp=True)` + `--pre_mlp` train flag;
+  `build_policy_for_checkpoint()` auto-detects the variant from a state dict, threaded through eval,
+  visualizers, and the waffle ROS node; default False keeps v14..v21 checkpoints loading byte-for-byte
+  (verified against `sncp_ppo_v18.pt`). Also discovered: paper Table 1 **LR=1e-4** while we run 5e-5
+  since v11 — another fidelity gap (P5 tests it). 142 tests pass. **v22 decision waits for probes.**
 - **(historical) v18 hypothesis context.** v15 proved
   *genuine* collision-avoidance + social-distance keeping (it detours around pedestrians) - the
   long-standing "beeline" problem is solved. v16 added vectorized anti-forgetting replay

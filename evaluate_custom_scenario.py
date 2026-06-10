@@ -18,7 +18,7 @@ from sncp_ppo.custom_scenario import (
     create_custom_env,
     load_custom_scenario,
 )
-from sncp_ppo.models import SNCPPolicy
+from sncp_ppo.models import SNCPPolicy, build_policy_for_checkpoint
 from sncp_ppo.ppo import PPOAgent
 
 
@@ -131,8 +131,11 @@ def make_policy_action_provider(
     else:
         device = torch.device(device_name)
 
-    policy = SNCPPolicy(robot_vpref=env.robot_vpref, robot_wmax=env.robot_wmax).to(device)
-    policy.load_state_dict(torch.load(checkpoint_path, map_location=device))
+    state_dict = torch.load(checkpoint_path, map_location=device)
+    policy = build_policy_for_checkpoint(
+        state_dict, robot_vpref=env.robot_vpref, robot_wmax=env.robot_wmax
+    ).to(device)
+    policy.load_state_dict(state_dict)
     policy.train(False)
     agent = PPOAgent(policy=policy)
     h_states = policy.init_hidden(batch_size=1, num_humans=env.num_humans, device=device)
