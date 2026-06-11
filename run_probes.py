@@ -74,6 +74,13 @@ PROBES = {
         "--human_vpref_override", "1.0", "--human_goal_noise", "2.0",
         "--max_time", "15.0", "--lr", "1e-4",
     ],
+    # P5 + paper Eq 11 pre-MLP: decides whether pre_mlp joins the LR fix in
+    # v22 (P6 > P5) or waits as its own later variable (P6 <= P5).
+    "P6_premlp_paper_lr": [
+        "--robot_vpref", "1.0", "--human_motion_model", "orca",
+        "--human_vpref_override", "1.0", "--human_goal_noise", "2.0",
+        "--max_time", "15.0", "--lr", "1e-4", "--pre_mlp",
+    ],
 }
 
 

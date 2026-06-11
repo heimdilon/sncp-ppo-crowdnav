@@ -47,6 +47,13 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Episode time cap for eval; match the training regime.")
     parser.add_argument("--human_goal_noise", type=float, default=0.0,
                         help="Pedestrian goal noise; match the training regime (paper run uses ~2.0).")
+    parser.add_argument("--baseline_nav_steps", type=float, default=121.5,
+                        help="Beeline reference (successful nav steps) for the no-beeline gate. "
+                             "121.5 fits the 0.26 m/s robot; the 1.0 m/s paper regime uses ~32 "
+                             "(v21 lesson: the gate is regime-dependent).")
+    parser.add_argument("--nav_margin_steps", type=float, default=30.0,
+                        help="Required margin above the beeline reference. Scale together with "
+                             "--baseline_nav_steps (paper regime: ~8 with a 60-step episode cap).")
     parser.add_argument("--expected_replay_ratio", type=float, default=0.20)
     parser.add_argument("--replay_tolerance", type=float, default=0.10)
     return parser
@@ -72,6 +79,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         human_vpref_override=args.human_vpref_override,
         max_time=args.max_time,
         human_goal_noise=args.human_goal_noise,
+        baseline_nav_steps=args.baseline_nav_steps,
+        nav_margin_steps=args.nav_margin_steps,
         expected_replay_ratio=args.expected_replay_ratio,
         replay_tolerance=args.replay_tolerance,
     )

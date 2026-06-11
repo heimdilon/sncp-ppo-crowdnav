@@ -9,7 +9,7 @@ def _source_text(cell):
     return "".join(source) if isinstance(source, list) else source
 
 
-def test_v21_run_readiness_passes_current_repo():
+def test_v22_run_readiness_passes_current_repo():
     summary = verify_v16_run_ready(Path("."))
 
     assert summary.status == "pass"
@@ -18,22 +18,22 @@ def test_v21_run_readiness_passes_current_repo():
     assert summary.baseline_densities == (1, 3, 5, 8, 10)
 
 
-def test_v21_run_readiness_flags_stale_notebook(tmp_path):
+def test_v22_run_readiness_flags_stale_notebook(tmp_path):
     notebook = {
         "cells": [
             {
                 "cell_type": "code",
-                "source": "SAVE_PATH = 'checkpoints/sncp_ppo_v21.pt'\nREPLAY_RATIO = 0.0\n",
+                "source": "SAVE_PATH = 'checkpoints/sncp_ppo_v22.pt'\nREPLAY_RATIO = 0.0\n",
             },
             {
                 "cell_type": "code",
-                "source": "CHECKPOINT = 'checkpoints/sncp_ppo_v21.pt'\ncmd = ['python', 'evaluate_policy_report.py']\n",
+                "source": "CHECKPOINT = 'checkpoints/sncp_ppo_v22.pt'\ncmd = ['python', 'evaluate_policy_report.py']\n",
             },
         ]
     }
     (tmp_path / "sncp_ppo_colab.ipynb").write_text(json.dumps(notebook), encoding="utf-8")
     (tmp_path / "run_post_eval.py").write_text("stub\n", encoding="utf-8")
-    baseline_dir = tmp_path / "eval_v15"
+    baseline_dir = tmp_path / "eval_v21"
     baseline_dir.mkdir()
     (baseline_dir / "density_sweep.json").write_text(
         json.dumps({"density_sweep": [{"num_humans": 1, "episodes": 50}]}),
@@ -61,7 +61,7 @@ def test_write_readiness_report(tmp_path):
     assert "Baseline densities: 1, 3, 5, 8, 10" in report
 
 
-def test_colab_notebook_has_preflight_cell_before_v21_training():
+def test_colab_notebook_has_preflight_cell_before_v22_training():
     notebook = json.loads(Path("sncp_ppo_colab.ipynb").read_text(encoding="utf-8"))
     code_sources = [
         _source_text(cell)
@@ -72,7 +72,7 @@ def test_colab_notebook_has_preflight_cell_before_v21_training():
         idx for idx, source in enumerate(code_sources) if "verify_v16_run_ready.py" in source
     ]
     training_indices = [
-        idx for idx, source in enumerate(code_sources) if "SAVE_PATH = 'checkpoints/sncp_ppo_v21.pt'" in source
+        idx for idx, source in enumerate(code_sources) if "SAVE_PATH = 'checkpoints/sncp_ppo_v22.pt'" in source
     ]
 
     assert len(preflight_indices) == 1
@@ -80,10 +80,10 @@ def test_colab_notebook_has_preflight_cell_before_v21_training():
     assert preflight_indices[0] < training_indices[0]
     preflight_cell = code_sources[preflight_indices[0]]
     assert "subprocess.run(cmd, check=True)" in preflight_cell
-    assert "eval_v21/run_readiness.md" in preflight_cell
+    assert "eval_v22/run_readiness.md" in preflight_cell
 
 
-def test_colab_persist_cell_downloads_eval_v21_artifact_bundle():
+def test_colab_persist_cell_downloads_eval_v22_artifact_bundle():
     notebook = json.loads(Path("sncp_ppo_colab.ipynb").read_text(encoding="utf-8"))
     code_sources = [
         _source_text(cell)
@@ -95,6 +95,6 @@ def test_colab_persist_cell_downloads_eval_v21_artifact_bundle():
     assert len(persist_cells) == 1
     persist_cell = persist_cells[0]
     assert "shutil.make_archive" in persist_cell
-    assert "'eval_v21_artifacts'" in persist_cell
-    assert "'eval_v21'" in persist_cell
+    assert "'eval_v22_artifacts'" in persist_cell
+    assert "'eval_v22'" in persist_cell
     assert "files.download(archive)" in persist_cell

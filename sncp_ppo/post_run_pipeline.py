@@ -55,6 +55,7 @@ def run_v16_post_eval(
     seed: int = 100,
     trajectory_densities: Sequence[int] = (5, 10),
     baseline_nav_steps: float = 121.5,
+    nav_margin_steps: float = 30.0,
     robot_vpref: float = 0.26,
     human_vpref_override: float | None = None,
     max_time: float = 50.0,
@@ -87,6 +88,7 @@ def run_v16_post_eval(
         load_summary_json(baseline_json),
         load_summary_json(output_dir / "density_sweep.json"),
         baseline_nav_steps=baseline_nav_steps,
+        nav_margin_steps=nav_margin_steps,
     )
     comparison_report = output_dir / "comparison_vs_v15.md"
     write_comparison_report(

@@ -211,29 +211,36 @@ def test_versioned_post_eval_cli_derives_paths_from_version(tmp_path, monkeypatc
     assert "Overall status: pass" in capsys.readouterr().out
 
 
-def test_colab_v21_eval_cell_uses_post_run_pipeline():
+def test_colab_v22_eval_cell_uses_post_run_pipeline():
     code_sources = _colab_code_sources()
-    eval_cells = [source for source in code_sources if "CHECKPOINT = 'checkpoints/sncp_ppo_v21.pt'" in source]
+    eval_cells = [source for source in code_sources if "CHECKPOINT = 'checkpoints/sncp_ppo_v22.pt'" in source]
 
     assert len(eval_cells) == 1
     eval_cell = eval_cells[0]
-    assert "EVAL_OUT = 'eval_v21'" in eval_cell
+    assert "EVAL_OUT = 'eval_v22'" in eval_cell
     assert "run_post_eval.py" in eval_cell
-    assert "'--version', '21'" in eval_cell
+    assert "'--version', '22'" in eval_cell
+    # v21 lesson: regime-matched gates (v21 baseline + 1.0 m/s beeline scale).
+    assert "'--baseline_json', 'eval_v21/density_sweep.json'" in eval_cell
+    assert "'--baseline_nav_steps', '32'" in eval_cell
+    assert "'--nav_margin_steps', '8'" in eval_cell
     assert "run_v16_post_eval.py" not in eval_cell
     assert "evaluate_policy_report.py" not in eval_cell
     assert "compare_policy_reports.py" not in eval_cell
 
 
-def test_colab_v21_training_cell_fails_fast_and_preserves_single_variable_config():
+def test_colab_v22_training_cell_fails_fast_and_preserves_single_variable_config():
     code_sources = _colab_code_sources()
-    train_cells = [source for source in code_sources if "SAVE_PATH = 'checkpoints/sncp_ppo_v21.pt'" in source]
+    train_cells = [source for source in code_sources if "SAVE_PATH = 'checkpoints/sncp_ppo_v22.pt'" in source]
 
     assert len(train_cells) == 1
     train_cell = train_cells[0]
     assert "TOTAL_STEPS = 2_500_000" in train_cell
     assert "NUM_ENVS = 16" in train_cell
     assert "HORIZON = 128" in train_cell
+    # THE v22 variable: the paper's LR (v21 ran 5e-5 and underperformed).
+    assert "LR = 1e-4" in train_cell
+    assert "'--lr', str(LR)" in train_cell
     assert "REPLAY_RATIO = 0.20" in train_cell
     assert "COMFORT_COEFF = 6.0" in train_cell
     assert "MAX_TIME = 15.0" in train_cell
@@ -252,3 +259,33 @@ def test_colab_v21_training_cell_fails_fast_and_preserves_single_variable_config
     assert "'--save_path', SAVE_PATH" in train_cell
     assert "if p.returncode != 0:" in train_cell
     assert "raise SystemExit(p.returncode)" in train_cell
+    assert "--pre_mlp" not in train_cell  # P6 probe showed no gain; stays off
+
+
+def test_post_eval_cli_threads_regime_scaled_beeline_gate(tmp_path, monkeypatch):
+    import run_post_eval
+
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "training_20260611_000000.csv").write_text("header\n", encoding="utf-8")
+    captured = {}
+
+    def fake_post_run(**kwargs):
+        captured.update(kwargs)
+        return run_post_eval.PostRunResult(
+            status="pass",
+            output_dir=kwargs["output_dir"],
+            comparison_report=kwargs["output_dir"] / "comparison_vs_v15.md",
+            training_report=kwargs["output_dir"] / "training_diagnostics.md",
+            artifact_report=kwargs["output_dir"] / "artifact_verification.md",
+        )
+
+    monkeypatch.setattr(run_post_eval, "run_post_eval", fake_post_run)
+    exit_code = run_post_eval.main(
+        ["--version", "22", "--log_dir", str(log_dir),
+         "--baseline_nav_steps", "32", "--nav_margin_steps", "8"]
+    )
+
+    assert exit_code == 0
+    assert captured["baseline_nav_steps"] == 32.0
+    assert captured["nav_margin_steps"] == 8.0

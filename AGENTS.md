@@ -70,22 +70,30 @@
   no-beeline gate are regime-invalid at 1.0 m/s (episode cap 60 < required 121.5+30 steps; CLI has no
   `--baseline_nav_steps` override). Artifacts: `eval_v21/`, `checkpoints/sncp_ppo_v21.pt`,
   CSV `logs/training_20260610_075806.csv`. **v18 stays the 0.26 real-robot baseline.**
-- **Faz 0 (post-v21 attribution, 2026-06-10) — probes + paper-fidelity fixes, IN PROGRESS.**
-  (1) **Oracle probe** (`_oracle_feasibility.py`, untracked): full-speed-to-goal blind policy shows
-  max_time 15 is GENEROUS (0 structural timeouts, avg 34/60 steps) — v21's flat ~20% timeout is
-  behavioral. The antipodal layout synchronizes every agent at the center (all paths are diameters,
-  parity speed ⇒ simultaneous arrival): blind crossing collides 62% (goal_noise 2) to 100%
-  (goal_noise 0, or any N=10). The task genuinely demands avoidance; the env is sound.
-  (2) **Probe mode** (`--fixed_scenario` pins one phase, `--human_motion_model` selects sfm/orca;
-  `run_probes.py` ladder): P1 v18-regime control / P2 speed-only / P3 +ORCA / P4 v21-core (parity) /
-  P5 P4+paper-LR-1e-4 — short fixed-density (hard, N=5, 300k) local runs to attribute the v21 failure
-  among its FIVE bundled variables. P1/P4/P2 running locally (RTX 3060 Ti, ~67 s/update).
-  (3) **Pre-MLP fidelity fix coded** (paper Eq 11: input→MLP-256→NCP; we historically fed raw 2/6-dim
-  inputs into the LTC): `SNCPPolicy(pre_mlp=True)` + `--pre_mlp` train flag;
-  `build_policy_for_checkpoint()` auto-detects the variant from a state dict, threaded through eval,
-  visualizers, and the waffle ROS node; default False keeps v14..v21 checkpoints loading byte-for-byte
-  (verified against `sncp_ppo_v18.pt`). Also discovered: paper Table 1 **LR=1e-4** while we run 5e-5
-  since v11 — another fidelity gap (P5 tests it). 142 tests pass. **v22 decision waits for probes.**
+- **Faz 0 (post-v21 attribution, 2026-06-10/11) — COMPLETE. Verdict: the LEARNING RATE was the brake.**
+  (1) **Oracle probe** (`_oracle_feasibility.py`, untracked): max_time 15 is GENEROUS (0 structural
+  timeouts, avg 34/60 steps) — v21's flat ~20% timeout was behavioral. The antipodal layout
+  synchronizes every agent at the center (all paths are diameters, parity speed ⇒ simultaneous
+  arrival): blind crossing collides 62–100%. The env is sound and genuinely demands avoidance.
+  (2) **Probe runs** (`run_probes.py`; `--fixed_scenario` + `--bootstrap_easy_steps` 150k easy warmup
+  + 150k fixed hard/N=5; per-update window outcome logging added to the vectorized trainer):
+  run-1 (no warmup) failed by design — cold fixed-N never bootstraps in ANY regime (the curriculum's
+  easy phase IS the bootstrap). Run-2 results (300k each): P1 v18-regime control easy 11% / N5 0%;
+  P2 speed-only easy 12% / N5 16%; **P4 v21-core (LR 5e-5) easy 0% / N5 4%; P5 = P4 @ LR 1e-4:
+  easy 72% / N5 42% and rising, timeout 45→2%** — controlled pair differing ONLY in LR. Our 5e-5
+  dates from v11 ("stability") and starved the paper regime; paper Table 1 says 1e-4. P6 = P5 +
+  pre_mlp: 28% ≈ P5 → pre-MLP adds nothing at probe scale, stays OFF.
+  (3) **Pre-MLP fidelity option coded** (paper Eq 11): `SNCPPolicy(pre_mlp=True)` + `--pre_mlp`;
+  `build_policy_for_checkpoint()` auto-detects from the state dict (threaded through eval,
+  visualizers, waffle ROS node); v14..v21 checkpoints load byte-for-byte (tested vs `sncp_ppo_v18.pt`).
+- **v22 = code-ready / Colab run pending — v21 regime + the paper's LR 1e-4 (single variable,
+  probe-validated).** Notebook cells 13/15/18 + preflight/curves/persist bumped to v22; readiness
+  tokens require `LR = 1e-4` + `'--lr', str(LR)`. **Eval gates are now regime-matched (v21 lesson):**
+  `run_post_eval.py` grew `--baseline_nav_steps` / `--nav_margin_steps` (threaded through
+  `run_v16_post_eval` → `compare_density_sweeps`), and the v22 eval cell compares against
+  `eval_v21/density_sweep.json` (same physics — the LR ablation) with beeline scaled to 1.0 m/s
+  (baseline 32, margin 8). Readiness gate=pass; 146 tests pass. Success = clear improvement over
+  v21's 74/64/48/32/22%, ideally near the paper's 93–95%. **v18 stays the 0.26 real-robot baseline.**
 - **(historical) v18 hypothesis context.** v15 proved
   *genuine* collision-avoidance + social-distance keeping (it detours around pedestrians) - the
   long-standing "beeline" problem is solved. v16 added vectorized anti-forgetting replay
