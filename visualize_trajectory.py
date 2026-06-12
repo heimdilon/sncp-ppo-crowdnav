@@ -140,5 +140,16 @@ if __name__ == '__main__':
     parser.add_argument('--num_humans', type=int, default=5)
     parser.add_argument('--scenario', type=str, default='circle')
     parser.add_argument('--seed', type=int, default=42)
+    # Regime args: match the checkpoint's TRAINING regime (e.g. v22 paper run =
+    # robot 1.0 + parity peds 1.0 + goal noise 2.0 + max_time 15). Defaults
+    # preserve the TurtleBot 0.26 track.
+    parser.add_argument('--robot_vpref', type=float, default=0.26)
+    parser.add_argument('--human_vpref_override', type=float, default=None)
+    parser.add_argument('--human_goal_noise', type=float, default=0.0)
+    parser.add_argument('--max_time', type=float, default=50.0)
     args = parser.parse_args()
-    run_and_visualize(args.checkpoint, args.output, args.num_humans, args.scenario, args.seed)
+    run_and_visualize(args.checkpoint, args.output, args.num_humans, args.scenario, args.seed,
+                      robot_vpref=args.robot_vpref,
+                      human_vpref_override=args.human_vpref_override,
+                      max_time=args.max_time,
+                      human_goal_noise=args.human_goal_noise)
