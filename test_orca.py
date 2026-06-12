@@ -55,6 +55,39 @@ def test_head_on_agents_avoid():
     assert abs(new_a[1]) > 1e-3, f"no sideways avoidance: {new_a}"
 
 
+def test_responsibility_default_is_unchanged():
+    """The robot expert (il.expert) needs FULL avoidance responsibility because
+    pedestrians are invisible to it. Adding the param must not change the
+    reciprocal-0.5 pedestrian behavior: default 0.5 reproduces the old output."""
+    pos_b, vel_b = np.array([2.0, 0.0]), np.array([-1.0, 0.0])
+    pref = np.array([1.0, 0.0])
+    out_default = orca_new_velocity(
+        np.array([-2.0, 0.0]), np.array([1.0, 0.0]), 0.3, pref,
+        [(pos_b, vel_b, 0.3)], max_speed=1.0,
+    )
+    out_half = orca_new_velocity(
+        np.array([-2.0, 0.0]), np.array([1.0, 0.0]), 0.3, pref,
+        [(pos_b, vel_b, 0.3)], max_speed=1.0, responsibility=0.5,
+    )
+    assert np.allclose(out_default, out_half, atol=1e-9)
+
+
+def test_full_responsibility_avoids_more_than_half():
+    """responsibility=1.0 makes the agent take the whole avoidance burden, so it
+    deviates further sideways than the reciprocal 0.5 case for the same encounter."""
+    pos_b, vel_b = np.array([2.0, 0.0]), np.array([-1.0, 0.0])
+    pref = np.array([1.0, 0.0])
+    half = orca_new_velocity(
+        np.array([-2.0, 0.0]), np.array([1.0, 0.0]), 0.3, pref,
+        [(pos_b, vel_b, 0.3)], max_speed=1.0, responsibility=0.5,
+    )
+    full = orca_new_velocity(
+        np.array([-2.0, 0.0]), np.array([1.0, 0.0]), 0.3, pref,
+        [(pos_b, vel_b, 0.3)], max_speed=1.0, responsibility=1.0,
+    )
+    assert abs(full[1]) > abs(half[1]) + 1e-4, f"full {full} not more avoidant than half {half}"
+
+
 def test_circle_crossing_no_collision_and_reach():
     """The canonical ORCA validation: agents on a circle heading to antipodal
     goals must reach them WITHOUT ever overlapping (this is exactly the crowd

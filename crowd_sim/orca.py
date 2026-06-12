@@ -133,7 +133,7 @@ def _linear_program3(lines, num_obst_lines, begin_line, radius, result):
 
 
 def orca_new_velocity(pos, vel, radius, pref_vel, neighbors, max_speed,
-                      time_horizon=3.0, time_step=0.25):
+                      time_horizon=3.0, time_step=0.25, responsibility=0.5):
     """Compute one agent's ORCA-collision-free velocity.
 
     Args:
@@ -144,6 +144,11 @@ def orca_new_velocity(pos, vel, radius, pref_vel, neighbors, max_speed,
         max_speed: this agent's maximum speed.
         time_horizon: ORCA planning horizon (s).
         time_step: simulation step (s).
+        responsibility: share of avoidance this agent takes (0..1). The default
+            0.5 is reciprocal ORCA (each pair splits the burden) — correct for
+            pedestrians who mutually avoid. The robot expert (il.expert) uses 1.0
+            because pedestrians are invisible to it (they never yield), so the
+            robot must take the WHOLE avoidance burden or it under-avoids.
     Returns:
         length-2 ndarray: the new collision-free velocity.
     """
@@ -200,8 +205,9 @@ def orca_new_velocity(pos, vel, radius, pref_vel, neighbors, max_speed,
             direction = np.array([unit_w[1], -unit_w[0]])
             u = (combined_radius * inv_time_step - w_length) * unit_w
 
-        # Reciprocal: this agent takes half the avoidance responsibility.
-        point = vel + 0.5 * u
+        # Reciprocal ORCA splits the burden (responsibility=0.5); the robot
+        # expert takes the whole burden (1.0) because pedestrians don't yield.
+        point = vel + responsibility * u
         lines.append({'point': point, 'direction': direction})
 
     result = np.zeros(2)

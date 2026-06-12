@@ -11,7 +11,7 @@ import numpy as np
 import torch
 
 from crowd_sim.crowd_env import CrowdSimEnv
-from sncp_ppo.models import SNCPPolicy
+from sncp_ppo.models import SNCPPolicy, build_policy_for_checkpoint
 from sncp_ppo.ppo import PPOAgent
 
 
@@ -232,6 +232,30 @@ def make_env(num_humans, scenario, seed, comfort_coeff=6.0, max_time=50.0,
     return _thunk
 
 
+def build_or_load_policy(args, env, device):
+    """Build the SNCP policy, optionally initializing it from a checkpoint.
+
+    With --init_checkpoint (v23 IL warm-start), the policy is loaded from the BC
+    checkpoint and its architecture is auto-detected from the saved keys
+    (build_policy_for_checkpoint), so PPO fine-tunes from the cloned weights
+    instead of from scratch. Without it, a fresh policy is built per --pre_mlp.
+    """
+    init_ckpt = getattr(args, 'init_checkpoint', None)
+    if init_ckpt:
+        state = torch.load(init_ckpt, map_location=device)
+        policy = build_policy_for_checkpoint(
+            state, robot_vpref=env.robot_vpref, robot_wmax=env.robot_wmax
+        ).to(device)
+        policy.load_state_dict(state)
+        print(f"Initialized policy from {init_ckpt} (IL warm-start)")
+        return policy
+    return SNCPPolicy(
+        robot_vpref=env.robot_vpref,
+        robot_wmax=env.robot_wmax,
+        pre_mlp=getattr(args, 'pre_mlp', False),
+    ).to(device)
+
+
 def train(args):
     set_seed(args.seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -256,11 +280,7 @@ def train(args):
     )
 
     # 2. Create SNCP policy and PPO agent
-    policy = SNCPPolicy(
-        robot_vpref=env.robot_vpref,
-        robot_wmax=env.robot_wmax,
-        pre_mlp=getattr(args, 'pre_mlp', False),
-    ).to(device)
+    policy = build_or_load_policy(args, env, device)
     # Scheduled PPO updates for the LR scheduler. Vectorized mode does one
     # update per fixed-horizon rollout (total_steps // (num_envs*horizon)),
     # which is very different from the single-env episodes//update_freq. Using
@@ -1036,6 +1056,10 @@ def build_parser():
                         help='Paper Eq 11 fidelity: expand edge inputs to the 256-dim encoding '
                              'with an MLP BEFORE the NCP encoders (v22 candidate). Default off '
                              'preserves the v14..v21 architecture and checkpoint compatibility.')
+    parser.add_argument('--init_checkpoint', type=str, default=None,
+                        help='Initialize the policy from this checkpoint instead of fresh weights '
+                             '(v23 IL warm-start: PPO fine-tunes from the BC checkpoint). The '
+                             'architecture is auto-detected from the saved keys.')
     parser.add_argument('--bootstrap_easy_steps', type=int, default=0,
                         help='Probe mode only: run an easy/1 warmup for this many env steps '
                              'before the --fixed_scenario phase. Cold-starting at fixed N=5 '
