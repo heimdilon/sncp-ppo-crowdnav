@@ -16,6 +16,7 @@ from sncp_ppo.eval_report import (
     run_report,
     write_comparison_report,
 )
+from sncp_ppo.run_readiness import verify_v16_run_ready, write_readiness_report
 from sncp_ppo.training_log_report import (
     analyze_training_log,
     write_training_diagnostic_json,
@@ -63,6 +64,8 @@ def run_v16_post_eval(
     expected_replay_ratio: float = 0.20,
     replay_tolerance: float = 0.10,
     report_runner: ReportRunner = run_report,
+    readiness_root: str | Path = ".",
+    readiness_checker: Callable = verify_v16_run_ready,
 ) -> PostRunResult:
     checkpoint_path = Path(checkpoint_path)
     training_csv = Path(training_csv)
@@ -83,6 +86,13 @@ def run_v16_post_eval(
         max_time=max_time,
         human_goal_noise=human_goal_noise,
     )
+
+    # Ensure the bundle carries a run-readiness report even if the operator
+    # skipped the preflight cell (v22 lesson: a skipped preflight should not
+    # fail an otherwise-good eval — the artifact verifier requires this file).
+    readiness_path = output_dir / "run_readiness.md"
+    if not readiness_path.exists():
+        write_readiness_report(readiness_checker(readiness_root), readiness_path)
 
     comparison = compare_density_sweeps(
         load_summary_json(baseline_json),

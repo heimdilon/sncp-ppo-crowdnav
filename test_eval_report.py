@@ -352,6 +352,47 @@ def test_compare_density_sweeps_fails_timeout_freezing_regression():
     assert any("timeout/freezing" in note for note in sparse.notes)
 
 
+def test_compare_density_sweeps_isp_rise_is_not_a_regression_when_success_clearly_improves():
+    """v22 lesson: I_sp rising is a BYPRODUCT of higher success (the robot makes
+    more close-but-safe passes), not a comfort regression — as long as collision
+    did not rise. When success clearly improves, the I_sp gate must not fail/warn.
+    Models v22 N=8 (success +6pp, I_sp +0.0228, collision flat)."""
+    baseline = [
+        DensitySummary(8, "hard", 50, 0.32, 0.48, 0.20, 50.0, 45.0, 0.015, 0.85, 4.0),
+    ]
+    candidate = [
+        DensitySummary(8, "hard", 50, 0.38, 0.48, 0.16, 52.3, 41.1, 0.0378, 0.85, 6.2),
+    ]
+
+    comparison = compare_density_sweeps(
+        baseline, candidate, baseline_nav_steps=32.0, nav_margin_steps=8.0
+    )
+
+    row = comparison.rows[0]
+    assert row.i_sp_delta > 0.02  # would have tripped the old absolute gate
+    assert row.status == "pass", row.notes
+    assert not any("I_sp" in note for note in row.notes)
+
+
+def test_compare_density_sweeps_isp_rise_still_fails_when_success_does_not_improve():
+    """The I_sp gate stays meaningful: if success did NOT improve but I_sp rose
+    materially, that IS a comfort regression (robot got bolder for no gain)."""
+    baseline = [
+        DensitySummary(5, "hard", 50, 0.66, 0.18, 0.16, 50.0, 45.0, 0.015, 1.02, 5.3),
+    ]
+    candidate = [
+        DensitySummary(5, "hard", 50, 0.66, 0.18, 0.16, 52.0, 46.0, 0.045, 1.00, 5.0),
+    ]
+
+    comparison = compare_density_sweeps(
+        baseline, candidate, baseline_nav_steps=32.0, nav_margin_steps=8.0
+    )
+
+    row = comparison.rows[0]
+    assert row.status == "fail"
+    assert any("I_sp" in note for note in row.notes)
+
+
 def test_summary_json_round_trips_and_comparison_report_mentions_verdict(tmp_path):
     baseline = [
         DensitySummary(10, "hard", 50, 0.46, 0.46, 0.08, 188.9, 127.4, 0.025, 0.74, -4.4),

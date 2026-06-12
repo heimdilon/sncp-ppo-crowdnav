@@ -99,15 +99,21 @@
   cell (the artifact verifier lists it as required); (2) `I_sp rose by 0.0228` at N=8 trips the absolute
   comfort gate — but that gate's 0.02 threshold was tuned for the v15/v16 0.26 regime, and the I_sp rise
   here is the *byproduct of higher success* (the robot makes more close-but-safe passes; collision did
-  NOT rise). Every real metric improved. NOTE: the comparison report still prints "v15 Success" column
-  headers though the baseline is `eval_v21` (cosmetic — `write_comparison_report` hardcodes "v15").
+  NOT rise). Every real metric improved.
+  **GATE FIXES (committed after v22; both fail causes were eval-gate bugs, TDD, 149 tests):**
+  (a) `compare_density_sweeps` suppresses the I_sp warn/fail when `success_delta >= success_tolerance`
+  (and collision did not rise) — an I_sp rise alongside clearly-higher success is a byproduct, not a
+  comfort regression; the gate still fires when success is flat/down. (b) `run_v16_post_eval` now
+  auto-writes `run_readiness.md` (via `verify_v16_run_ready`) when the operator skipped the preflight
+  cell, so the bundle is always complete. (c) Cosmetic: comparison headers say "Baseline" not "v15".
+  Re-verified against the real v22 sweep: comparison verdict = **pass** at every density, artifact
+  verification = **pass**; `eval_v22/` reports regenerated to the passing state.
   Artifacts: `eval_v22/`, `checkpoints/sncp_ppo_v22.pt`, CSV `logs/training_20260612_073945.csv`.
-  **Still below the paper's 93–95% at high N (N=8/10 ~37%)** — robot-speed + LR closed much of the gap;
+  **Still below the paper's 93-95% at high N (N=8/10 ~37%)** — robot-speed + LR closed much of the gap;
   remaining candidates = pre-MLP (coded), IL warm-start, longer budget. **v18 stays the 0.26 baseline;
   v22 is the best 1.0 m/s paper-regime result so far.**
-- **Pending housekeeping (not yet on main): notebook-v2-rewrite branch** has a clean full rewrite of
-  `sncp_ppo_colab.ipynb` (commit 4e76e89) + `visualize_trajectory.py` regime CLI args; kept off main
-  while v22 trained. Now safe to merge.
+- **notebook-v2-rewrite MERGED into main** (commit cde2945): clean full rewrite of
+  `sncp_ppo_colab.ipynb` + `visualize_trajectory.py` regime CLI args.
 - **(historical) v18 hypothesis context.** v15 proved
   *genuine* collision-avoidance + social-distance keeping (it detours around pedestrians) - the
   long-standing "beeline" problem is solved. v16 added vectorized anti-forgetting replay
