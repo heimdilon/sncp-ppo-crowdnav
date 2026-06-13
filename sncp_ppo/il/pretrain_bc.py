@@ -75,13 +75,14 @@ def _batch_loss(policy, batch, n_humans, vpref, wmax, device):
 
 def pretrain_bc(shards, epochs=10, lr=1e-3, batch_size=32,
                 robot_vpref=1.0, robot_wmax=1.8, device=None, seed=0,
-                pre_mlp=False, log_every=0):
+                pre_mlp=False, attn_count_scaling=False, log_every=0):
     """Train a fresh SNCPPolicy to clone the expert. Returns (policy, history)."""
     device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     torch.manual_seed(seed)
     np.random.seed(seed)
 
-    policy = SNCPPolicy(robot_vpref=robot_vpref, robot_wmax=robot_wmax, pre_mlp=pre_mlp).to(device)
+    policy = SNCPPolicy(robot_vpref=robot_vpref, robot_wmax=robot_wmax,
+                        pre_mlp=pre_mlp, attn_count_scaling=attn_count_scaling).to(device)
     optimizer = torch.optim.Adam(policy.parameters(), lr=lr)
     rng = np.random.default_rng(seed)
 
@@ -122,6 +123,8 @@ def main(argv=None):
     parser.add_argument('--robot_vpref', type=float, default=1.0)
     parser.add_argument('--robot_wmax', type=float, default=1.8)
     parser.add_argument('--pre_mlp', action='store_true')
+    parser.add_argument('--attn_count_scaling', action='store_true',
+                        help='Clone into an n/sqrt(d_k) attention-scaled policy (paper Eq 13).')
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--out', type=str, default='checkpoints/sncp_ppo_v23_bc.pt')
     args = parser.parse_args(argv)
@@ -133,7 +136,8 @@ def main(argv=None):
     policy, history = pretrain_bc(
         shards, epochs=args.epochs, lr=args.lr, batch_size=args.batch_size,
         robot_vpref=args.robot_vpref, robot_wmax=args.robot_wmax,
-        pre_mlp=args.pre_mlp, seed=args.seed, log_every=max(1, args.epochs // 10),
+        pre_mlp=args.pre_mlp, attn_count_scaling=args.attn_count_scaling,
+        seed=args.seed, log_every=max(1, args.epochs // 10),
     )
 
     out = Path(args.out)

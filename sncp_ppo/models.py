@@ -16,12 +16,23 @@ def _orthogonal_linear(layer, gain):
 
 
 class SNCPPolicy(nn.Module):
-    def __init__(self, robot_vpref=0.26, robot_wmax=1.8, pre_mlp=False):
+    def __init__(self, robot_vpref=0.26, robot_wmax=1.8, pre_mlp=False,
+                 attn_count_scaling=False):
         super(SNCPPolicy, self).__init__()
 
         self.robot_vpref = robot_vpref
         self.robot_wmax = robot_wmax
         self.pre_mlp = pre_mlp
+        # Paper Eq 13 scales attention scores by n/sqrt(d_k) (n = #humans); we
+        # historically used 1/sqrt(d_k), making the pooled vector a pure
+        # weighted average that loses count/density info at high N. With this
+        # flag on, the n factor feeds the pedestrian count into the softmax
+        # temperature. A buffer is registered ONLY when on, so default
+        # checkpoints stay byte-identical and build_policy_for_checkpoint can
+        # auto-detect the variant (same pattern as pre_mlp).
+        self.attn_count_scaling = attn_count_scaling
+        if attn_count_scaling:
+            self.register_buffer('_attn_count_scaling', torch.tensor(1.0))
 
         # 1. Robot Node Encoder (MLP)
         # Input robot_node: [dg_local_x, dg_local_y, v_linear, dist_to_goal, vpref, radius, w_angular] (dim 7)
@@ -153,6 +164,19 @@ class SNCPPolicy(nn.Module):
             'node': h_node
         }
 
+    def _attention_pool(self, M_rh, m_rr, num_humans):
+        """Attention-weighted pooling of the per-human spatial features M_rh
+        against the robot/temporal key m_rr. With attn_count_scaling, scores are
+        scaled by n (paper Eq 13, n/sqrt(d_k)) so the pedestrian count enters the
+        softmax temperature instead of being averaged away."""
+        Q = self.W_q(M_rh)                      # [B, H, 64]
+        K = self.W_k(m_rr).unsqueeze(1)         # [B, 1, 64]
+        attn_scores = torch.bmm(Q, K.transpose(1, 2)) / 8.0   # /sqrt(d_k)
+        if self.attn_count_scaling:
+            attn_scores = attn_scores * num_humans
+        alpha = F.softmax(attn_scores, dim=1)   # [B, H, 1]
+        return torch.bmm(M_rh.transpose(1, 2), alpha).squeeze(2)  # [B, 256]
+
     def forward(self, obs, hidden_states):
         """
         Forward pass of the SNCP model.
@@ -201,11 +225,7 @@ class SNCPPolicy(nn.Module):
         M_rh = M_rh_proj.reshape(batch_size, num_humans, 256)
         
         # 4. Attention Pooling
-        Q = self.W_q(M_rh)
-        K = self.W_k(m_rr).unsqueeze(1)
-        attn_scores = torch.bmm(Q, K.transpose(1, 2)) / 8.0
-        alpha = F.softmax(attn_scores, dim=1)
-        u_att = torch.bmm(M_rh.transpose(1, 2), alpha).squeeze(2)
+        u_att = self._attention_pool(M_rh, m_rr, num_humans)
         
         # 5. Node LTC Encoder
         node_input = torch.cat([v_m, m_rr, u_att], dim=-1).unsqueeze(1)
@@ -251,4 +271,6 @@ def build_policy_for_checkpoint(state_dict, robot_vpref=0.26, robot_wmax=1.8):
     checkpoints (v14..v21) have no `*_pre_mlp` keys and get the legacy layout.
     """
     pre_mlp = any(key.startswith('temporal_pre_mlp') for key in state_dict)
-    return SNCPPolicy(robot_vpref=robot_vpref, robot_wmax=robot_wmax, pre_mlp=pre_mlp)
+    attn_count_scaling = '_attn_count_scaling' in state_dict
+    return SNCPPolicy(robot_vpref=robot_vpref, robot_wmax=robot_wmax,
+                      pre_mlp=pre_mlp, attn_count_scaling=attn_count_scaling)

@@ -253,6 +253,7 @@ def build_or_load_policy(args, env, device):
         robot_vpref=env.robot_vpref,
         robot_wmax=env.robot_wmax,
         pre_mlp=getattr(args, 'pre_mlp', False),
+        attn_count_scaling=getattr(args, 'attn_count_scaling', False),
     ).to(device)
 
 
@@ -1060,6 +1061,11 @@ def build_parser():
                         help='Initialize the policy from this checkpoint instead of fresh weights '
                              '(v23 IL warm-start: PPO fine-tunes from the BC checkpoint). The '
                              'architecture is auto-detected from the saved keys.')
+    parser.add_argument('--attn_count_scaling', action='store_true',
+                        help='Scale attention scores by n/sqrt(d_k) (paper Eq 13, n=#humans) so the '
+                             'pedestrian count enters the softmax temperature — high-N candidate. '
+                             'Default off preserves v14..v23 behavior. Ignored when --init_checkpoint '
+                             'is set (the variant is taken from the checkpoint).')
     parser.add_argument('--bootstrap_easy_steps', type=int, default=0,
                         help='Probe mode only: run an easy/1 warmup for this many env steps '
                              'before the --fixed_scenario phase. Cold-starting at fixed N=5 '
