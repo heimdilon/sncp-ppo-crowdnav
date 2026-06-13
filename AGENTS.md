@@ -162,10 +162,22 @@
     supported by this Eq-13-faithful variant; more aggressive count-pooling (sum/max/mean+count) remains
     untested but is more speculative. High-N bottleneck is probably not the pooling. Flag stays in the
     codebase (off) for reproducibility. `checkpoints/sncp_ppo_v23_bc_attn.pt` produced (BC loss 0.17→0.04).
-  - **(2) Action distribution (tanh-Normal/Beta) — NEXT.** We store the un-clipped Normal sample's
-    log-prob but execute the clipped action; one-sided `v∈[0,vpref]` clip piles mass at 0. tanh-squashed
-    / Beta with correct log-prob is cleaner. (In progress.)
-  - **(3) Methodology** (fixed eval seed, ≥3 seeds, shared test bank) and **(4) full v23** still pending.
+  - **(2) Action distribution (tanh-Normal/Beta) — DEFERRED.** Real cleanup (we store the un-clipped
+    Normal sample's log-prob but execute the clipped action; one-sided `v∈[0,vpref]` clip piles mass at
+    0) but it is general PPO hygiene, NOT a high-N lever, and a big/risky refactor. After the attention
+    probe gave no high-N gain, the user chose to stop tinkering and run full v23 instead. Kept as
+    future work.
+  - **(3) Methodology** (fixed eval seed, ≥3 seeds, shared test bank) still pending / future work.
+- **v23 full run = NOTEBOOK READY, Colab pending (user: "skip [action dist], run full v23").** Notebook
+  bumped to v23 (34 cells): a new **3.1 IL warm-start cell** (reproduce-or-pull the committed BC
+  checkpoint — idempotent `collect_demos` + `pretrain_bc`), **3.2 preflight**, **3.3 fine-tune** with
+  `--init_checkpoint checkpoints/sncp_ppo_v23_bc.pt` + the v22 paper regime (LR 1e-4, robot 1.0, parity
+  peds, goal noise 2.0, max_time 15, 2.5M steps), and Section-4 eval at `--version 23` against the
+  regime-matched `eval_v22/density_sweep.json` baseline (beeline 32/8). Readiness tokens + tests +
+  `verify_v16_run_ready` default bumped to v23; readiness gate=pass; 176 tests pass. **Success = clear
+  improvement over v22's 84/74/66/38/36, ideally lifting high-N. v18 stays the 0.26 baseline.** Run it
+  on Colab (pull → 3.1 → 3.2 → 3.3 → Section 4), download `eval_v23_artifacts.zip`, then
+  `stage_colab_run_artifacts.py --version 23` and compare to v22.
 - **(historical) v18 hypothesis context.** v15 proved
   *genuine* collision-avoidance + social-distance keeping (it detours around pedestrians) - the
   long-standing "beeline" problem is solved. v16 added vectorized anti-forgetting replay

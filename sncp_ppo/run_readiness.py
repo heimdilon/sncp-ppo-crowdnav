@@ -20,7 +20,8 @@ TRAINING_TOKENS = (
     "ROBOT_VPREF = 1.0",
     "HUMAN_VPREF = 1.0",
     "HUMAN_GOAL_NOISE = 2.0",
-    "SAVE_PATH = 'checkpoints/sncp_ppo_v22.pt'",
+    "INIT_CHECKPOINT = 'checkpoints/sncp_ppo_v23_bc.pt'",
+    "SAVE_PATH = 'checkpoints/sncp_ppo_v23.pt'",
     "'--num_envs', str(NUM_ENVS)",
     "'--horizon', str(HORIZON)",
     "'--total_steps', str(TOTAL_STEPS)",
@@ -32,6 +33,7 @@ TRAINING_TOKENS = (
     "'--robot_vpref', str(ROBOT_VPREF)",
     "'--human_vpref_override', str(HUMAN_VPREF)",
     "'--human_goal_noise', str(HUMAN_GOAL_NOISE)",
+    "'--init_checkpoint', INIT_CHECKPOINT",
     "'--holdout_scenarios', 'easy', 'hard', 'circle'",
     "'--holdout_episodes', '50'",
     "'--save_path', SAVE_PATH",
@@ -40,12 +42,12 @@ TRAINING_TOKENS = (
 )
 
 EVALUATION_TOKENS = (
-    "CHECKPOINT = 'checkpoints/sncp_ppo_v22.pt'",
-    "EVAL_OUT = 'eval_v22'",
+    "CHECKPOINT = 'checkpoints/sncp_ppo_v23.pt'",
+    "EVAL_OUT = 'eval_v23'",
     "EVAL_SEED = 100",
     "EVAL_EPISODES = 50",
     "run_post_eval.py",
-    "'--version', '22'",
+    "'--version', '23'",
     "'--densities', '1', '3', '5', '8', '10'",
     "'--scenario', 'hard'",
     "'--n_episodes', str(EVAL_EPISODES)",
@@ -54,9 +56,9 @@ EVALUATION_TOKENS = (
     "'--human_vpref_override', '1.0'",
     "'--human_goal_noise', '2.0'",
     "'--max_time', '15.0'",
-    # v21 lesson: gates must match the regime — compare against the v21 sweep
-    # (same physics, the LR ablation) and scale the no-beeline gate to 1.0 m/s.
-    "'--baseline_json', 'eval_v21/density_sweep.json'",
+    # Regime-matched gates: v23 compares against the v22 sweep (same physics, the
+    # IL-warm-start ablation) with the no-beeline gate scaled to 1.0 m/s.
+    "'--baseline_json', 'eval_v22/density_sweep.json'",
     "'--baseline_nav_steps', '32'",
     "'--nav_margin_steps', '8'",
 )
@@ -128,7 +130,7 @@ def verify_v16_run_ready(repo_root: str | Path = ".") -> V16RunReadinessSummary:
     required_files = (
         repo_root / "sncp_ppo_colab.ipynb",
         repo_root / "run_post_eval.py",
-        repo_root / "eval_v21" / "density_sweep.json",
+        repo_root / "eval_v22" / "density_sweep.json",
     )
     for path in required_files:
         if not path.exists():
@@ -137,22 +139,22 @@ def verify_v16_run_ready(repo_root: str | Path = ".") -> V16RunReadinessSummary:
     cells = _load_notebook(repo_root / "sncp_ppo_colab.ipynb") or []
     training_cell = _find_unique_cell(
         cells,
-        "SAVE_PATH = 'checkpoints/sncp_ppo_v22.pt'",
+        "SAVE_PATH = 'checkpoints/sncp_ppo_v23.pt'",
         notes,
-        "v22 training",
+        "v23 training",
     )
     evaluation_cell = _find_unique_cell(
         cells,
-        "CHECKPOINT = 'checkpoints/sncp_ppo_v22.pt'",
+        "CHECKPOINT = 'checkpoints/sncp_ppo_v23.pt'",
         notes,
-        "v22 evaluation",
+        "v23 evaluation",
     )
-    _check_tokens(training_cell, TRAINING_TOKENS, notes, "v22 training")
-    _check_tokens(evaluation_cell, EVALUATION_TOKENS, notes, "v22 evaluation")
+    _check_tokens(training_cell, TRAINING_TOKENS, notes, "v23 training")
+    _check_tokens(evaluation_cell, EVALUATION_TOKENS, notes, "v23 evaluation")
 
-    densities = _baseline_densities(repo_root / "eval_v21" / "density_sweep.json", notes)
+    densities = _baseline_densities(repo_root / "eval_v22" / "density_sweep.json", notes)
     if not notes:
-        notes.append("PASS: v22 Colab training and evaluation configuration is ready")
+        notes.append("PASS: v23 Colab training and evaluation configuration is ready")
 
     return V16RunReadinessSummary(
         status=_status(notes),
