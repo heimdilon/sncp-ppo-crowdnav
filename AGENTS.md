@@ -151,11 +151,21 @@
     vs the paper's `−2·I_sp`, and our obs adds rel-vel + goal-dir vs the paper's 2D rel-pos edges; (e)
     benchmark NON-comparability — paper uses 500 cases / rectangular 10×10 scenes / sensing limits, our
     antipodal circle-crossing is a different distribution, so chasing the paper's 93-95% is the wrong frame.
-  - **Phase 4 (full 2.5M v23) NOT built** — gate passed but user paused to evaluate. Revised next steps
-    (Codex + self synthesis, cheap single-variable first): (1) fix action dist (tanh-Normal/Beta);
-    (2) attention n-scaling / count-preserving pooling probe (the likely high-N lever); (3) tighten
-    methodology (fixed eval seed, ≥3 seeds, shared test bank); (4) THEN full v23. Plumbing for v23 is in
-    place (`--init_checkpoint`, committed BC checkpoint).
+  - **Phase 4 (full 2.5M v23) NOT built** — gate passed but user paused to evaluate. Plumbing for v23 is
+    in place (`--init_checkpoint`, committed BC checkpoint).
+- **Post-review architecture probes (2026-06-13, "do them in order"):**
+  - **(1) Attention n-scaling — DONE, NO CLEAR GAIN.** Added `SNCPPolicy(attn_count_scaling=True)` =
+    paper Eq 13 `n/√d_k` (commit 044d01f, default off, checkpoints unaffected, 175 tests). Controlled
+    300k probe (`_probe_attn.py`, untracked): BC-init+attn vs Phase-3 BC-init (only the n factor differs),
+    seed 42. Best holdout-min **38% vs 44%**, circle (N=10) **38% vs 44%** — no gain, slightly below
+    (within single-seed / ±13pp 50-ep noise, so "no gain", not "worse"). The count-loss hypothesis is NOT
+    supported by this Eq-13-faithful variant; more aggressive count-pooling (sum/max/mean+count) remains
+    untested but is more speculative. High-N bottleneck is probably not the pooling. Flag stays in the
+    codebase (off) for reproducibility. `checkpoints/sncp_ppo_v23_bc_attn.pt` produced (BC loss 0.17→0.04).
+  - **(2) Action distribution (tanh-Normal/Beta) — NEXT.** We store the un-clipped Normal sample's
+    log-prob but execute the clipped action; one-sided `v∈[0,vpref]` clip piles mass at 0. tanh-squashed
+    / Beta with correct log-prob is cleaner. (In progress.)
+  - **(3) Methodology** (fixed eval seed, ≥3 seeds, shared test bank) and **(4) full v23** still pending.
 - **(historical) v18 hypothesis context.** v15 proved
   *genuine* collision-avoidance + social-distance keeping (it detours around pedestrians) - the
   long-standing "beeline" problem is solved. v16 added vectorized anti-forgetting replay
