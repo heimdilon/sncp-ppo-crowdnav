@@ -114,6 +114,28 @@
   v22 is the best 1.0 m/s paper-regime result so far.**
 - **notebook-v2-rewrite MERGED into main** (commit cde2945): clean full rewrite of
   `sncp_ppo_colab.ipynb` + `visualize_trajectory.py` regime CLI args.
+- **v23 IL warm-start (BC→PPO) = CODE COMPLETE + feasibility PROVEN; full 2.5M run NOT yet done
+  (user chose "stop & evaluate").** The CrowdNav-lineage recipe: clone an ORCA expert, then PPO
+  fine-tune. Code committed `6acbb97` (pushed); `sncp_ppo/il/` (expert / collect_demos / pretrain_bc)
+  + `crowd_sim/orca.py` `responsibility` param + `train.py --init_checkpoint` / `build_or_load_policy`.
+  169 tests. Plan: `~/.claude/plans/foamy-greeting-origami.md`. Four gated local phases, all run:
+  - **Phase 0 ✅ strong:** ORCA expert (`time_horizon=8`, full responsibility) beats v22 at EVERY
+    density — N=1→10: **100/74/76/64/56** vs v22's 84/74/66/38/36 (+20-26pp at high N). The premise
+    (expert worth cloning) holds decisively. (`time_horizon` 3→8 is what lifts high-N; it saturates ~8.)
+  - **Phase 1 ✅:** 1511 successful demos, `data/il_demos.npz` (gitignored; reproduce with
+    `python -m sncp_ppo.il.collect_demos --seed 0 --time_horizon 8 --out data/il_demos.npz`).
+  - **Phase 2 ✅ (BC weak alone, as expected):** BC loss 0.17→0.04, but deterministic eval
+    66/56/44/22/12 — below expert/v22, classic covariate shift (success-only demos teach no recovery).
+    Value is as a PPO init, not standalone. Checkpoint `checkpoints/sncp_ppo_v23_bc.pt` (committed).
+  - **Phase 3 ✅ DECISIVE — "BC HELPS":** controlled 300k probe, identical v22 config, only `--init_checkpoint`
+    differs (`_probe_il.py`, untracked). Best holdout-min over 300k: **scratch 4% vs BC-init 44%**
+    (easy 90 / hard 54 / circle 44 at step 246k). The scratch control barely learned in the compressed
+    300k curriculum, so the +40pp gap is purely the warm-start. BC-init's 44% at 300k ≈ v22's 2.5M best
+    of 52% — i.e. the warm-start nears v22's peak in ~8× fewer steps. This empirically confirms the
+    structural gap was TRAINING METHOD (IL warm-start), not reward/env/capacity.
+  - **Phase 4 (full 2.5M v23) NOT built** — gate passed but user paused to evaluate. To resume: bump the
+    notebook/readiness/tests to v23 (BC-init fine-tune: `--init_checkpoint checkpoints/sncp_ppo_v23_bc.pt`
+    + v22 config + 2.5M; eval baseline `eval_v22`), then Colab. Everything needed is in place.
 - **(historical) v18 hypothesis context.** v15 proved
   *genuine* collision-avoidance + social-distance keeping (it detours around pedestrians) - the
   long-standing "beeline" problem is solved. v16 added vectorized anti-forgetting replay
