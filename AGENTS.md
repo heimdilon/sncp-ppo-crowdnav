@@ -127,15 +127,35 @@
   - **Phase 2 ✅ (BC weak alone, as expected):** BC loss 0.17→0.04, but deterministic eval
     66/56/44/22/12 — below expert/v22, classic covariate shift (success-only demos teach no recovery).
     Value is as a PPO init, not standalone. Checkpoint `checkpoints/sncp_ppo_v23_bc.pt` (committed).
-  - **Phase 3 ✅ DECISIVE — "BC HELPS":** controlled 300k probe, identical v22 config, only `--init_checkpoint`
-    differs (`_probe_il.py`, untracked). Best holdout-min over 300k: **scratch 4% vs BC-init 44%**
-    (easy 90 / hard 54 / circle 44 at step 246k). The scratch control barely learned in the compressed
-    300k curriculum, so the +40pp gap is purely the warm-start. BC-init's 44% at 300k ≈ v22's 2.5M best
-    of 52% — i.e. the warm-start nears v22's peak in ~8× fewer steps. This empirically confirms the
-    structural gap was TRAINING METHOD (IL warm-start), not reward/env/capacity.
-  - **Phase 4 (full 2.5M v23) NOT built** — gate passed but user paused to evaluate. To resume: bump the
-    notebook/readiness/tests to v23 (BC-init fine-tune: `--init_checkpoint checkpoints/sncp_ppo_v23_bc.pt`
-    + v22 config + 2.5M; eval baseline `eval_v22`), then Colab. Everything needed is in place.
+  - **Phase 3 ✅ — "BC HELPS" (early learning), but read with caveats below:** controlled 300k probe,
+    identical v22 config, only `--init_checkpoint` differs (`_probe_il.py`, untracked). Best holdout-min
+    over 300k: **scratch 4% vs BC-init 44%** (easy 90 / hard 54 / circle 44 at step 246k). **Honest
+    framing (corrected after Codex external review):** (i) the earlier "~8× fewer steps" was misleading —
+    that was total-budget (300k vs 2.5M); the fair peak-to-peak read is BC 44%@246k vs v22 52%@696k =
+    **~2.8× fewer steps to a slightly LOWER score**, before counting demo collection + BC epochs. (ii) the
+    scratch control is HANDICAPPED by the compressed 300k curriculum (v22's normal schedule was at 14% by
+    287k vs the probe's 2-4%), so part of the +40pp gap is a compression artifact, not pure warm-start.
+    (iii) Defensible claim = "BC substantially accelerates early PPO under a compressed curriculum." It
+    does NOT establish training method as the unique remaining bottleneck (env/arch/optimization not ruled
+    out). Still a genuinely positive signal, just not decisive.
+  - **OPEN issues surfaced by Codex review (untested, candidates for high-N):** (a) action dist — we store
+    the UN-clipped Normal sample's log-prob but execute the clipped action ([ppo.py](sncp_ppo/ppo.py:194),
+    intentional "clip-as-env" choice, but tanh-Normal/Beta would be cleaner, esp. the one-sided `v∈[0,vpref]`
+    clip piling mass at 0); (b) attention pooling is a softmax weighted-average → duplicating similar
+    pedestrians barely changes the pooled vector → count/density info lost at high N
+    ([models.py](sncp_ppo/models.py:170) uses `/√d_k`; paper Eq 13 uses **`n/√d_k`** with n=#humans — that
+    `n` factor may be the count-encoding mechanism, NOT a typo); (c) methodology: single seed per version,
+    50-ep CIs are wide (N=10 36% ≈ ±13pp), eval seed changes every checkpoint (conflates policy vs case
+    difficulty), holdout-min has winner's-curse bias, repeated decisions on the same density sweep risk
+    adaptive overfitting; (d) "paper-faithful reward" is INACCURATE — `r_g` matches but comfort is `−6·I_sp`
+    vs the paper's `−2·I_sp`, and our obs adds rel-vel + goal-dir vs the paper's 2D rel-pos edges; (e)
+    benchmark NON-comparability — paper uses 500 cases / rectangular 10×10 scenes / sensing limits, our
+    antipodal circle-crossing is a different distribution, so chasing the paper's 93-95% is the wrong frame.
+  - **Phase 4 (full 2.5M v23) NOT built** — gate passed but user paused to evaluate. Revised next steps
+    (Codex + self synthesis, cheap single-variable first): (1) fix action dist (tanh-Normal/Beta);
+    (2) attention n-scaling / count-preserving pooling probe (the likely high-N lever); (3) tighten
+    methodology (fixed eval seed, ≥3 seeds, shared test bank); (4) THEN full v23. Plumbing for v23 is in
+    place (`--init_checkpoint`, committed BC checkpoint).
 - **(historical) v18 hypothesis context.** v15 proved
   *genuine* collision-avoidance + social-distance keeping (it detours around pedestrians) - the
   long-standing "beeline" problem is solved. v16 added vectorized anti-forgetting replay
