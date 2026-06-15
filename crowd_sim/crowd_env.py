@@ -309,11 +309,10 @@ class CrowdSimEnv(gym.Env):
         N = self.num_humans
         
         # Distances between all humans
-        d_humans = np.zeros((N, N))
-        for i in range(N):
-            for j in range(N):
-                if i != j:
-                    d_humans[i, j] = np.hypot(self.humans_px[i] - self.humans_px[j], self.humans_py[i] - self.humans_py[j])
+        dx = self.humans_px[:, np.newaxis] - self.humans_px
+        dy = self.humans_py[:, np.newaxis] - self.humans_py
+        d_humans = np.hypot(dx, dy)
+        np.fill_diagonal(d_humans, np.inf)
         
         for i in range(N):
             # Robot relative to human i
@@ -347,10 +346,7 @@ class CrowdSimEnv(gym.Env):
                 
             # Compute distance weight omega
             w_hr = 1.0 / (d_hr + 1e-5)
-            w_hj_sum = 0.0
-            for j in range(N):
-                if j != i:
-                    w_hj_sum += 1.0 / (d_humans[i, j] + 1e-5)
+            w_hj_sum = np.sum(1.0 / (d_humans[i] + 1e-5))
                     
             omega = w_hr / (w_hr + w_hj_sum + 1e-5)
             
