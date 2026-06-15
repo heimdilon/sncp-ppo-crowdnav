@@ -659,7 +659,15 @@ class CrowdSimEnv(gym.Env):
         pos = np.stack([self.humans_px, self.humans_py], axis=1)
         vel = np.stack([self.humans_vx, self.humans_vy], axis=1)
         radii = np.full(N, self.human_radius)
-        max_speeds = np.array([self._human_vpref(i) for i in range(N)], dtype=float)
+
+        speeds = getattr(self, 'humans_vpref', None)
+        if speeds is not None:
+            # asarray (not array(copy=False)) so a list/non-float humans_vpref is
+            # converted instead of raising under NumPy 2.x, matching the old
+            # per-element float(_human_vpref(i)) behaviour.
+            max_speeds = np.asarray(speeds, dtype=float)
+        else:
+            max_speeds = np.full(N, self.human_vpref, dtype=float)
 
         pref = np.zeros((N, 2))
         for i in range(N):
@@ -667,7 +675,7 @@ class CrowdSimEnv(gym.Env):
             dy = self.humans_gy[i] - self.humans_py[i]
             dist = np.hypot(dx, dy)
             if dist >= 0.1:  # else stay at goal (pref velocity 0)
-                vpref_i = self._human_vpref(i)
+                vpref_i = max_speeds[i]
                 pref[i, 0] = (dx / dist) * vpref_i
                 pref[i, 1] = (dy / dist) * vpref_i
 
