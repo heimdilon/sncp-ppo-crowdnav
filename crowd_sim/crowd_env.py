@@ -61,6 +61,12 @@ class CrowdSimEnv(gym.Env):
         # Human physical parameters
         self.human_radius = 0.3
         self.human_vpref = 0.5  # typical human walking speed (m/s)
+
+        # Social Force Model repulsion constants — single source of truth shared
+        # by human-human repulsion (_human_repulsion_forces) and human-robot
+        # repulsion (_move_humans), so the two can never silently diverge.
+        self.sfm_repulsion_A = 2.0  # repulsive force magnitude
+        self.sfm_repulsion_B = 0.3  # repulsive force range
         
         # Safe distance threshold
         self.d_col = 0.3  # collision distance = robot_radius + human_radius
@@ -495,14 +501,20 @@ class CrowdSimEnv(gym.Env):
 
         N = self.num_humans
         tau = 0.5  # relaxation time
-        A = 2.0    # repulsive force magnitude
-        B = 0.3    # repulsive force range
+        A = self.sfm_repulsion_A  # repulsive force magnitude
+        B = self.sfm_repulsion_B  # repulsive force range
         
         new_px = np.zeros(N)
         new_py = np.zeros(N)
         new_vx = np.zeros(N)
         new_vy = np.zeros(N)
-        
+
+        # Pairwise human-human repulsion for ALL pedestrians at once (vectorized,
+        # replacing the former nested O(N^2) loop). Computed on the current
+        # positions, exactly as the per-agent loop read them (self.humans_* is
+        # only rewritten after the loop), so each per-i force is unchanged.
+        f_rep_x_all, f_rep_y_all = self._human_repulsion_forces()
+
         for i in range(N):
             px = self.humans_px[i]
             py = self.humans_py[i]
@@ -528,21 +540,10 @@ class CrowdSimEnv(gym.Env):
             f_drive_x = (pref_vx - vx) / tau
             f_drive_y = (pref_vy - vy) / tau
             
-            # 2. Repulsion from other humans
-            f_rep_x = 0.0
-            f_rep_y = 0.0
-            for j in range(N):
-                if j != i:
-                    dx = px - self.humans_px[j]
-                    dy = py - self.humans_py[j]
-                    dist = np.hypot(dx, dy)
-                    r_sum = 2.0 * self.human_radius
-                    # Repulsive force points away from human j
-                    if dist > 0:
-                        force = A * np.exp((r_sum - dist) / B)
-                        f_rep_x += force * (dx / dist)
-                        f_rep_y += force * (dy / dist)
-                        
+            # 2. Repulsion from other humans (precomputed vectorized, above)
+            f_rep_x = f_rep_x_all[i]
+            f_rep_y = f_rep_y_all[i]
+
             # 3. Repulsion from robot
             if self.human_dodge_robot:
                 dx_r = px - self.robot_px
@@ -583,6 +584,42 @@ class CrowdSimEnv(gym.Env):
         self.humans_py = new_py
         self.humans_vx = new_vx
         self.humans_vy = new_vy
+
+    def _human_repulsion_forces(self):
+        """Pairwise Social-Force repulsion between pedestrians, vectorized.
+
+        Replaces the original nested O(N^2) Python loop (one np.hypot + np.exp per
+        ordered pair) with a single pass of numpy array ops over the N x N pair
+        matrix. The per-element operation order matches the loop exactly
+        (``force * (d / dist)``) and the row sum keeps the diagonal (the i == j
+        term has zero displacement and contributes exactly 0.0, mirroring the
+        loop's ``if j != i`` skip), so the output is numerically equivalent to a
+        very tight tolerance (the tests pin atol=1e-12). It is not a guaranteed
+        bitwise identity, because numpy's reduction order is not contractual
+        across versions/platforms.
+
+        Returns ``(f_rep_x, f_rep_y)``, each a length-N array of the net repulsion
+        force on every pedestrian from all the others.
+        """
+        A = self.sfm_repulsion_A  # repulsive force magnitude
+        B = self.sfm_repulsion_B  # repulsive force range
+        px = self.humans_px
+        py = self.humans_py
+
+        # diff[i, j] = position_i - position_j: the force on i points away from j.
+        diff_x = px[:, None] - px[None, :]
+        diff_y = py[:, None] - py[None, :]
+        dist = np.hypot(diff_x, diff_y)
+
+        # dist == 0 on the diagonal (and for any coincident pair); the original
+        # loop skips those via `if dist > 0`. diff is also 0 wherever dist is 0,
+        # so the contribution is 0 either way — safe_dist just avoids 0/0 -> nan.
+        r_sum = 2.0 * self.human_radius
+        safe_dist = np.where(dist > 0.0, dist, 1.0)
+        force = A * np.exp((r_sum - dist) / B)
+        f_rep_x = (force * (diff_x / safe_dist)).sum(axis=1)
+        f_rep_y = (force * (diff_y / safe_dist)).sum(axis=1)
+        return f_rep_x, f_rep_y
 
     def _human_vpref(self, index):
         speeds = getattr(self, 'humans_vpref', None)
