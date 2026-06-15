@@ -132,7 +132,7 @@ def _linear_program3(lines, num_obst_lines, begin_line, radius, result):
             distance = _det(lines[i]['direction'], lines[i]['point'] - result)
 
 
-def orca_new_velocity(pos, vel, radius, pref_vel, neighbors, max_speed,
+def orca_new_velocity(pos, vel, radius, pref_vel, neighbor_positions, neighbor_velocities, neighbor_radii, max_speed,
                       time_horizon=3.0, time_step=0.25, responsibility=0.5):
     """Compute one agent's ORCA-collision-free velocity.
 
@@ -140,7 +140,9 @@ def orca_new_velocity(pos, vel, radius, pref_vel, neighbors, max_speed,
         pos, vel: this agent's position/velocity, length-2 ndarrays.
         radius: this agent's radius.
         pref_vel: preferred velocity (toward goal at preferred speed), length-2.
-        neighbors: iterable of (pos, vel, radius) for the OTHER agents only.
+        neighbor_positions: positions of the OTHER agents.
+        neighbor_velocities: velocities of the OTHER agents.
+        neighbor_radii: radii of the OTHER agents.
         max_speed: this agent's maximum speed.
         time_horizon: ORCA planning horizon (s).
         time_step: simulation step (s).
@@ -155,7 +157,7 @@ def orca_new_velocity(pos, vel, radius, pref_vel, neighbors, max_speed,
     lines = []
     inv_time_horizon = 1.0 / time_horizon
 
-    for (n_pos, n_vel, n_radius) in neighbors:
+    for n_pos, n_vel, n_radius in zip(neighbor_positions, neighbor_velocities, neighbor_radii):
         rel_position = np.asarray(n_pos, dtype=float) - pos
         rel_velocity = vel - np.asarray(n_vel, dtype=float)
         dist_sq = _abs_sq(rel_position)
@@ -229,13 +231,11 @@ def orca_velocities(positions, velocities, radii, pref_velocities, max_speeds,
     max_speeds = np.asarray(max_speeds, dtype=float)
     n = len(positions)
     out = np.zeros((n, 2))
+    idx = np.arange(n)  # precomputed once; masked per-agent below to drop self
     for i in range(n):
-        neighbors = [
-            (positions[j], velocities[j], float(radii[j]))
-            for j in range(n) if j != i
-        ]
+        mask = idx != i
         out[i] = orca_new_velocity(
             positions[i], velocities[i], float(radii[i]), pref_velocities[i],
-            neighbors, float(max_speeds[i]), time_horizon, time_step,
+            positions[mask], velocities[mask], radii[mask], float(max_speeds[i]), time_horizon, time_step,
         )
     return out

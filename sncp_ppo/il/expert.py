@@ -58,16 +58,14 @@ def expert_action(env, responsibility=1.0, time_horizon=3.0):
     pos = np.array([env.robot_px, env.robot_py])
     vel = np.array([env.robot_vx, env.robot_vy])
     pref = expert_pref_velocity(env)
-    neighbors = [
-        (
-            np.array([env.humans_px[i], env.humans_py[i]]),
-            np.array([env.humans_vx[i], env.humans_vy[i]]),
-            float(env.human_radius),
-        )
-        for i in range(env.num_humans)
-    ]
+
+    neighbor_positions = np.stack([env.humans_px, env.humans_py], axis=-1)[:env.num_humans]
+    neighbor_velocities = np.stack([env.humans_vx, env.humans_vy], axis=-1)[:env.num_humans]
+    neighbor_radii = np.full(env.num_humans, env.human_radius)
+
     new_vel = orca_new_velocity(
-        pos, vel, float(env.robot_radius), pref, neighbors,
+        pos, vel, float(env.robot_radius), pref,
+        neighbor_positions, neighbor_velocities, neighbor_radii,
         max_speed=float(env.robot_vpref), time_horizon=time_horizon,
         time_step=float(env.time_step), responsibility=responsibility,
     )
