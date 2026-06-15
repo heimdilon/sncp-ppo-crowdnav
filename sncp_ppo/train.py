@@ -73,6 +73,8 @@ SCENARIO_HOLDOUT_CONFIG = {
     'extreme':   (10, 0.26),
     'circle':    (10, 0.26),
     'random':    (10, 0.26),
+    'paper_standard': (5, 1.0),
+    'paper_challenging': (10, 1.0),
 }
 
 
@@ -213,7 +215,7 @@ def update_diagnostic_row(policy, agent):
 
 def make_env(num_humans, scenario, seed, comfort_coeff=6.0, max_time=50.0,
              robot_vpref=0.26, human_vpref_override=None, human_goal_noise=0.0,
-             human_motion_model='orca'):
+             human_motion_model='orca', collision_threshold=None):
     """Factory for a single CrowdSimEnv, used by SyncVectorEnv."""
     def _thunk():
         env = CrowdSimEnv(
@@ -225,6 +227,7 @@ def make_env(num_humans, scenario, seed, comfort_coeff=6.0, max_time=50.0,
             human_vpref_override=human_vpref_override,
             human_goal_noise=human_goal_noise,
             human_motion_model=human_motion_model,
+            collision_threshold=collision_threshold,
         )
         env.reset(seed=seed)
         return env
@@ -277,6 +280,7 @@ def train(args):
         human_vpref_override=args.human_vpref_override,
         human_goal_noise=args.human_goal_noise,
         human_motion_model=getattr(args, 'human_motion_model', 'orca'),
+        collision_threshold=args.collision_threshold,
     )
 
     # 2. Create SNCP policy and PPO agent
@@ -732,6 +736,7 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
     human_vpref_override = getattr(args, 'human_vpref_override', None)
     human_goal_noise = getattr(args, 'human_goal_noise', 0.0)
     human_motion_model = getattr(args, 'human_motion_model', 'orca')
+    collision_threshold = getattr(args, 'collision_threshold', None)
     fixed_scenario = getattr(args, 'fixed_scenario', None)
     bootstrap_easy_steps = getattr(args, 'bootstrap_easy_steps', 0)
 
@@ -752,6 +757,7 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
                     human_vpref_override=human_vpref_override,
                     human_goal_noise=human_goal_noise,
                     human_motion_model=human_motion_model,
+                    collision_threshold=collision_threshold,
                 )
                 for i in range(N)
             ]
@@ -780,6 +786,7 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
         human_vpref_override=human_vpref_override,
         human_goal_noise=human_goal_noise,
         human_motion_model=human_motion_model,
+        collision_threshold=collision_threshold,
     )
 
     (scenario, H, vpref), _ = select_vectorized_phase(
@@ -1030,6 +1037,9 @@ def build_parser():
     parser.add_argument('--max_time', type=float, default=50.0,
                         help='Episode time limit in seconds. v15/v16 default is '
                              '50.0; max-time candidates should pass 60.0 explicitly.')
+    parser.add_argument('--collision_threshold', type=float, default=None,
+                        help='Robot-human collision distance. Default = robot_radius '
+                             '+ human_radius (0.6). The paper uses 0.3 (Table 1).')
     parser.add_argument('--robot_vpref', type=float, default=0.26,
                         help='Robot max speed (m/s). TurtleBot3 Waffle hardware = 0.26; '
                              'the paper-reproduction run passes 1.0 to match the paper.')

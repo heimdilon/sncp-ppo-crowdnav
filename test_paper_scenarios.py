@@ -1,5 +1,6 @@
 import numpy as np
 from crowd_sim.crowd_env import CrowdSimEnv
+from sncp_ppo.train import SCENARIO_HOLDOUT_CONFIG, make_env, build_parser
 
 
 def test_collision_threshold_defaults_to_radii_sum():
@@ -48,3 +49,21 @@ def test_existing_hard_scenario_unchanged():
     env.reset(seed=0)
     radii = np.hypot(env.humans_px, env.humans_py)
     assert np.allclose(radii, 4.0, atol=1e-9), f"hard placement changed: radii={radii}"
+
+
+def test_paper_scenarios_in_holdout_config():
+    assert SCENARIO_HOLDOUT_CONFIG['paper_standard'][1] == 1.0      # parity vpref
+    assert SCENARIO_HOLDOUT_CONFIG['paper_challenging'][1] == 1.0
+
+
+def test_train_parser_has_collision_threshold():
+    args = build_parser().parse_args(['--collision_threshold', '0.3'])
+    assert args.collision_threshold == 0.3
+    assert build_parser().parse_args([]).collision_threshold is None
+
+
+def test_make_env_builds_paper_scenario_with_threshold():
+    env = make_env(num_humans=10, scenario='paper_challenging', seed=0,
+                   collision_threshold=0.3)()
+    assert env.scenario == 'paper_challenging'
+    assert env.collision_threshold == 0.3
