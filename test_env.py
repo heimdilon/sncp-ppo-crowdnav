@@ -1,5 +1,3 @@
-import sys
-import numpy as np
 from crowd_sim.crowd_env import CrowdSimEnv
 
 def test_environment():
