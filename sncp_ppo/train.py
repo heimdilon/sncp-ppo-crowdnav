@@ -1,6 +1,5 @@
 import argparse
 import csv
-import math
 import os
 import random
 import time
@@ -356,7 +355,7 @@ def train(args):
     print("\nStarting SNCP-PPO training with curriculum learning...")
     print(f"Episodes: {args.episodes} | Humans (final): {args.num_humans} | Seq len: {args.seq_len}")
     print(f"LR: {args.lr:.1e} -> {args.lr * args.lr_end_factor:.1e} over ~{total_updates} updates")
-    print(f"Curriculum: " + " | ".join(
+    print("Curriculum: " + " | ".join(
         f"{sc}<={thr} (N={n})" for thr, sc, _, n in curriculum))
     print(f"Replay ratio: {args.curriculum_replay_ratio:.0%} of update windows "
           f"sample an earlier phase (anti-forgetting)")
@@ -474,7 +473,6 @@ def train(args):
             agent.update(device)
 
         # Multi-scenario holdout evaluation
-        ran_eval = False
         is_best_checkpoint = 0
         best_reason = ''
         if episode % args.eval_freq == 0:
@@ -485,7 +483,6 @@ def train(args):
                     scenario=sc,
                     base_seed=args.seed + 10_000 + episode,
                 )
-            ran_eval = True
             holdout_eval_count += 1
 
             # Generalist metric: min success across all holdout scenarios.
@@ -800,7 +797,7 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
     print(f"Curriculum by step budget: total={args.total_steps}, phases 10/25/50/75%")
     print(f"Replay ratio: {replay_ratio:.0%} of vectorized update windows sample earlier phases")
     print(f"Holdout every {args.eval_freq_updates} updates on {args.holdout_scenarios}")
-    print(f"Note: --episodes is ignored in vectorized mode; --total_steps controls run length.")
+    print("Note: --episodes is ignored in vectorized mode; --total_steps controls run length.")
     print("-" * 90)
 
     while total_steps < args.total_steps:
@@ -1013,7 +1010,9 @@ def build_parser():
     parser.add_argument('--epochs', type=int, default=4,
                         help='PPO optimization epochs per update (standard 4-10).')
     parser.add_argument('--batch_size', type=int, default=16,
-                        help='Mini-batch size in number of BPTT subsequences.')
+                        help='Mini-batch size in BPTT subsequences. Default 16 preserves '
+                             'v22/v23 training behavior; --batch_size 64 is an opt-in throughput '
+                             'mode that improves GPU utilization but changes PPO minibatch statistics.')
     parser.add_argument('--seq_len', type=int, default=16,
                         help='Subsequence length for BPTT through the LTC cells.')
     parser.add_argument('--update_freq', type=int, default=5,
