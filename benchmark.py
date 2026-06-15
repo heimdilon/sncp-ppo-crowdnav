@@ -1,17 +1,17 @@
+"""Micro-benchmark for CrowdSimEnv._get_obs (the vectorized spatial_edges path).
+Run directly: ``python benchmark.py``."""
+
 import timeit
-import numpy as np
+
 from crowd_sim.crowd_env import CrowdSimEnv
 
-env = CrowdSimEnv(num_humans=100) # use 100 humans to show a larger effect
-env.reset()
 
-setup = """
-from __main__ import env
-"""
+def main():
+    env = CrowdSimEnv(num_humans=100)  # 100 humans to show a larger effect
+    env.reset()
+    t = timeit.timeit(env._get_obs, number=1000)
+    print(f"_get_obs x1000 (N=100): {t:.4f}s")
 
-test_code = """
-env._get_obs()
-"""
 
-# Try getting observation
-print("Baseline time:", timeit.timeit(test_code, setup=setup, number=1000))
+if __name__ == "__main__":
+    main()
