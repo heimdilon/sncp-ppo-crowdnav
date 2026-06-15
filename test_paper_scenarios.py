@@ -67,3 +67,14 @@ def test_make_env_builds_paper_scenario_with_threshold():
                    collision_threshold=0.3)()
     assert env.scenario == 'paper_challenging'
     assert env.collision_threshold == 0.3
+
+
+def test_train_parser_accepts_paper_scenarios():
+    # Regression: argparse choices were hardcoded to the legacy scenario list,
+    # rejecting --fixed_scenario paper_challenging even though env/config supported it.
+    args = build_parser().parse_args([
+        '--fixed_scenario', 'paper_challenging',
+        '--holdout_scenarios', 'paper_standard', 'paper_challenging',
+    ])
+    assert args.fixed_scenario == 'paper_challenging'
+    assert args.holdout_scenarios == ['paper_standard', 'paper_challenging']

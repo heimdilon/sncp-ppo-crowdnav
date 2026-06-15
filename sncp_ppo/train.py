@@ -1057,7 +1057,7 @@ def build_parser():
                              'CrowdSim regime); sfm restores the v18 Social-Force crowd '
                              'for ablation probes.')
     parser.add_argument('--fixed_scenario', type=str, default=None,
-                        choices=['easy', 'easy_plus', 'medium', 'hard', 'extreme', 'circle', 'random'],
+                        choices=list(SCENARIO_HOLDOUT_CONFIG),
                         help='Probe mode: pin EVERY vectorized update window to this single '
                              'phase (scenario, --num_humans, canonical speed), bypassing the '
                              '10/25/50/75%% curriculum and replay. For short fixed-density '
@@ -1100,7 +1100,7 @@ def build_parser():
                              '(v7 "50%%" holdout was really 38%% on 100-ep eval).')
     parser.add_argument('--holdout_scenarios', type=str, nargs='+',
                         default=['easy', 'hard'],
-                        choices=['easy', 'easy_plus', 'medium', 'hard', 'extreme', 'circle', 'random'],
+                        choices=list(SCENARIO_HOLDOUT_CONFIG),
                         help='Scenarios for periodic holdout eval. Best checkpoint is saved '
                              'when min(success across these) improves — rewards generalists, '
                              'not "100%% on one, 0%% on the other" specialists.')
