@@ -188,10 +188,15 @@ def test_curriculum_ramps_to_final_humans_with_parity_speed():
 
 
 def test_holdout_config_is_parity_and_has_highdensity():
-    """v15: every holdout speed is <= 0.26, and a high-density (N>=10) holdout
-    scenario exists to monitor the real target during training."""
+    """v15: every legacy holdout speed is <= 0.26 (parity with the 0.26 m/s robot),
+    and a high-density (N>=10) holdout scenario exists to monitor the real target.
+    The paper_* scenarios are an intentional exception: they run at 1.0 (parity
+    with the paper's 1.0 m/s robot)."""
     for name, (n, v) in SCENARIO_HOLDOUT_CONFIG.items():
-        assert v <= 0.26 + 1e-9, f"{name} holdout speed {v} > parity"
+        if name.startswith('paper_'):
+            assert v == 1.0, f"{name} paper holdout speed {v} != 1.0 parity"
+        else:
+            assert v <= 0.26 + 1e-9, f"{name} holdout speed {v} > parity"
     assert SCENARIO_HOLDOUT_CONFIG['circle'][0] >= 10, "no high-density holdout"
 
 
