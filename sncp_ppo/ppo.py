@@ -590,19 +590,33 @@ class PPOAgent:
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
         windows = []  # (n, start, length) -- never spans an env or episode boundary
-        for n in range(N):
-            seg_start = 0
-            for t in range(T):
-                is_boundary = data['dones'][n, t] > 0.5
-                if is_boundary or t == T - 1:
-                    seg_end = t + 1
-                    s = seg_start
-                    while s < seg_end:
-                        e = min(s + self.seq_len, seg_end)
-                        if e - s >= 4:
-                            windows.append((n, s, e - s))
-                        s = e
-                    seg_start = seg_end
+
+        boundaries = data['dones'] > 0.5
+        boundaries[:, -1] = True
+
+        # nonzero() returns indices in row-major (C) order (sorted by env, then
+        # timestep), which is what the per-env segment walk below requires. Sort
+        # the (env, timestep) pairs explicitly so iteration is deterministic
+        # regardless of backend (CPU/CUDA) or torch version.
+        envs, timesteps = boundaries.nonzero(as_tuple=True)
+        boundary_pairs = sorted(zip(envs.tolist(), timesteps.tolist()))
+
+        current_env = -1
+        seg_start = 0
+
+        for n, t in boundary_pairs:
+            if n != current_env:
+                seg_start = 0
+                current_env = n
+
+            seg_end = t + 1
+            s = seg_start
+            while s < seg_end:
+                e = min(s + self.seq_len, seg_end)
+                if e - s >= 4:
+                    windows.append((n, s, e - s))
+                s = e
+            seg_start = seg_end
         if not windows:
             return
 
