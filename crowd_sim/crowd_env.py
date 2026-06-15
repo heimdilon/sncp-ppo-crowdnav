@@ -88,8 +88,9 @@ class CrowdSimEnv(gym.Env):
         # ALL observations are in the robot's LOCAL coordinate frame:
         #   - Robot faces along +x axis in local frame
         #   - robot_node: [dg_local_x, dg_local_y, v_linear, dist_to_goal, vpref, radius, w_angular] (7,)
-        #   - spatial_edges: [dx_local, dy_local, rel_vx_local, rel_vy_local]
-        #     for each human (num_humans, 4) — position AND relative velocity
+        #   - spatial_edges: [dx_local, dy_local, rel_vx_local, rel_vy_local,
+        #     goal_dir_x, goal_dir_y] for each human (num_humans, 6) — position,
+        #     relative velocity AND goal-direction intent
         #   - temporal_edges: [v_linear, w_angular] in local frame (2,)
         self.observation_space = spaces.Dict({
             'robot_node': spaces.Box(low=-np.inf, high=np.inf, shape=(7,), dtype=np.float32),
@@ -279,24 +280,25 @@ class CrowdSimEnv(gym.Env):
         #   [dx_local, dy_local, rel_vx_local, rel_vy_local, goal_dir_x, goal_dir_y]
         # Goal direction gives the policy each pedestrian's INTENT (where it is
         # heading) so it can anticipate trajectories instead of reacting late.
-        spatial_edges = np.zeros((self.num_humans, 6), dtype=np.float32)
-        for i in range(self.num_humans):
-            dx_global = self.humans_px[i] - self.robot_px
-            dy_global = self.humans_py[i] - self.robot_py
-            dvx_global = self.humans_vx[i] - self.robot_vx
-            dvy_global = self.humans_vy[i] - self.robot_vy
-            # Goal-direction unit vector (global), scale-free intent signal.
-            gvx = self.humans_gx[i] - self.humans_px[i]
-            gvy = self.humans_gy[i] - self.humans_py[i]
-            gnorm = np.hypot(gvx, gvy) + 1e-9
-            gdx, gdy = gvx / gnorm, gvy / gnorm
-            # Rotate position, relative velocity, and goal direction to local frame
-            spatial_edges[i, 0] = dx_global * cos_t + dy_global * sin_t
-            spatial_edges[i, 1] = -dx_global * sin_t + dy_global * cos_t
-            spatial_edges[i, 2] = dvx_global * cos_t + dvy_global * sin_t
-            spatial_edges[i, 3] = -dvx_global * sin_t + dvy_global * cos_t
-            spatial_edges[i, 4] = gdx * cos_t + gdy * sin_t
-            spatial_edges[i, 5] = -gdx * sin_t + gdy * cos_t
+        # Vectorized over all pedestrians at once (was a per-human Python loop).
+        dx_global = self.humans_px - self.robot_px
+        dy_global = self.humans_py - self.robot_py
+        dvx_global = self.humans_vx - self.robot_vx
+        dvy_global = self.humans_vy - self.robot_vy
+        # Goal-direction unit vector (global), scale-free intent signal.
+        gvx = self.humans_gx - self.humans_px
+        gvy = self.humans_gy - self.humans_py
+        gnorm = np.hypot(gvx, gvy) + 1e-9
+        gdx = gvx / gnorm
+        gdy = gvy / gnorm
+        # Rotate position, relative velocity, and goal direction to local frame
+        spatial_edges = np.empty((self.num_humans, 6), dtype=np.float32)
+        spatial_edges[:, 0] = dx_global * cos_t + dy_global * sin_t
+        spatial_edges[:, 1] = -dx_global * sin_t + dy_global * cos_t
+        spatial_edges[:, 2] = dvx_global * cos_t + dvy_global * sin_t
+        spatial_edges[:, 3] = -dvx_global * sin_t + dvy_global * cos_t
+        spatial_edges[:, 4] = gdx * cos_t + gdy * sin_t
+        spatial_edges[:, 5] = -gdx * sin_t + gdy * cos_t
             
         # Temporal edges: robot velocity in local frame = [v_linear, w_angular]
         temporal_edges = np.array([v_linear, w_angular], dtype=np.float32)
