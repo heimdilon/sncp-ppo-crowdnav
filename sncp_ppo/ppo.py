@@ -442,9 +442,8 @@ class PPOAgent:
                 b_lengths = [seqs['seq_lengths'][idx.item()] for idx in batch_idx]
                 
                 # Create valid mask [B, S]
-                valid_mask = torch.zeros(B, S, device=device)
-                for i, L in enumerate(b_lengths):
-                    valid_mask[i, :L] = 1.0
+                b_len_t = torch.tensor(b_lengths, device=device)
+                valid_mask = (torch.arange(S, device=device)[None, :] < b_len_t[:, None]).float()
                 
                 # Unroll through the sequence with BPTT
                 all_mu = []
@@ -650,9 +649,8 @@ class PPOAgent:
                 b_act, b_olp = act[bi], olp[bi]
                 b_adv, b_ret, b_ov = adv[bi], ret[bi], ov[bi]
                 b_len = [lengths[j] for j in bi.tolist()]
-                valid = torch.zeros(B, S, device=device)
-                for k, L in enumerate(b_len):
-                    valid[k, :L] = 1.0
+                b_len_t = torch.tensor(b_len, device=device)
+                valid = (torch.arange(S, device=device)[None, :] < b_len_t[:, None]).float()
 
                 h_temp = h_te[bi].clone()
                 h_node = h_no[bi].clone()
