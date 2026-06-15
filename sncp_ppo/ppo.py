@@ -413,7 +413,6 @@ class PPOAgent:
         epoch_entropy = 0.0
         epoch_clip_frac = 0.0
         epochs_ran = 0
-        kl_break = False
 
         # 3. PPO Update Epochs
         for epoch in range(self.epochs):
@@ -547,7 +546,6 @@ class PPOAgent:
             # a single update. Threshold 1.5 × target_kl matches the OpenAI
             # spinning-up / CleanRL convention.
             if self.target_kl is not None and epoch_kl > 1.5 * self.target_kl:
-                kl_break = True
                 break
 
         # Persist diagnostics for the training loop to log.
@@ -677,8 +675,11 @@ class PPOAgent:
                                 'temporal_edges': b_te[:, t]}
                     step_h = {'temporal_edge': h_temp, 'spatial_edge': h_spat, 'node': h_node}
                     mu, std, val, nh = self.policy(step_obs, step_h)
-                    mus.append(mu); stds.append(std); vals.append(val)
-                    h_temp = nh['temporal_edge']; h_node = nh['node']
+                    mus.append(mu)
+                    stds.append(std)
+                    vals.append(val)
+                    h_temp = nh['temporal_edge']
+                    h_node = nh['node']
                     hs = nh['spatial_edge']
                     h_spat = hs.reshape(B * num_humans, -1) if hs.dim() == 3 else hs
 
@@ -699,7 +700,9 @@ class PPOAgent:
                     approx_kl = (((torch.exp(lr_) - 1) - lr_) * valid).sum() / valid.sum()
                     ent_mean = (entropy * valid).sum() / valid.sum()
                     clip_frac = (((ratio - 1).abs() > self.clip_eps).float() * valid).sum() / valid.sum()
-                    batch_kls.append(approx_kl.item()); batch_ents.append(ent_mean.item()); batch_clips.append(clip_frac.item())
+                    batch_kls.append(approx_kl.item())
+                    batch_ents.append(ent_mean.item())
+                    batch_clips.append(clip_frac.item())
 
                 v_clipped = b_ov + torch.clamp(all_val - b_ov, -self.clip_eps, self.clip_eps)
                 vl_u = (all_val - b_ret).pow(2)

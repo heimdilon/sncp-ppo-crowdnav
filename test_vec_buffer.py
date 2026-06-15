@@ -1,5 +1,5 @@
 import torch
-from sncp_ppo.vec_buffer import VectorizedRolloutBuffer, reset_hidden_where_done
+from sncp_ppo.vec_buffer import VectorizedRolloutBuffer
 
 
 def _hidden(N, H, units=32):

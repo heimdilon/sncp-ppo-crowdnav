@@ -1,6 +1,6 @@
 import json
 
-from sncp_ppo.v18_gate import verify_v18_decision_ready, write_v18_gate_report
+from sncp_ppo.v18_gate import verify_v18_decision_ready
 
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 32

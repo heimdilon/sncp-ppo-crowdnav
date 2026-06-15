@@ -9,7 +9,7 @@ import matplotlib.patches as patches
 import matplotlib.animation as animation
 
 from crowd_sim.crowd_env import CrowdSimEnv
-from sncp_ppo.models import SNCPPolicy, build_policy_for_checkpoint
+from sncp_ppo.models import build_policy_for_checkpoint
 from sncp_ppo.ppo import PPOAgent
 
 
@@ -25,9 +25,9 @@ def run_and_animate_scenario(scenario_name, model_path='checkpoints/sncp_ppo.pt'
                              num_humans=5, seed=42):
     set_seed(seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"\n==================================================")
+    print("\n==================================================")
     print(f"Processing Scenario: {scenario_name.upper()}")
-    print(f"==================================================")
+    print("==================================================")
     
     env = CrowdSimEnv(num_humans=num_humans, scenario=scenario_name)
     print(f"Scenario: {scenario_name} | Pedestrian count: {env.num_humans} | Config: {env.scenario}")
@@ -121,7 +121,7 @@ def run_and_animate_scenario(scenario_name, model_path='checkpoints/sncp_ppo.pt'
     
     colors = ['blue', 'cyan', 'magenta', 'orange', 'purple', 'brown', 'pink']
     for i in range(env.num_humans):
-        h_line, = ax.plot([], [], linestyle='--', color=colors[i % len(colors)], linewidth=1.5, alpha=0.7, label=f'Pedestrian Path' if i == 0 else "")
+        h_line, = ax.plot([], [], linestyle='--', color=colors[i % len(colors)], linewidth=1.5, alpha=0.7, label='Pedestrian Path' if i == 0 else "")
         h_body = patches.Circle((0, 0), env.human_radius, color=colors[i % len(colors)], fill=True, alpha=0.6, label='Pedestrians' if i == 0 else "")
         c_ellipse = patches.Ellipse(
             (0, 0), 

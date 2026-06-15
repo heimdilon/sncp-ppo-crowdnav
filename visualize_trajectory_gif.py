@@ -9,7 +9,7 @@ import matplotlib.patches as patches
 import matplotlib.animation as animation
 
 from crowd_sim.crowd_env import CrowdSimEnv
-from sncp_ppo.models import SNCPPolicy, build_policy_for_checkpoint
+from sncp_ppo.models import build_policy_for_checkpoint
 from sncp_ppo.ppo import PPOAgent
 
 
