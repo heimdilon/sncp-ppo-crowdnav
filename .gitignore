@@ -54,3 +54,9 @@ colabout/
 .pytest_tmp/
 data/
 checkpoints/probe_*.pt
+
+# transient dev/smoke/episode checkpoints (keep only versioned milestones like sncp_ppo_v22.pt)
+checkpoints/*smoke*.pt
+checkpoints/*_ep*.pt
+checkpoints/sncp_ppo_default_test*.pt
+checkpoints/sncp_ppo_final.pt
