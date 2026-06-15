@@ -172,6 +172,16 @@ class CrowdSimEnv(gym.Env):
         elif self.scenario == 'extreme':
             self.human_vpref = 0.26
             scenario_type = 'random'
+        elif self.scenario == 'paper_standard':
+            self.human_vpref = 1.0  # parity with the 1.0 m/s robot
+            scenario_type = 'paper'
+            self._paper_arena = self.arena_size if self.arena_size is not None else 10.0
+            self._paper_robot_y = 4.0
+        elif self.scenario == 'paper_challenging':
+            self.human_vpref = 1.0
+            scenario_type = 'paper'
+            self._paper_arena = self.arena_size if self.arena_size is not None else 15.0
+            self._paper_robot_y = 6.0
         else:
             self.human_vpref = 0.26
             scenario_type = self.scenario
@@ -234,6 +244,39 @@ class CrowdSimEnv(gym.Env):
                     dx = self.humans_gx[i] - self.humans_px[i]
                     dy = self.humans_gy[i] - self.humans_py[i]
                     self.humans_theta[i] = np.arctan2(dy, dx)
+        elif scenario_type == 'paper':
+            # Paper-faithful square-crossing: robot fixed bottom -> top, humans
+            # scattered uniformly across the (large) arena. NOT antipodal on a
+            # circle, so paths do NOT all funnel through the center.
+            half = self._paper_arena / 2.0
+            self.robot_px = 0.0
+            self.robot_py = -self._paper_robot_y
+            self.robot_gx = 0.0
+            self.robot_gy = self._paper_robot_y
+            self.robot_theta = np.pi / 2.0  # facing the goal (north)
+            min_sep = self.robot_radius + self.human_radius + 0.5
+            gnoise = 1.0
+            for i in range(self.num_humans):
+                px, py = 0.0, 0.0
+                for _ in range(200):
+                    px = self.np_random.uniform(-half, half)
+                    py = self.np_random.uniform(-half, half)
+                    d_start = np.hypot(px - self.robot_px, py - self.robot_py)
+                    d_goal = np.hypot(px - self.robot_gx, py - self.robot_gy)
+                    if d_start < min_sep or d_goal < min_sep:
+                        continue
+                    if i == 0 or np.min(np.hypot(
+                            px - self.humans_px[:i], py - self.humans_py[:i])) > min_sep:
+                        break
+                self.humans_px[i] = px
+                self.humans_py[i] = py
+                nx = self.np_random.uniform(-gnoise, gnoise)
+                ny = self.np_random.uniform(-gnoise, gnoise)
+                self.humans_gx[i] = np.clip(-px + nx, -half, half)
+                self.humans_gy[i] = np.clip(-py + ny, -half, half)
+                dx = self.humans_gx[i] - self.humans_px[i]
+                dy = self.humans_gy[i] - self.humans_py[i]
+                self.humans_theta[i] = np.arctan2(dy, dx)
         else: # random
             for i in range(self.num_humans):
                 while True:
