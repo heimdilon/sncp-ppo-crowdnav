@@ -231,8 +231,9 @@ def orca_velocities(positions, velocities, radii, pref_velocities, max_speeds,
     max_speeds = np.asarray(max_speeds, dtype=float)
     n = len(positions)
     out = np.zeros((n, 2))
+    idx = np.arange(n)  # precomputed once; masked per-agent below to drop self
     for i in range(n):
-        mask = np.arange(n) != i
+        mask = idx != i
         out[i] = orca_new_velocity(
             positions[i], velocities[i], float(radii[i]), pref_velocities[i],
             positions[mask], velocities[mask], radii[mask], float(max_speeds[i]), time_horizon, time_step,

@@ -1,6 +1,6 @@
 import numpy as np
 import time
-from crowd_sim.orca import orca_velocities, orca_new_velocity
+from crowd_sim.orca import orca_velocities
 
 def benchmark_velocities(n, iters):
     np.random.seed(42)
