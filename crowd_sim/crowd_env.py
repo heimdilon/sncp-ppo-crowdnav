@@ -624,7 +624,10 @@ class CrowdSimEnv(gym.Env):
 
         speeds = getattr(self, 'humans_vpref', None)
         if speeds is not None:
-            max_speeds = np.array(speeds, copy=False, dtype=float)
+            # asarray (not array(copy=False)) so a list/non-float humans_vpref is
+            # converted instead of raising under NumPy 2.x, matching the old
+            # per-element float(_human_vpref(i)) behaviour.
+            max_speeds = np.asarray(speeds, dtype=float)
         else:
             max_speeds = np.full(N, self.human_vpref, dtype=float)
 
