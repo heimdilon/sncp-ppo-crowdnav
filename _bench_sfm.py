@@ -1,6 +1,7 @@
 """Micro-benchmark: original nested-loop SFM repulsion vs the vectorized
-CrowdSimEnv._human_repulsion_forces. Asserts bit-equivalence (atol 1e-12) before
-timing, then reports us/call and speedup across N. Scratch tool (untracked)."""
+CrowdSimEnv._human_repulsion_forces. Checks numerical equivalence (atol 1e-12)
+before timing, then reports us/call and speedup across N. Run directly:
+``python _bench_sfm.py``."""
 
 import time
 
@@ -44,8 +45,8 @@ def bench(N, reps, seed=0):
 
     lfx, lfy = loop_repulsion(px, py, r)
     vfx, vfy = env._human_repulsion_forces()
-    assert np.allclose(lfx, vfx, rtol=0.0, atol=1e-12), "x mismatch"
-    assert np.allclose(lfy, vfy, rtol=0.0, atol=1e-12), "y mismatch"
+    np.testing.assert_allclose(lfx, vfx, rtol=0.0, atol=1e-12, err_msg="x mismatch")
+    np.testing.assert_allclose(lfy, vfy, rtol=0.0, atol=1e-12, err_msg="y mismatch")
 
     for _ in range(5):  # warmup
         loop_repulsion(px, py, r)

@@ -61,6 +61,12 @@ class CrowdSimEnv(gym.Env):
         # Human physical parameters
         self.human_radius = 0.3
         self.human_vpref = 0.5  # typical human walking speed (m/s)
+
+        # Social Force Model repulsion constants — single source of truth shared
+        # by human-human repulsion (_human_repulsion_forces) and human-robot
+        # repulsion (_move_humans), so the two can never silently diverge.
+        self.sfm_repulsion_A = 2.0  # repulsive force magnitude
+        self.sfm_repulsion_B = 0.3  # repulsive force range
         
         # Safe distance threshold
         self.d_col = 0.3  # collision distance = robot_radius + human_radius
@@ -495,8 +501,8 @@ class CrowdSimEnv(gym.Env):
 
         N = self.num_humans
         tau = 0.5  # relaxation time
-        A = 2.0    # repulsive force magnitude
-        B = 0.3    # repulsive force range
+        A = self.sfm_repulsion_A  # repulsive force magnitude
+        B = self.sfm_repulsion_B  # repulsive force range
         
         new_px = np.zeros(N)
         new_py = np.zeros(N)
@@ -585,15 +591,18 @@ class CrowdSimEnv(gym.Env):
         Replaces the original nested O(N^2) Python loop (one np.hypot + np.exp per
         ordered pair) with a single pass of numpy array ops over the N x N pair
         matrix. The per-element operation order matches the loop exactly
-        (``force * (d / dist)``) and the row sum is sequential, so the result is
-        bit-identical: the i == j diagonal has zero displacement and contributes
-        exactly 0.0, mirroring the loop's ``if j != i`` skip.
+        (``force * (d / dist)``) and the row sum keeps the diagonal (the i == j
+        term has zero displacement and contributes exactly 0.0, mirroring the
+        loop's ``if j != i`` skip), so the output is numerically equivalent to a
+        very tight tolerance (the tests pin atol=1e-12). It is not a guaranteed
+        bitwise identity, because numpy's reduction order is not contractual
+        across versions/platforms.
 
         Returns ``(f_rep_x, f_rep_y)``, each a length-N array of the net repulsion
         force on every pedestrian from all the others.
         """
-        A = 2.0  # repulsive force magnitude
-        B = 0.3  # repulsive force range
+        A = self.sfm_repulsion_A  # repulsive force magnitude
+        B = self.sfm_repulsion_B  # repulsive force range
         px = self.humans_px
         py = self.humans_py
 

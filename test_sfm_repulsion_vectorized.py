@@ -7,10 +7,11 @@ numpy implementation. These tests pin the EXACT current numerics so the swap is
 provably behaviour-preserving:
 
   * a frozen reference re-implementation of the original inner loop, and a frozen
-    reference of the WHOLE per-agent SFM step, both byte-for-byte from the code
+    reference of the WHOLE per-agent SFM step, both copied verbatim from the code
     as it was, drive the comparison;
-  * the vectorized output must match the reference to ~floating-point exactness
-    (atol 1e-12), not merely "close".
+  * the vectorized output must match the reference to a very tight tolerance
+    (atol 1e-12) — numerical equivalence, not a guaranteed bitwise identity
+    (numpy's reduction order is not contractual across versions/platforms).
 """
 
 import numpy as np
@@ -22,9 +23,9 @@ B_REP = 0.3  # repulsive force range        (matches _move_humans)
 
 
 def _reference_human_repulsion(px, py, radius, A=A_REP, B=B_REP):
-    """Frozen, literal re-implementation of the original inner N^2 loop
-    (crowd_env.py lines 531-544). Operation order is preserved exactly so the
-    result is bit-comparable with the vectorized version."""
+    """Frozen, literal re-implementation of the original inner N^2 loop.
+    Operation order is preserved exactly so the result matches the vectorized
+    version to a very tight tolerance."""
     N = len(px)
     fx = np.zeros(N)
     fy = np.zeros(N)
@@ -185,8 +186,8 @@ def test_human_repulsion_forces_coincident_humans_no_nan():
 # --------------------------------------------------------------------------- #
 
 def test_move_humans_sfm_step_matches_reference():
-    """End-to-end: one full SFM step (with robot dodging on) is byte-identical to
-    the frozen reference re-implementation of the original method."""
+    """End-to-end: one full SFM step (with robot dodging on) matches the frozen
+    reference re-implementation of the original method to atol=1e-12."""
     env = CrowdSimEnv(num_humans=6, scenario='hard',
                       human_motion_model='sfm', human_dodge_robot=True)
     env.reset(seed=5)
