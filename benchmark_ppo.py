@@ -5,9 +5,6 @@ N = 128
 T = 2000
 seq_len = 16
 
-dones = torch.zeros(N, T)
-# Add some random boundaries
-dones[torch.rand(N, T) < 0.05] = 1.0
 
 def func1(dones, seq_len):
     windows = []
@@ -59,14 +56,19 @@ def func4(dones, seq_len):
 
     return windows
 
-start1 = time.time()
-w1 = func1(dones, seq_len)
-time1 = time.time() - start1
+if __name__ == "__main__":
+    dones = torch.zeros(N, T)
+    # Add some random boundaries
+    dones[torch.rand(N, T) < 0.05] = 1.0
 
-start4 = time.time()
-w4 = func4(dones, seq_len)
-time4 = time.time() - start4
+    start1 = time.time()
+    w1 = func1(dones, seq_len)
+    time1 = time.time() - start1
 
-print(f"func1: {time1:.4f}s, len: {len(w1)}")
-print(f"func4: {time4:.4f}s, len: {len(w4)}")
-print(f"Match: {w1 == w4}")
+    start4 = time.time()
+    w4 = func4(dones, seq_len)
+    time4 = time.time() - start4
+
+    print(f"func1: {time1:.4f}s, len: {len(w1)}")
+    print(f"func4: {time4:.4f}s, len: {len(w4)}")
+    print(f"Match: {w1 == w4}")

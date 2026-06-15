@@ -595,15 +595,17 @@ class PPOAgent:
         boundaries = data['dones'] > 0.5
         boundaries[:, -1] = True
 
+        # nonzero() returns indices in row-major (C) order (sorted by env, then
+        # timestep), which is what the per-env segment walk below requires. Sort
+        # the (env, timestep) pairs explicitly so iteration is deterministic
+        # regardless of backend (CPU/CUDA) or torch version.
         envs, timesteps = boundaries.nonzero(as_tuple=True)
-
-        envs = envs.tolist()
-        timesteps = timesteps.tolist()
+        boundary_pairs = sorted(zip(envs.tolist(), timesteps.tolist()))
 
         current_env = -1
         seg_start = 0
 
-        for n, t in zip(envs, timesteps):
+        for n, t in boundary_pairs:
             if n != current_env:
                 seg_start = 0
                 current_env = n
