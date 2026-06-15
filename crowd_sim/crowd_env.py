@@ -308,10 +308,13 @@ class CrowdSimEnv(gym.Env):
         I_sp = 0.0
         N = self.num_humans
         
-        # Distances between all humans
-        dx = self.humans_px[:, np.newaxis] - self.humans_px
-        dy = self.humans_py[:, np.newaxis] - self.humans_py
-        d_humans = np.hypot(dx, dy)
+        # Distances between all humans (vectorized NxN). The diagonal is set to
+        # inf so the self term contributes 1/(inf+1e-5)=0 to the omega weight sum
+        # below, exactly matching the original loop's `j != i` skip. Named *_mat
+        # to avoid clashing with the robot-relative dx/dy scalars in the loop.
+        dx_mat = self.humans_px[:, np.newaxis] - self.humans_px
+        dy_mat = self.humans_py[:, np.newaxis] - self.humans_py
+        d_humans = np.hypot(dx_mat, dy_mat)
         np.fill_diagonal(d_humans, np.inf)
         
         for i in range(N):
