@@ -22,6 +22,9 @@ class CrowdSimEnv(gym.Env):
         robot_vpref=0.26,
         human_vpref_override=None,
         human_goal_noise=0.0,
+        collision_threshold=None,
+        arena_size=None,
+        sense_range=None,
     ):
         super(CrowdSimEnv, self).__init__()
 
@@ -61,6 +64,19 @@ class CrowdSimEnv(gym.Env):
         # Human physical parameters
         self.human_radius = 0.3
         self.human_vpref = 0.5  # typical human walking speed (m/s)
+
+        # Collision threshold: distance below which robot-human contact counts as
+        # a collision. Default = robot_radius + human_radius (0.6), preserving
+        # current behaviour. The paper uses d_col = 0.3 (Table 1).
+        self.collision_threshold = (
+            collision_threshold if collision_threshold is not None
+            else self.robot_radius + self.human_radius
+        )
+        # Paper scenarios scale the arena and sense range with density; None keeps
+        # the legacy circle-crossing layout. sense_range is recorded for paper
+        # presets (obs masking by range is intentionally out of scope here).
+        self.arena_size = arena_size
+        self.sense_range = sense_range
 
         # Social Force Model repulsion constants — single source of truth shared
         # by human-human repulsion (_human_repulsion_forces) and human-robot
@@ -413,7 +429,7 @@ class CrowdSimEnv(gym.Env):
         d_min = np.min(distances) if len(distances) > 0 else np.inf
         
         # Check terminal conditions
-        collision = d_min < (self.robot_radius + self.human_radius)
+        collision = d_min < self.collision_threshold
         
         dist_to_goal = np.hypot(self.robot_px - self.robot_gx, self.robot_py - self.robot_gy)
         reached_goal = dist_to_goal < self.robot_radius
