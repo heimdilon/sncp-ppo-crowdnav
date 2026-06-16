@@ -17,9 +17,10 @@ def test_collision_threshold_is_configurable():
 def test_paper_standard_layout():
     env = CrowdSimEnv(num_humans=5, scenario='paper_standard', human_motion_model='orca')
     env.reset(seed=0)
-    # robot fixed bottom -> top
-    assert (env.robot_px, env.robot_py) == (0.0, -4.0)
-    assert (env.robot_gx, env.robot_gy) == (0.0, 4.0)
+    # robot fixed bottom -> top, 10 m crossing (v25: was +/-4)
+    assert (env.robot_px, env.robot_py) == (0.0, -5.0)
+    assert (env.robot_gx, env.robot_gy) == (0.0, 5.0)
+    assert env.sense_range == 4.0
     half = 5.0  # 10x10 arena
     assert np.all(np.abs(env.humans_px) <= half) and np.all(np.abs(env.humans_py) <= half)
     # scattered, NOT all on the radius-4 circle (the antipodal regime)
@@ -35,11 +36,21 @@ def test_paper_challenging_scales_arena():
     for n in (10, 15, 20):
         env = CrowdSimEnv(num_humans=n, scenario='paper_challenging', human_motion_model='orca')
         env.reset(seed=1)
-        assert (env.robot_px, env.robot_py) == (0.0, -6.0)
-        assert (env.robot_gx, env.robot_gy) == (0.0, 6.0)
+        assert (env.robot_px, env.robot_py) == (0.0, -5.0)   # 10 m crossing (v25: was +/-6)
+        assert (env.robot_gx, env.robot_gy) == (0.0, 5.0)
+        assert env.sense_range == 6.0
         half = 7.5  # 15x15 arena
         assert np.all(np.abs(env.humans_px) <= half) and np.all(np.abs(env.humans_py) <= half)
         assert env.humans_px.shape == (n,)
+
+
+def test_paper_regime_easy_keeps_circle_geometry():
+    # paper_regime forces the BUDGET but must NOT impose the paper crossing on 'easy'.
+    env = CrowdSimEnv(num_humans=5, scenario='easy', human_motion_model='orca',
+                      paper_regime=True)
+    env.reset(seed=0)
+    radii = np.hypot(env.humans_px, env.humans_py)
+    assert np.allclose(radii, 4.0, atol=1e-9), f"easy geometry changed: radii={radii}"
 
 
 def test_existing_hard_scenario_unchanged():

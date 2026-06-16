@@ -193,16 +193,14 @@ class CrowdSimEnv(gym.Env):
         elif self.scenario == 'extreme':
             self.human_vpref = 0.26
             scenario_type = 'random'
-        elif self.scenario == 'paper_standard':
+        elif self.scenario in PAPER_SCENARIO_CONFIG:
+            cfg = PAPER_SCENARIO_CONFIG[self.scenario]
             self.human_vpref = 1.0  # parity with the 1.0 m/s robot
             scenario_type = 'paper'
-            self._paper_arena = self.arena_size if self.arena_size is not None else 10.0
-            self._paper_robot_y = 4.0
-        elif self.scenario == 'paper_challenging':
-            self.human_vpref = 1.0
-            scenario_type = 'paper'
-            self._paper_arena = self.arena_size if self.arena_size is not None else 15.0
-            self._paper_robot_y = 6.0
+            self._paper_arena = self.arena_size if self.arena_size is not None else cfg['arena']
+            self._paper_robot_y = cfg['robot_y']  # 5.0 -> 10 m crossing (paper nav-time ~10.4-11.8s)
+            if self.sense_range is None:
+                self.sense_range = cfg['sense_range']
         else:
             self.human_vpref = 0.26
             scenario_type = self.scenario
