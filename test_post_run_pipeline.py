@@ -263,22 +263,22 @@ def test_versioned_post_eval_cli_derives_paths_from_version(tmp_path, monkeypatc
     assert "Overall status: pass" in capsys.readouterr().out
 
 
-def test_notebook_is_v25_paper_faithful():
-    # v25 replaces the v23 IL-warmstart and v24 cells. The paper budget
-    # (12.5s/comfort-2/d_col-0.3) is now DERIVED by the env from --fixed_scenario, so the
-    # training cell must NOT pass it on the CLI, and the eval cell must NOT force --max_time
-    # (the v24 failure: eval forced 15s while training silently ran the 50s env default).
+def test_notebook_is_v26_paper_faithful():
+    # v26: the per-scenario paper budget (challenging 50s, standard 12.5s) + 8m crossing +
+    # normalized comfort are all DERIVED by the env from --fixed_scenario, so the training
+    # cell must NOT pass any budget on the CLI, and the eval cell must NOT force --max_time
+    # (the v24 failure: eval forced a budget that mismatched training).
     code = _colab_code_sources()
     train_cells = [s for s in code if "sncp_ppo.train" in s and "--fixed_scenario" in s]
     eval_cells = [s for s in code if "run_post_eval.py" in s]
     assert len(train_cells) == 1 and len(eval_cells) == 1
     train, ev = train_cells[0], eval_cells[0]
-    # Training: paper scenario + v25 save path.
+    # Training: paper scenario + v26 save path.
     assert "paper_challenging" in train
-    assert "checkpoints/sncp_ppo_v25.pt" in train
-    # Eval: v25, paper baseline beeline 40 (10 m crossing at 1.0 m/s), no forced budget.
-    assert "'--version', '25'" in ev
-    assert "'--baseline_nav_steps', '40'" in ev
+    assert "checkpoints/sncp_ppo_v26.pt" in train
+    # Eval: v26, paper baseline beeline 32 (8 m crossing at 1.0 m/s), no forced budget.
+    assert "'--version', '26'" in ev
+    assert "'--baseline_nav_steps', '32'" in ev
     assert "'--max_time'" not in ev
 
 

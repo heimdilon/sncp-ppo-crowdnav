@@ -8,14 +8,17 @@ from crowd_sim.orca import orca_velocities
 
 
 # Paper-faithful physics for the reproduction scenarios (Ao et al. 2026, Table 1 + S5.1).
-# robot_y = start (0,-robot_y) -> goal (0,+robot_y); 2*robot_y = 10 m crossing.
-# Single source of truth so train + eval cannot silently disagree (the v24 failure
-# was forgetting --max_time on the CLI, training at 50 s instead of 12.5 s).
+# robot_y = start (0,-robot_y) -> goal (0,+robot_y); 2*robot_y = 8 m crossing (paper S5.3.2
+# states "(0,-4) -> (0,4)"). max_time is PER-SCENARIO: Table 1's 12.5 s is the STANDARD
+# limit, while Table 3's challenging Nav-Times (SNCP-PPO 15.92 s, Pred-AttnGraph 28.55 s)
+# require a far larger challenging budget -> 50 s (removes time-starvation at every density;
+# Nav-Time is reported so the loose budget is transparent). Single source of truth so
+# train + eval cannot silently disagree (the v24/v25 failure was a wrong CLI budget).
 PAPER_SCENARIO_CONFIG = {
     "paper_standard":    {"arena": 10.0, "sense_range": 4.0, "collision_threshold": 0.3,
-                          "robot_y": 5.0, "max_time": 12.5, "comfort_coeff": 2.0},
+                          "robot_y": 4.0, "max_time": 12.5, "comfort_coeff": 2.0},
     "paper_challenging": {"arena": 15.0, "sense_range": 6.0, "collision_threshold": 0.3,
-                          "robot_y": 5.0, "max_time": 12.5, "comfort_coeff": 2.0},
+                          "robot_y": 4.0, "max_time": 50.0, "comfort_coeff": 2.0},
 }
 
 
@@ -44,10 +47,16 @@ class CrowdSimEnv(gym.Env):
 
         self.scenario = scenario  # 'easy', 'medium', 'hard', 'extreme', 'circle', 'random'
         self.paper_regime = bool(paper_regime)
-        # is_paper drives the REGIME params (budget/comfort/d_col). It is true when the
-        # caller flags paper_regime (carries the budget into the easy-bootstrap phase and
-        # the mutated holdout eval_env) OR the construction scenario is itself paper.
-        self._is_paper_regime = self.paper_regime or scenario in PAPER_SCENARIO_CONFIG
+        # Regime params (budget/comfort/d_col) come from the paper config of THIS scenario
+        # if it is a paper scenario (so paper_challenging -> 50 s, paper_standard -> 12.5 s);
+        # else, when paper_regime is set (the easy-bootstrap phase and the mutated holdout
+        # eval_env, both built with a non-paper scenario), from the challenging config (the
+        # binding paper regime for a paper run). Geometry (arena/robot_y/sense) is resolved
+        # separately in reset() from the CURRENT scenario.
+        _regime_cfg = PAPER_SCENARIO_CONFIG.get(scenario)
+        if _regime_cfg is None and self.paper_regime:
+            _regime_cfg = PAPER_SCENARIO_CONFIG['paper_challenging']
+        self._regime_cfg = _regime_cfg
         self.human_dodge_robot = human_dodge_robot
         if human_motion_model not in ('sfm', 'linear', 'orca'):
             raise ValueError("human_motion_model must be 'sfm', 'linear', or 'orca'")
@@ -72,9 +81,9 @@ class CrowdSimEnv(gym.Env):
         self.num_humans = num_humans
         self.time_step = time_step
         self.max_time = max_time if max_time is not None else (
-            12.5 if self._is_paper_regime else 50.0)
+            _regime_cfg['max_time'] if _regime_cfg else 50.0)
         self.comfort_coeff = comfort_coeff if comfort_coeff is not None else (
-            2.0 if self._is_paper_regime else 6.0)
+            _regime_cfg['comfort_coeff'] if _regime_cfg else 6.0)
         
         # Robot physical parameters (Turtlebot3 Waffle by default; the
         # paper-reproduction run overrides robot_vpref to the paper's 1.0 m/s).
@@ -91,7 +100,8 @@ class CrowdSimEnv(gym.Env):
         # current behaviour. The paper uses d_col = 0.3 (Table 1).
         self.collision_threshold = (
             collision_threshold if collision_threshold is not None
-            else (0.3 if self._is_paper_regime else self.robot_radius + self.human_radius)
+            else (_regime_cfg['collision_threshold'] if _regime_cfg
+                  else self.robot_radius + self.human_radius)
         )
         # Paper scenarios scale the arena and sense range with density; None keeps
         # the legacy circle-crossing layout. sense_range is recorded for paper
@@ -390,8 +400,17 @@ class CrowdSimEnv(gym.Env):
     def _compute_social_pressure(self):
         """
         Computes the Social Pressure Index (I_sp) based on the asymmetric ellipse personal space model.
+
+        v26: I_sp is the paper's Eq 7 NORMALIZED weighted average,
+        I_sp = sum_i (I_2_i / d_hr_i) / sum_i (1 / d_hr_i), with weights 1/d_hr.
+        It is naturally in [0, 1] (a mean of I_2 in [0,1]), so no clip is needed.
+        The pre-v26 code summed only the numerator and clipped to 1.0, which pegged
+        the penalty flat in dense crowds and destroyed the back-off gradient (Eq 7
+        text: "the reciprocal of distance is used as a weight for weighted averaging
+        to obtain a normalized index").
         """
-        I_sp = 0.0
+        num = 0.0
+        den = 0.0
         N = self.num_humans
         
         # Distances between all humans (vectorized NxN). The diagonal is set to
@@ -442,20 +461,15 @@ class CrowdSimEnv(gym.Env):
             # Individual social pressure on human i
             I_2 = omega * I_1
 
-            # Add to total social pressure index. The 1/d_hr factor is capped at
-            # 10.0 to prevent runaway penalties when humans cluster very close to
-            # the robot (d_hr < 0.1m), which would otherwise dominate the reward.
-            inv_d_hr = min(1.0 / (d_hr + 1e-5), 10.0)
-            I_sp += inv_d_hr * I_2
+            # Eq 7 weighted average: accumulate the 1/d_hr-weighted numerator and the
+            # weight denominator (no cap — the normalization below bounds I_sp to [0,1],
+            # so the old min(.,10) cap + clip are unnecessary and were gradient-killing).
+            w_i = 1.0 / (d_hr + 1e-5)
+            num += w_i * I_2
+            den += w_i
 
-        # v19: clamp to the paper's stated range (Sec 3.3: "Isp ranges from 0 to
-        # 1"). The summed 1/d_hr term is otherwise unbounded, so a close cluster
-        # could push I_sp to ~8 and make the comfort penalty (-comfort_coeff*I_sp)
-        # spike to ~-48/step during exploration — drowning the -20 collision
-        # signal and over-teaching caution. Bounding it keeps collision the
-        # dominant "do not hit" signal while preserving the distance-keeping
-        # gradient at the comfort_coeff (unchanged at 6.0) multiplier.
-        return float(np.clip(I_sp, 0.0, 1.0))
+        # Eq 7 normalized weighted average (naturally in [0,1] since I_2 in [0,1]).
+        return float(num / (den + 1e-9))
 
     def step(self, action):
         # Action is [v, w]

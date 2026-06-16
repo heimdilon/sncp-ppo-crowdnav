@@ -8,16 +8,16 @@ from pathlib import Path
 from typing import Sequence
 
 
-# v25 = paper-faithful budget/geometry. The 12.5s/comfort-2/d_col-0.3 paper regime is
-# DERIVED by the env from --fixed_scenario paper_challenging, so the training cell must
-# NOT pass it on the CLI (the v24 failure was forgetting --max_time, silently training at
-# the 50s env default). Trains from scratch (no IL warm-start).
+# v26 = paper-faithful per-scenario budget (challenging 50s, standard 12.5s), 8m crossing,
+# and normalized comfort (Eq 7). All DERIVED by the env from --fixed_scenario
+# paper_challenging, so the training cell must NOT pass any budget on the CLI (the v24/v26
+# failure was a wrong/forgotten CLI budget). Trains from scratch (no IL warm-start).
 TRAINING_TOKENS = (
     "NUM_ENVS = 16",
     "HORIZON = 128",
     "TOTAL_STEPS = 2_500_000",
     "LR = 1e-4",
-    "SAVE_PATH = 'checkpoints/sncp_ppo_v25.pt'",
+    "SAVE_PATH = 'checkpoints/sncp_ppo_v26.pt'",
     "'--num_envs', str(NUM_ENVS)",
     "'--horizon', str(HORIZON)",
     "'--total_steps', str(TOTAL_STEPS)",
@@ -35,12 +35,12 @@ TRAINING_TOKENS = (
 )
 
 EVALUATION_TOKENS = (
-    "CHECKPOINT = 'checkpoints/sncp_ppo_v25.pt'",
-    "EVAL_OUT = 'eval_v25'",
+    "CHECKPOINT = 'checkpoints/sncp_ppo_v26.pt'",
+    "EVAL_OUT = 'eval_v26'",
     "EVAL_SEED = 100",
     "EVAL_EPISODES = 50",
     "run_post_eval.py",
-    "'--version', '25'",
+    "'--version', '26'",
     "'--densities', '5', '10', '15', '20'",
     "'--scenario', 'paper_challenging'",
     "'--n_episodes', str(EVAL_EPISODES)",
@@ -51,8 +51,8 @@ EVALUATION_TOKENS = (
     # antipodal v22 sweep is regime-invalid (the eval cell is resilient to its verdict);
     # the beeline gate is scaled to the 10 m crossing at 1.0 m/s (40 steps).
     "'--baseline_json', 'eval_v22/density_sweep.json'",
-    "'--baseline_nav_steps', '40'",
-    "'--nav_margin_steps', '10'",
+    "'--baseline_nav_steps', '32'",
+    "'--nav_margin_steps', '8'",
 )
 
 
@@ -131,22 +131,22 @@ def verify_v16_run_ready(repo_root: str | Path = ".") -> V16RunReadinessSummary:
     cells = _load_notebook(repo_root / "sncp_ppo_colab.ipynb") or []
     training_cell = _find_unique_cell(
         cells,
-        "SAVE_PATH = 'checkpoints/sncp_ppo_v25.pt'",
+        "SAVE_PATH = 'checkpoints/sncp_ppo_v26.pt'",
         notes,
-        "v25 training",
+        "v26 training",
     )
     evaluation_cell = _find_unique_cell(
         cells,
-        "CHECKPOINT = 'checkpoints/sncp_ppo_v25.pt'",
+        "CHECKPOINT = 'checkpoints/sncp_ppo_v26.pt'",
         notes,
-        "v25 evaluation",
+        "v26 evaluation",
     )
-    _check_tokens(training_cell, TRAINING_TOKENS, notes, "v25 training")
-    _check_tokens(evaluation_cell, EVALUATION_TOKENS, notes, "v25 evaluation")
+    _check_tokens(training_cell, TRAINING_TOKENS, notes, "v26 training")
+    _check_tokens(evaluation_cell, EVALUATION_TOKENS, notes, "v26 evaluation")
 
     densities = _baseline_densities(repo_root / "eval_v22" / "density_sweep.json", notes)
     if not notes:
-        notes.append("PASS: v25 Colab training and evaluation configuration is ready")
+        notes.append("PASS: v26 Colab training and evaluation configuration is ready")
 
     return V16RunReadinessSummary(
         status=_status(notes),
