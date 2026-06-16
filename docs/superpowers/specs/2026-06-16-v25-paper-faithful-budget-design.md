@@ -75,32 +75,57 @@ PAPER_SCENARIO_CONFIG = {
 }
 ```
 
-- Constructor defaults change to **`max_time=None`, `comfort_coeff=None`** (and keep
-  `collision_threshold=None`, `arena_size=None`, `sense_range=None`). Resolution order
-  per field: **explicit non-None arg wins**; else if scenario is a paper scenario use the
-  paper-config value; else use the legacy default (`max_time=50.0`, `comfort_coeff=6.0`,
-  `collision_threshold=robot_radius+human_radius=0.6`). This preserves the 0.26 m/s
-  TurtleBot regime exactly while making paper scenarios self-faithful and still allowing
-  explicit diagnostic overrides (e.g. the corrected-sweep at 50s).
-- `reset()`: paper crossing becomes **robot y = −5 → goal y = +5 (10m)** for both
-  scenarios (currently ±4 / ±6 at `crowd_env.py:178/183` area).
+- Constructor defaults change to **`max_time=None`, `comfort_coeff=None`** (keep
+  `collision_threshold=None`, `arena_size=None`, `sense_range=None`) and a new
+  **`paper_regime=False`** flag.
+- **Two-tier resolution** (this is the key correction over the naive
+  "resolve-by-construction-scenario" idea — see Mechanism note below):
+  - **Regime params** (`max_time`, `comfort_coeff`, `collision_threshold`): resolved
+    against `is_paper = paper_regime or (scenario in PAPER_SCENARIO_CONFIG)`. Explicit
+    non-None arg wins; else paper value (12.5 / 2.0 / 0.3) if `is_paper`; else legacy
+    (50.0 / 6.0 / 0.6). The `paper_regime` flag is what carries the budget into the
+    **easy-bootstrap phase** and the **holdout `eval_env`**, neither of which is
+    constructed with a paper *scenario*.
+  - **Geometry** (`arena`, `sense_range`, robot crossing): keyed only on
+    `scenario in PAPER_SCENARIO_CONFIG`, because geometry is only read when the active
+    scenario actually is paper (the easy bootstrap uses the circle geometry untouched).
+- `reset()`: paper crossing becomes **robot y = −5 → goal y = +5 (10m)** for both paper
+  scenarios (currently ±4 / ±6 at `crowd_env.py:179/184`); `_paper_robot_y` reads
+  `PAPER_SCENARIO_CONFIG[scenario]["robot_y"]`; `sense_range` set from the config.
+- Non-paper, non-`paper_regime` construction is byte-for-byte the legacy 0.26 TurtleBot
+  regime. Explicit args always win (e.g. the corrected-sweep at `max_time=50`).
 
-### 2. Reward (comfort) wiring
+> **Mechanism note (why `paper_regime`, not scenario-only).** The training env is
+> constructed with `scenario='easy'` (`train.py:274`) and phases are *rebuilt* via
+> `build_envs(...)` (`train.py:747`) — so during the easy bootstrap the scenario is not
+> paper. The holdout path is worse: `evaluate_holdout` **mutates** `env.scenario`
+> post-construction (`train.py:97`) without rebuilding, so `env.max_time` keeps its
+> `__init__` value. Resolving the regime purely from the construction scenario would
+> therefore leave bootstrap and holdout at 50s/6.0. `paper_regime` (derived once from
+> `--fixed_scenario`) forces the budget across *all* env constructions.
 
-`comfort_coeff` already lives on the env (`crowd_env.py:56`, applied at `:522`
-`r_s = -self.comfort_coeff * I_sp`). Because the env now resolves `comfort_coeff=None`
-to the paper value, the only change needed upstream is to stop forcing 6.0:
+### 2. Train wiring (`sncp_ppo/train.py`)
 
-- `train.py` `make_env` default `comfort_coeff` and `max_time` → **None** (pass-through),
-  so the env resolves them per scenario.
-- `train.py` CLI `--comfort_coeff` / `--max_time` defaults → **None**. Any explicit value
-  still overrides. Code that needs a concrete value reads it from the **built env**
-  (`env.max_time`, as holdout eval already does at `train.py:108`), not from `args`.
+- `make_env` and `build_envs` gain a `paper_regime` parameter, threaded to the
+  `CrowdSimEnv(...)` constructor at every build site: the main env (`:274`), each phase
+  env (`build_envs`, `:748`), and the holdout `eval_env` (`:780`).
+- `make_env`/CLI `--comfort_coeff` and `--max_time` defaults → **None** (pass-through),
+  so a paper run leaves them unset and the env resolves them. Any explicit value still
+  overrides. Code needing a concrete value reads it from the **built env**
+  (`env.max_time`, as holdout already does at `train.py:108`), not from `args`.
+- `train()` and `_train_vectorized()` derive
+  `paper_regime = getattr(args, 'fixed_scenario', None) in PAPER_SCENARIO_CONFIG`
+  and pass it to every build site above. `comfort_coeff` already lives on the env
+  (`crowd_env.py:56`, applied at `:522` `r_s = -self.comfort_coeff * I_sp`), so no
+  reward-code change is needed beyond the resolved value.
 
-### 3. Eval (`run_post_eval.py` / `post_run_pipeline` / notebook)
+### 3. Eval (`run_post_eval.py` / `eval_report` / notebook)
 
-- `run_post_eval` `--max_time` default → **None** so paper scenarios eval at 12.5s
-  automatically; `evaluate_density` passes it through (explicit value still honored).
+- The post-training eval builds envs **with the paper scenario** (`evaluate_density`,
+  `eval_report.py:451`), so scenario-keyed resolution suffices there — no `paper_regime`
+  needed. Change `evaluate_density` `max_time` default and `run_post_eval` /
+  `run_post_eval.py` `--max_time` default → **None** so a paper-scenario eval lands at
+  12.5s automatically; explicit values still honored.
 - v25 eval cell passes **no** `--max_time`; sets `--baseline_nav_steps 40` (10m beeline
   at 1.0 m/s = 40 steps) and a proportional `--nav_margin_steps` (~10).
 
@@ -115,13 +140,26 @@ to the paper value, the only change needed upstream is to stop forcing 6.0:
 
 ### 5. Tests (TDD)
 
-- `test_paper_scenarios.py`: paper envs report `max_time=12.5`, `collision_threshold=0.3`,
-  `comfort_coeff=2.0`, `sense_range` 4/6, crossing 10m (robot_py=−5, robot_gy=+5).
-- Non-paper env unchanged: `max_time=50.0`, `collision_threshold=0.6`, `comfort_coeff=6.0`.
-- Explicit overrides win (e.g. `CrowdSimEnv(scenario="paper_challenging", max_time=50.0)`
-  → `env.max_time == 50.0`).
-- Parser/`make_env`: paper run with no `--max_time/--comfort_coeff` yields a 12.5s / 2.0
-  env; holdout-config parity test still passes.
+- `test_paper_scenarios.py`:
+  - Paper-scenario env auto-resolves: `max_time=12.5`, `collision_threshold=0.3`,
+    `comfort_coeff=2.0`, `sense_range` 4/6, crossing 10m (`robot_py=−5`, `robot_gy=+5`).
+  - **`paper_regime=True` with a non-paper scenario** (`scenario='easy'`) →
+    `max_time=12.5`, `comfort_coeff=2.0`, `collision_threshold=0.3` (regime forced) but
+    **circle geometry preserved** (radii ≈ 4.0, no robot ±5 override).
+  - Non-paper, non-regime env unchanged: `max_time=50.0`, `collision_threshold=0.6`,
+    `comfort_coeff=6.0`.
+  - Explicit override wins: `CrowdSimEnv(scenario="paper_challenging", max_time=50.0)`
+    → `env.max_time == 50.0`.
+  - Update the two existing geometry tests to the 10m crossing (`test_paper_standard_layout`
+    expects (0,−5)/(0,5); `test_paper_challenging_scales_arena` expects (0,−5)/(0,5)).
+  - `make_env(..., paper_regime=True)` yields a 12.5s / 2.0 / 0.3 env; holdout-config
+    parity test still passes.
+- `test_post_run_pipeline.py`: notebook guard — assert the v25 training cell sets
+  `--fixed_scenario paper_challenging` and `SAVE_PATH=checkpoints/sncp_ppo_v25.pt`, and the
+  v25 eval cell uses `--version 25` + `--baseline_nav_steps 40` and passes **no**
+  `--max_time` (regression against the v24 forgot-the-budget failure).
+- `test_eval_report.py` (or equivalent): `evaluate_density(scenario='paper_challenging')`
+  with `max_time=None` builds a 12.5s env; non-paper default stays 50s.
 
 ## Success criteria
 
