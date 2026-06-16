@@ -78,3 +78,35 @@ def test_train_parser_accepts_paper_scenarios():
     ])
     assert args.fixed_scenario == 'paper_challenging'
     assert args.holdout_scenarios == ['paper_standard', 'paper_challenging']
+
+
+# --- v25: paper-faithful time budget / comfort / d_col resolution ---
+
+def test_paper_scenario_resolves_paper_regime_params():
+    # Constructed WITH a paper scenario -> paper budget/comfort/d_col, no flags needed.
+    env = CrowdSimEnv(num_humans=10, scenario='paper_challenging', human_motion_model='orca')
+    assert env.max_time == 12.5
+    assert env.comfort_coeff == 2.0
+    assert env.collision_threshold == 0.3
+
+
+def test_paper_regime_flag_forces_budget_on_nonpaper_scenario():
+    # The easy-bootstrap case: scenario is NOT paper, but paper_regime forces the budget.
+    env = CrowdSimEnv(num_humans=3, scenario='easy', human_motion_model='orca',
+                      paper_regime=True)
+    assert env.max_time == 12.5
+    assert env.comfort_coeff == 2.0
+    assert env.collision_threshold == 0.3
+
+
+def test_nonpaper_env_regime_unchanged():
+    env = CrowdSimEnv(num_humans=5, scenario='hard', human_motion_model='orca')
+    assert env.max_time == 50.0
+    assert env.comfort_coeff == 6.0
+    assert env.collision_threshold == env.robot_radius + env.human_radius  # 0.6
+
+
+def test_explicit_regime_args_override_paper():
+    env = CrowdSimEnv(num_humans=10, scenario='paper_challenging', human_motion_model='orca',
+                      max_time=50.0, comfort_coeff=6.0, collision_threshold=0.6)
+    assert (env.max_time, env.comfort_coeff, env.collision_threshold) == (50.0, 6.0, 0.6)
