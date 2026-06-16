@@ -6,6 +6,19 @@ import matplotlib.patches as patches
 
 from crowd_sim.orca import orca_velocities
 
+
+# Paper-faithful physics for the reproduction scenarios (Ao et al. 2026, Table 1 + S5.1).
+# robot_y = start (0,-robot_y) -> goal (0,+robot_y); 2*robot_y = 10 m crossing.
+# Single source of truth so train + eval cannot silently disagree (the v24 failure
+# was forgetting --max_time on the CLI, training at 50 s instead of 12.5 s).
+PAPER_SCENARIO_CONFIG = {
+    "paper_standard":    {"arena": 10.0, "sense_range": 4.0, "collision_threshold": 0.3,
+                          "robot_y": 5.0, "max_time": 12.5, "comfort_coeff": 2.0},
+    "paper_challenging": {"arena": 15.0, "sense_range": 6.0, "collision_threshold": 0.3,
+                          "robot_y": 5.0, "max_time": 12.5, "comfort_coeff": 2.0},
+}
+
+
 class CrowdSimEnv(gym.Env):
     metadata = {'render.modes': ['human', 'rgb_array']}
 
@@ -13,11 +26,11 @@ class CrowdSimEnv(gym.Env):
         self,
         num_humans=5,
         time_step=0.25,
-        max_time=50.0,
+        max_time=None,
         scenario='circle',
         human_dodge_robot=False,
         randomize_layout=True,
-        comfort_coeff=6.0,
+        comfort_coeff=None,
         human_motion_model='orca',
         robot_vpref=0.26,
         human_vpref_override=None,
@@ -25,10 +38,16 @@ class CrowdSimEnv(gym.Env):
         collision_threshold=None,
         arena_size=None,
         sense_range=None,
+        paper_regime=False,
     ):
         super(CrowdSimEnv, self).__init__()
 
         self.scenario = scenario  # 'easy', 'medium', 'hard', 'extreme', 'circle', 'random'
+        self.paper_regime = bool(paper_regime)
+        # is_paper drives the REGIME params (budget/comfort/d_col). It is true when the
+        # caller flags paper_regime (carries the budget into the easy-bootstrap phase and
+        # the mutated holdout eval_env) OR the construction scenario is itself paper.
+        self._is_paper_regime = self.paper_regime or scenario in PAPER_SCENARIO_CONFIG
         self.human_dodge_robot = human_dodge_robot
         if human_motion_model not in ('sfm', 'linear', 'orca'):
             raise ValueError("human_motion_model must be 'sfm', 'linear', or 'orca'")
@@ -52,8 +71,10 @@ class CrowdSimEnv(gym.Env):
         self.randomize_layout = randomize_layout
         self.num_humans = num_humans
         self.time_step = time_step
-        self.max_time = max_time
-        self.comfort_coeff = comfort_coeff
+        self.max_time = max_time if max_time is not None else (
+            12.5 if self._is_paper_regime else 50.0)
+        self.comfort_coeff = comfort_coeff if comfort_coeff is not None else (
+            2.0 if self._is_paper_regime else 6.0)
         
         # Robot physical parameters (Turtlebot3 Waffle by default; the
         # paper-reproduction run overrides robot_vpref to the paper's 1.0 m/s).
@@ -70,7 +91,7 @@ class CrowdSimEnv(gym.Env):
         # current behaviour. The paper uses d_col = 0.3 (Table 1).
         self.collision_threshold = (
             collision_threshold if collision_threshold is not None
-            else self.robot_radius + self.human_radius
+            else (0.3 if self._is_paper_regime else self.robot_radius + self.human_radius)
         )
         # Paper scenarios scale the arena and sense range with density; None keeps
         # the legacy circle-crossing layout. sense_range is recorded for paper
@@ -172,16 +193,14 @@ class CrowdSimEnv(gym.Env):
         elif self.scenario == 'extreme':
             self.human_vpref = 0.26
             scenario_type = 'random'
-        elif self.scenario == 'paper_standard':
+        elif self.scenario in PAPER_SCENARIO_CONFIG:
+            cfg = PAPER_SCENARIO_CONFIG[self.scenario]
             self.human_vpref = 1.0  # parity with the 1.0 m/s robot
             scenario_type = 'paper'
-            self._paper_arena = self.arena_size if self.arena_size is not None else 10.0
-            self._paper_robot_y = 4.0
-        elif self.scenario == 'paper_challenging':
-            self.human_vpref = 1.0
-            scenario_type = 'paper'
-            self._paper_arena = self.arena_size if self.arena_size is not None else 15.0
-            self._paper_robot_y = 6.0
+            self._paper_arena = self.arena_size if self.arena_size is not None else cfg['arena']
+            self._paper_robot_y = cfg['robot_y']  # 5.0 -> 10 m crossing (paper nav-time ~10.4-11.8s)
+            if self.sense_range is None:
+                self.sense_range = cfg['sense_range']
         else:
             self.human_vpref = 0.26
             scenario_type = self.scenario

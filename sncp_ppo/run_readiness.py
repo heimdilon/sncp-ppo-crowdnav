@@ -8,33 +8,26 @@ from pathlib import Path
 from typing import Sequence
 
 
+# v25 = paper-faithful budget/geometry. The 12.5s/comfort-2/d_col-0.3 paper regime is
+# DERIVED by the env from --fixed_scenario paper_challenging, so the training cell must
+# NOT pass it on the CLI (the v24 failure was forgetting --max_time, silently training at
+# the 50s env default). Trains from scratch (no IL warm-start).
 TRAINING_TOKENS = (
     "NUM_ENVS = 16",
     "HORIZON = 128",
     "TOTAL_STEPS = 2_500_000",
     "LR = 1e-4",
-    "TARGET_KL = 0.01",
-    "REPLAY_RATIO = 0.20",
-    "COMFORT_COEFF = 6.0",
-    "MAX_TIME = 15.0",
-    "ROBOT_VPREF = 1.0",
-    "HUMAN_VPREF = 1.0",
-    "HUMAN_GOAL_NOISE = 2.0",
-    "INIT_CHECKPOINT = 'checkpoints/sncp_ppo_v23_bc.pt'",
-    "SAVE_PATH = 'checkpoints/sncp_ppo_v23.pt'",
+    "SAVE_PATH = 'checkpoints/sncp_ppo_v25.pt'",
     "'--num_envs', str(NUM_ENVS)",
     "'--horizon', str(HORIZON)",
     "'--total_steps', str(TOTAL_STEPS)",
+    "'--fixed_scenario', 'paper_challenging'",
     "'--num_humans', '10'",
+    "'--bootstrap_easy_steps', '200000'",
     "'--lr', str(LR)",
-    "'--curriculum_replay_ratio', str(REPLAY_RATIO)",
-    "'--comfort_coeff', str(COMFORT_COEFF)",
-    "'--max_time', str(MAX_TIME)",
-    "'--robot_vpref', str(ROBOT_VPREF)",
-    "'--human_vpref_override', str(HUMAN_VPREF)",
-    "'--human_goal_noise', str(HUMAN_GOAL_NOISE)",
-    "'--init_checkpoint', INIT_CHECKPOINT",
-    "'--holdout_scenarios', 'easy', 'hard', 'circle'",
+    # robot_vpref 1.0 is load-bearing: at 0.26 m/s the 12.5s budget is infeasible.
+    "'--robot_vpref', '1.0'",
+    "'--holdout_scenarios', 'paper_standard', 'paper_challenging'",
     "'--holdout_episodes', '50'",
     "'--save_path', SAVE_PATH",
     "if p.returncode != 0:",
@@ -42,25 +35,24 @@ TRAINING_TOKENS = (
 )
 
 EVALUATION_TOKENS = (
-    "CHECKPOINT = 'checkpoints/sncp_ppo_v23.pt'",
-    "EVAL_OUT = 'eval_v23'",
+    "CHECKPOINT = 'checkpoints/sncp_ppo_v25.pt'",
+    "EVAL_OUT = 'eval_v25'",
     "EVAL_SEED = 100",
     "EVAL_EPISODES = 50",
     "run_post_eval.py",
-    "'--version', '23'",
-    "'--densities', '1', '3', '5', '8', '10'",
-    "'--scenario', 'hard'",
+    "'--version', '25'",
+    "'--densities', '5', '10', '15', '20'",
+    "'--scenario', 'paper_challenging'",
     "'--n_episodes', str(EVAL_EPISODES)",
-    "'--trajectory_densities', '5', '10'",
+    "'--trajectory_densities', '10', '20'",
     "'--robot_vpref', '1.0'",
     "'--human_vpref_override', '1.0'",
-    "'--human_goal_noise', '2.0'",
-    "'--max_time', '15.0'",
-    # Regime-matched gates: v23 compares against the v22 sweep (same physics, the
-    # IL-warm-start ablation) with the no-beeline gate scaled to 1.0 m/s.
+    # No --max_time: the env resolves the paper scenario to 12.5s. The comparison vs the
+    # antipodal v22 sweep is regime-invalid (the eval cell is resilient to its verdict);
+    # the beeline gate is scaled to the 10 m crossing at 1.0 m/s (40 steps).
     "'--baseline_json', 'eval_v22/density_sweep.json'",
-    "'--baseline_nav_steps', '32'",
-    "'--nav_margin_steps', '8'",
+    "'--baseline_nav_steps', '40'",
+    "'--nav_margin_steps', '10'",
 )
 
 
@@ -139,22 +131,22 @@ def verify_v16_run_ready(repo_root: str | Path = ".") -> V16RunReadinessSummary:
     cells = _load_notebook(repo_root / "sncp_ppo_colab.ipynb") or []
     training_cell = _find_unique_cell(
         cells,
-        "SAVE_PATH = 'checkpoints/sncp_ppo_v23.pt'",
+        "SAVE_PATH = 'checkpoints/sncp_ppo_v25.pt'",
         notes,
-        "v23 training",
+        "v25 training",
     )
     evaluation_cell = _find_unique_cell(
         cells,
-        "CHECKPOINT = 'checkpoints/sncp_ppo_v23.pt'",
+        "CHECKPOINT = 'checkpoints/sncp_ppo_v25.pt'",
         notes,
-        "v23 evaluation",
+        "v25 evaluation",
     )
-    _check_tokens(training_cell, TRAINING_TOKENS, notes, "v23 training")
-    _check_tokens(evaluation_cell, EVALUATION_TOKENS, notes, "v23 evaluation")
+    _check_tokens(training_cell, TRAINING_TOKENS, notes, "v25 training")
+    _check_tokens(evaluation_cell, EVALUATION_TOKENS, notes, "v25 evaluation")
 
     densities = _baseline_densities(repo_root / "eval_v22" / "density_sweep.json", notes)
     if not notes:
-        notes.append("PASS: v23 Colab training and evaluation configuration is ready")
+        notes.append("PASS: v25 Colab training and evaluation configuration is ready")
 
     return V16RunReadinessSummary(
         status=_status(notes),

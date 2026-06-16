@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import torch
 
-from crowd_sim.crowd_env import CrowdSimEnv
+from crowd_sim.crowd_env import CrowdSimEnv, PAPER_SCENARIO_CONFIG
 from sncp_ppo.models import SNCPPolicy, build_policy_for_checkpoint
 from sncp_ppo.ppo import PPOAgent
 
@@ -213,10 +213,16 @@ def update_diagnostic_row(policy, agent):
     ]
 
 
-def make_env(num_humans, scenario, seed, comfort_coeff=6.0, max_time=50.0,
+def make_env(num_humans, scenario, seed, comfort_coeff=None, max_time=None,
              robot_vpref=0.26, human_vpref_override=None, human_goal_noise=0.0,
-             human_motion_model='orca', collision_threshold=None):
-    """Factory for a single CrowdSimEnv, used by SyncVectorEnv."""
+             human_motion_model='orca', collision_threshold=None, paper_regime=False):
+    """Factory for a single CrowdSimEnv, used by SyncVectorEnv.
+
+    comfort_coeff/max_time default to None so the env resolves them per regime:
+    paper_regime (or a paper scenario) -> 12.5s / comfort 2.0 / d_col 0.3; otherwise
+    the legacy 50s / 6.0 / 0.6. paper_regime carries the paper budget into non-paper
+    bootstrap phases (the easy curriculum) so the whole run trains under time pressure.
+    """
     def _thunk():
         env = CrowdSimEnv(
             num_humans=num_humans,
@@ -228,6 +234,7 @@ def make_env(num_humans, scenario, seed, comfort_coeff=6.0, max_time=50.0,
             human_goal_noise=human_goal_noise,
             human_motion_model=human_motion_model,
             collision_threshold=collision_threshold,
+            paper_regime=paper_regime,
         )
         env.reset(seed=seed)
         return env
@@ -264,6 +271,12 @@ def train(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device} | Seed: {args.seed}")
 
+    # Paper regime is derived from the fixed scenario so the 12.5s/comfort-2/d_col-0.3
+    # budget applies to EVERY env (incl. the non-paper easy bootstrap and the holdout
+    # eval_env), not just envs literally constructed with a paper scenario. This is the
+    # fix for the v24 failure where the CLI silently trained at the 50s env default.
+    paper_regime = getattr(args, 'fixed_scenario', None) in PAPER_SCENARIO_CONFIG
+
     # 1. Create environment — start with easy scenario, curriculum will change it.
     # human_dodge_robot inherits the env default (False, v15): pedestrians ignore
     # the robot ("invisible robot", the paper's CrowdNav regime), so the robot
@@ -281,6 +294,7 @@ def train(args):
         human_goal_noise=args.human_goal_noise,
         human_motion_model=getattr(args, 'human_motion_model', 'orca'),
         collision_threshold=args.collision_threshold,
+        paper_regime=paper_regime,
     )
 
     # 2. Create SNCP policy and PPO agent
@@ -739,6 +753,9 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
     collision_threshold = getattr(args, 'collision_threshold', None)
     fixed_scenario = getattr(args, 'fixed_scenario', None)
     bootstrap_easy_steps = getattr(args, 'bootstrap_easy_steps', 0)
+    # Forces the paper budget on every env (incl. the easy bootstrap + holdout eval_env);
+    # comfort_coeff/max_time above may be None, which the env resolves per this flag.
+    paper_regime = fixed_scenario in PAPER_SCENARIO_CONFIG
 
     def set_envs_vpref(envs, vpref):
         for sub_env in envs.envs:
@@ -758,6 +775,7 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
                     human_goal_noise=human_goal_noise,
                     human_motion_model=human_motion_model,
                     collision_threshold=collision_threshold,
+                    paper_regime=paper_regime,
                 )
                 for i in range(N)
             ]
@@ -787,6 +805,7 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
         human_goal_noise=human_goal_noise,
         human_motion_model=human_motion_model,
         collision_threshold=collision_threshold,
+        paper_regime=paper_regime,
     )
 
     (scenario, H, vpref), _ = select_vectorized_phase(
@@ -1031,12 +1050,12 @@ def build_parser():
                              'the vectorized path to reduce catastrophic '
                              'forgetting after the v15 N=5 peak. Default stays '
                              '0 so replay is an explicit experiment variable.')
-    parser.add_argument('--comfort_coeff', type=float, default=6.0,
-                        help='Social-pressure comfort penalty coefficient. '
-                             'v15/v16 default is 6.0; v17 candidate uses 5.0.')
-    parser.add_argument('--max_time', type=float, default=50.0,
-                        help='Episode time limit in seconds. v15/v16 default is '
-                             '50.0; max-time candidates should pass 60.0 explicitly.')
+    parser.add_argument('--comfort_coeff', type=float, default=None,
+                        help='Social-pressure comfort penalty coefficient. None lets '
+                             'the env resolve it: paper regime 2.0, else legacy 6.0.')
+    parser.add_argument('--max_time', type=float, default=None,
+                        help='Episode time limit in seconds. None lets the env resolve '
+                             'it: paper regime 12.5, else legacy 50.0.')
     parser.add_argument('--collision_threshold', type=float, default=None,
                         help='Robot-human collision distance. Default = robot_radius '
                              '+ human_radius (0.6). The paper uses 0.3 (Table 1).')
