@@ -141,3 +141,16 @@ def test_train_parser_budget_defaults_are_none():
     args = build_parser().parse_args([])
     assert args.max_time is None
     assert args.comfort_coeff is None
+
+
+def test_eval_max_time_defaults_to_none():
+    # The eval entry points default max_time to None so a paper-scenario eval resolves
+    # to the paper's 12.5s in the env (test_paper_scenario_resolves_paper_regime_params
+    # covers None -> 12.5; evaluate_density passes max_time straight to CrowdSimEnv).
+    import inspect
+    from sncp_ppo.eval_report import evaluate_density
+    from sncp_ppo.post_run_pipeline import run_v16_post_eval
+    from run_post_eval import build_parser as eval_build_parser
+    assert inspect.signature(evaluate_density).parameters['max_time'].default is None
+    assert inspect.signature(run_v16_post_eval).parameters['max_time'].default is None
+    assert eval_build_parser().parse_args(['--version', '25']).max_time is None

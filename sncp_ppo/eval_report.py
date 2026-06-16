@@ -431,7 +431,7 @@ def evaluate_density(
     seed: int,
     robot_vpref: float = 0.26,
     human_vpref_override: float | None = None,
-    max_time: float = 50.0,
+    max_time: float | None = None,
     human_goal_noise: float = 0.0,
 ) -> list[EpisodeResult]:
     """Run deterministic policy episodes for one density/scenario pair.

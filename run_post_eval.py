@@ -43,8 +43,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Robot max speed; the paper-reproduction run uses 1.0 to match the paper.")
     parser.add_argument("--human_vpref_override", type=float, default=None,
                         help="If set, force a flat pedestrian speed (parity regime, e.g. 1.0).")
-    parser.add_argument("--max_time", type=float, default=50.0,
-                        help="Episode time cap for eval; match the training regime.")
+    parser.add_argument("--max_time", type=float, default=None,
+                        help="Episode time cap for eval; None lets the env resolve it "
+                             "(paper scenarios -> 12.5s, else 50.0). Match the regime.")
     parser.add_argument("--human_goal_noise", type=float, default=0.0,
                         help="Pedestrian goal noise; match the training regime (paper run uses ~2.0).")
     parser.add_argument("--baseline_nav_steps", type=float, default=121.5,

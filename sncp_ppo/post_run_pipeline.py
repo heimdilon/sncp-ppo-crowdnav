@@ -59,7 +59,7 @@ def run_v16_post_eval(
     nav_margin_steps: float = 30.0,
     robot_vpref: float = 0.26,
     human_vpref_override: float | None = None,
-    max_time: float = 50.0,
+    max_time: float | None = None,
     human_goal_noise: float = 0.0,
     expected_replay_ratio: float = 0.20,
     replay_tolerance: float = 0.10,
