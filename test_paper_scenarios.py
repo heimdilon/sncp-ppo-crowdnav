@@ -17,9 +17,9 @@ def test_collision_threshold_is_configurable():
 def test_paper_standard_layout():
     env = CrowdSimEnv(num_humans=5, scenario='paper_standard', human_motion_model='orca')
     env.reset(seed=0)
-    # robot fixed bottom -> top, 10 m crossing (v25: was +/-4)
-    assert (env.robot_px, env.robot_py) == (0.0, -5.0)
-    assert (env.robot_gx, env.robot_gy) == (0.0, 5.0)
+    # robot fixed bottom -> top, 8 m crossing (v26: paper S5.3.2 "(0,-4)->(0,4)")
+    assert (env.robot_px, env.robot_py) == (0.0, -4.0)
+    assert (env.robot_gx, env.robot_gy) == (0.0, 4.0)
     assert env.sense_range == 4.0
     half = 5.0  # 10x10 arena
     assert np.all(np.abs(env.humans_px) <= half) and np.all(np.abs(env.humans_py) <= half)
@@ -36,8 +36,8 @@ def test_paper_challenging_scales_arena():
     for n in (10, 15, 20):
         env = CrowdSimEnv(num_humans=n, scenario='paper_challenging', human_motion_model='orca')
         env.reset(seed=1)
-        assert (env.robot_px, env.robot_py) == (0.0, -5.0)   # 10 m crossing (v25: was +/-6)
-        assert (env.robot_gx, env.robot_gy) == (0.0, 5.0)
+        assert (env.robot_px, env.robot_py) == (0.0, -4.0)   # 8 m crossing (v26: paper S5.3.2)
+        assert (env.robot_gx, env.robot_gy) == (0.0, 4.0)
         assert env.sense_range == 6.0
         half = 7.5  # 15x15 arena
         assert np.all(np.abs(env.humans_px) <= half) and np.all(np.abs(env.humans_py) <= half)
@@ -91,21 +91,25 @@ def test_train_parser_accepts_paper_scenarios():
     assert args.holdout_scenarios == ['paper_standard', 'paper_challenging']
 
 
-# --- v25: paper-faithful time budget / comfort / d_col resolution ---
+# --- v25/v26: paper-faithful time budget / comfort / d_col resolution ---
+# v26: budget is per-scenario (standard 12.5s, challenging 50.0s from Table 3 nav-times).
 
 def test_paper_scenario_resolves_paper_regime_params():
     # Constructed WITH a paper scenario -> paper budget/comfort/d_col, no flags needed.
-    env = CrowdSimEnv(num_humans=10, scenario='paper_challenging', human_motion_model='orca')
-    assert env.max_time == 12.5
-    assert env.comfort_coeff == 2.0
-    assert env.collision_threshold == 0.3
+    chal = CrowdSimEnv(num_humans=10, scenario='paper_challenging', human_motion_model='orca')
+    assert chal.max_time == 50.0   # v26: challenging budget (Table 3 nav-time 15.92s)
+    assert chal.comfort_coeff == 2.0
+    assert chal.collision_threshold == 0.3
+    std = CrowdSimEnv(num_humans=5, scenario='paper_standard', human_motion_model='orca')
+    assert std.max_time == 12.5     # standard budget stays 12.5 (Table 1)
 
 
 def test_paper_regime_flag_forces_budget_on_nonpaper_scenario():
-    # The easy-bootstrap case: scenario is NOT paper, but paper_regime forces the budget.
+    # The easy-bootstrap / holdout-eval_env case: scenario is NOT paper, but paper_regime
+    # forces the binding (challenging) paper budget so the whole run is consistent.
     env = CrowdSimEnv(num_humans=3, scenario='easy', human_motion_model='orca',
                       paper_regime=True)
-    assert env.max_time == 12.5
+    assert env.max_time == 50.0
     assert env.comfort_coeff == 2.0
     assert env.collision_threshold == 0.3
 
@@ -125,7 +129,7 @@ def test_explicit_regime_args_override_paper():
 
 def test_make_env_paper_regime_forces_budget():
     env = make_env(num_humans=3, scenario='easy', seed=0, paper_regime=True)()
-    assert env.max_time == 12.5
+    assert env.max_time == 50.0
     assert env.comfort_coeff == 2.0
     assert env.collision_threshold == 0.3
 

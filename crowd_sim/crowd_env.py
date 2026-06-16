@@ -8,14 +8,17 @@ from crowd_sim.orca import orca_velocities
 
 
 # Paper-faithful physics for the reproduction scenarios (Ao et al. 2026, Table 1 + S5.1).
-# robot_y = start (0,-robot_y) -> goal (0,+robot_y); 2*robot_y = 10 m crossing.
-# Single source of truth so train + eval cannot silently disagree (the v24 failure
-# was forgetting --max_time on the CLI, training at 50 s instead of 12.5 s).
+# robot_y = start (0,-robot_y) -> goal (0,+robot_y); 2*robot_y = 8 m crossing (paper S5.3.2
+# states "(0,-4) -> (0,4)"). max_time is PER-SCENARIO: Table 1's 12.5 s is the STANDARD
+# limit, while Table 3's challenging Nav-Times (SNCP-PPO 15.92 s, Pred-AttnGraph 28.55 s)
+# require a far larger challenging budget -> 50 s (removes time-starvation at every density;
+# Nav-Time is reported so the loose budget is transparent). Single source of truth so
+# train + eval cannot silently disagree (the v24/v25 failure was a wrong CLI budget).
 PAPER_SCENARIO_CONFIG = {
     "paper_standard":    {"arena": 10.0, "sense_range": 4.0, "collision_threshold": 0.3,
-                          "robot_y": 5.0, "max_time": 12.5, "comfort_coeff": 2.0},
+                          "robot_y": 4.0, "max_time": 12.5, "comfort_coeff": 2.0},
     "paper_challenging": {"arena": 15.0, "sense_range": 6.0, "collision_threshold": 0.3,
-                          "robot_y": 5.0, "max_time": 12.5, "comfort_coeff": 2.0},
+                          "robot_y": 4.0, "max_time": 50.0, "comfort_coeff": 2.0},
 }
 
 
@@ -44,10 +47,16 @@ class CrowdSimEnv(gym.Env):
 
         self.scenario = scenario  # 'easy', 'medium', 'hard', 'extreme', 'circle', 'random'
         self.paper_regime = bool(paper_regime)
-        # is_paper drives the REGIME params (budget/comfort/d_col). It is true when the
-        # caller flags paper_regime (carries the budget into the easy-bootstrap phase and
-        # the mutated holdout eval_env) OR the construction scenario is itself paper.
-        self._is_paper_regime = self.paper_regime or scenario in PAPER_SCENARIO_CONFIG
+        # Regime params (budget/comfort/d_col) come from the paper config of THIS scenario
+        # if it is a paper scenario (so paper_challenging -> 50 s, paper_standard -> 12.5 s);
+        # else, when paper_regime is set (the easy-bootstrap phase and the mutated holdout
+        # eval_env, both built with a non-paper scenario), from the challenging config (the
+        # binding paper regime for a paper run). Geometry (arena/robot_y/sense) is resolved
+        # separately in reset() from the CURRENT scenario.
+        _regime_cfg = PAPER_SCENARIO_CONFIG.get(scenario)
+        if _regime_cfg is None and self.paper_regime:
+            _regime_cfg = PAPER_SCENARIO_CONFIG['paper_challenging']
+        self._regime_cfg = _regime_cfg
         self.human_dodge_robot = human_dodge_robot
         if human_motion_model not in ('sfm', 'linear', 'orca'):
             raise ValueError("human_motion_model must be 'sfm', 'linear', or 'orca'")
@@ -72,9 +81,9 @@ class CrowdSimEnv(gym.Env):
         self.num_humans = num_humans
         self.time_step = time_step
         self.max_time = max_time if max_time is not None else (
-            12.5 if self._is_paper_regime else 50.0)
+            _regime_cfg['max_time'] if _regime_cfg else 50.0)
         self.comfort_coeff = comfort_coeff if comfort_coeff is not None else (
-            2.0 if self._is_paper_regime else 6.0)
+            _regime_cfg['comfort_coeff'] if _regime_cfg else 6.0)
         
         # Robot physical parameters (Turtlebot3 Waffle by default; the
         # paper-reproduction run overrides robot_vpref to the paper's 1.0 m/s).
@@ -91,7 +100,8 @@ class CrowdSimEnv(gym.Env):
         # current behaviour. The paper uses d_col = 0.3 (Table 1).
         self.collision_threshold = (
             collision_threshold if collision_threshold is not None
-            else (0.3 if self._is_paper_regime else self.robot_radius + self.human_radius)
+            else (_regime_cfg['collision_threshold'] if _regime_cfg
+                  else self.robot_radius + self.human_radius)
         )
         # Paper scenarios scale the arena and sense range with density; None keeps
         # the legacy circle-crossing layout. sense_range is recorded for paper
