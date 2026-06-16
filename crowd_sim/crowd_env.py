@@ -400,8 +400,17 @@ class CrowdSimEnv(gym.Env):
     def _compute_social_pressure(self):
         """
         Computes the Social Pressure Index (I_sp) based on the asymmetric ellipse personal space model.
+
+        v26: I_sp is the paper's Eq 7 NORMALIZED weighted average,
+        I_sp = sum_i (I_2_i / d_hr_i) / sum_i (1 / d_hr_i), with weights 1/d_hr.
+        It is naturally in [0, 1] (a mean of I_2 in [0,1]), so no clip is needed.
+        The pre-v26 code summed only the numerator and clipped to 1.0, which pegged
+        the penalty flat in dense crowds and destroyed the back-off gradient (Eq 7
+        text: "the reciprocal of distance is used as a weight for weighted averaging
+        to obtain a normalized index").
         """
-        I_sp = 0.0
+        num = 0.0
+        den = 0.0
         N = self.num_humans
         
         # Distances between all humans (vectorized NxN). The diagonal is set to
@@ -452,20 +461,15 @@ class CrowdSimEnv(gym.Env):
             # Individual social pressure on human i
             I_2 = omega * I_1
 
-            # Add to total social pressure index. The 1/d_hr factor is capped at
-            # 10.0 to prevent runaway penalties when humans cluster very close to
-            # the robot (d_hr < 0.1m), which would otherwise dominate the reward.
-            inv_d_hr = min(1.0 / (d_hr + 1e-5), 10.0)
-            I_sp += inv_d_hr * I_2
+            # Eq 7 weighted average: accumulate the 1/d_hr-weighted numerator and the
+            # weight denominator (no cap — the normalization below bounds I_sp to [0,1],
+            # so the old min(.,10) cap + clip are unnecessary and were gradient-killing).
+            w_i = 1.0 / (d_hr + 1e-5)
+            num += w_i * I_2
+            den += w_i
 
-        # v19: clamp to the paper's stated range (Sec 3.3: "Isp ranges from 0 to
-        # 1"). The summed 1/d_hr term is otherwise unbounded, so a close cluster
-        # could push I_sp to ~8 and make the comfort penalty (-comfort_coeff*I_sp)
-        # spike to ~-48/step during exploration — drowning the -20 collision
-        # signal and over-teaching caution. Bounding it keeps collision the
-        # dominant "do not hit" signal while preserving the distance-keeping
-        # gradient at the comfort_coeff (unchanged at 6.0) multiplier.
-        return float(np.clip(I_sp, 0.0, 1.0))
+        # Eq 7 normalized weighted average (naturally in [0,1] since I_2 in [0,1]).
+        return float(num / (den + 1e-9))
 
     def step(self, action):
         # Action is [v, w]

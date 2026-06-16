@@ -112,25 +112,27 @@ def test_no_orientation_penalty():
 
 
 def test_isp_bounded_to_unit_interval():
-    """I_sp is clamped to [0,1] (paper Sec 3.3: 'Isp ranges from 0 to 1').
+    """I_sp is in [0,1] (paper Sec 3.3: 'Isp ranges from 0 to 1').
 
-    v19: the impl summed an unbounded per-human term (1/d_hr, capped at 10) over
-    the crowd, so a close pedestrian could drive I_sp far above 1 and make the
-    comfort penalty (-comfort_coeff * I_sp) spike to -48+/step during training,
-    drowning the -20 collision signal. Clamping restores the paper's range and
-    lets the collision penalty stay the dominant 'do not hit' signal."""
+    v26: I_sp is now the paper's Eq 7 NORMALIZED weighted average
+    (sum_i w_i*I_2_i / sum_i w_i, w_i = 1/d_hr), which is naturally bounded to
+    [0,1] WITHOUT a clip. (The old v19 code summed only the numerator and clipped
+    to 1.0, which saturated the penalty in dense crowds and destroyed the back-off
+    gradient — see test_isp_normalized_* in test_paper_scenarios.py.) A single very
+    close pedestrian therefore dominates the weight and drives I_sp toward that
+    pedestrian's I_2 (high, but NOT the saturated 1.0 the clip used to produce)."""
     env = CrowdSimEnv(num_humans=5, scenario='hard')
     env.reset(seed=1)
     # One pedestrian almost on top of the robot, the rest far away, so the close
-    # one dominates omega and the raw (unclamped) I_sp would be ~8 >> 1.
+    # one dominates the weighted average.
     env.humans_px[:] = 100.0
     env.humans_py[:] = 100.0
     env.humans_px[0] = env.robot_px + 0.05
     env.humans_py[0] = env.robot_py
     i_sp = env._compute_social_pressure()
-    assert 0.0 <= i_sp <= 1.0, f"I_sp not clamped to [0,1]: {i_sp}"
-    # The pile-up should saturate the clamp (proves the raw value exceeded 1).
-    assert i_sp >= 0.99, f"I_sp not saturated near 1 for a close pedestrian: {i_sp}"
+    assert 0.0 <= i_sp <= 1.0, f"I_sp out of [0,1]: {i_sp}"
+    # Elevated (close pedestrian dominates the average) but NOT clip-saturated.
+    assert 0.5 < i_sp < 1.0, f"I_sp not a high-but-unsaturated weighted average: {i_sp}"
 
 
 def test_comfort_coeff_default_unchanged_in_v19():
