@@ -121,3 +121,23 @@ def test_explicit_regime_args_override_paper():
     env = CrowdSimEnv(num_humans=10, scenario='paper_challenging', human_motion_model='orca',
                       max_time=50.0, comfort_coeff=6.0, collision_threshold=0.6)
     assert (env.max_time, env.comfort_coeff, env.collision_threshold) == (50.0, 6.0, 0.6)
+
+
+def test_make_env_paper_regime_forces_budget():
+    env = make_env(num_humans=3, scenario='easy', seed=0, paper_regime=True)()
+    assert env.max_time == 12.5
+    assert env.comfort_coeff == 2.0
+    assert env.collision_threshold == 0.3
+
+
+def test_make_env_nonpaper_defaults_unchanged():
+    env = make_env(num_humans=5, scenario='hard', seed=0)()
+    assert env.max_time == 50.0
+    assert env.comfort_coeff == 6.0
+    assert env.collision_threshold == env.robot_radius + env.human_radius
+
+
+def test_train_parser_budget_defaults_are_none():
+    args = build_parser().parse_args([])
+    assert args.max_time is None
+    assert args.comfort_coeff is None
