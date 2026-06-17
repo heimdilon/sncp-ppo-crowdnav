@@ -263,25 +263,23 @@ def test_versioned_post_eval_cli_derives_paths_from_version(tmp_path, monkeypatc
     assert "Overall status: pass" in capsys.readouterr().out
 
 
-def test_notebook_is_v27_pre_mlp_ablation():
-    # v27 = v26 + pre-MLP (Eq 11) ONLY. The per-scenario paper budget + 8m crossing +
-    # normalized comfort stay env-DERIVED from --fixed_scenario (no CLI budget), so the
-    # single change vs v26 is `--pre_mlp` plus the v27 save path.
+def test_notebook_is_v28_density_curriculum():
+    # v28 = v27 (pre-MLP) + N~U(10,20) density curriculum ONLY. The defining change
+    # is --num_humans_range; --pre_mlp and the env-derived paper budget are retained.
     code = _colab_code_sources()
     train_cells = [s for s in code if "sncp_ppo.train" in s and "--fixed_scenario" in s]
     eval_cells = [s for s in code if "run_post_eval.py" in s]
     assert len(train_cells) == 1 and len(eval_cells) == 1
     train, ev = train_cells[0], eval_cells[0]
-    # Training: paper scenario + v27 save path + the defining --pre_mlp flag.
     assert "paper_challenging" in train
-    assert "checkpoints/sncp_ppo_v27.pt" in train
-    assert "'--pre_mlp'" in train
-    # Single-variable guard: every v26 invariant still present (regime unchanged).
+    assert "checkpoints/sncp_ppo_v28.pt" in train
+    assert "'--pre_mlp'" in train                       # v27 carried forward
+    assert "'--num_humans_range'" in train              # the v28 change
     for tok in ("TOTAL_STEPS = 2_500_000", "SEED = 42", "'--robot_vpref', '1.0'",
-                "'--num_humans', '10'", "'--holdout_episodes', '50'"):
+                "'--holdout_episodes', '50'"):
         assert tok in train, tok
-    # Eval: v27, paper baseline beeline 32 (8 m crossing at 1.0 m/s), no forced budget.
-    assert "'--version', '27'" in ev
+    # Eval: v28, paper baseline beeline 32 (8 m crossing at 1.0 m/s), no forced budget.
+    assert "'--version', '28'" in ev
     assert "'--baseline_nav_steps', '32'" in ev
     assert "'--max_time'" not in ev
 

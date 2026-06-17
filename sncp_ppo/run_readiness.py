@@ -8,16 +8,16 @@ from pathlib import Path
 from typing import Sequence
 
 
-# v27 = v26 + paper Eq 11 pre-MLP edge embedding (--pre_mlp), single-variable ablation.
+# v28 = v27 (pre-MLP) + N~U(10,20) density curriculum (--num_humans_range), single-variable.
 # Budget (challenging 50s, standard 12.5s), 8m crossing and normalized comfort (Eq 7)
 # stay env-DERIVED from --fixed_scenario paper_challenging, so the training cell must NOT
-# pass any budget on the CLI. The only change vs v26 is --pre_mlp + the v27 save path.
+# pass any budget on the CLI. The only change vs v27 is --num_humans_range + the v28 save path.
 TRAINING_TOKENS = (
     "NUM_ENVS = 16",
     "HORIZON = 128",
     "TOTAL_STEPS = 2_500_000",
     "LR = 1e-4",
-    "SAVE_PATH = 'checkpoints/sncp_ppo_v27.pt'",
+    "SAVE_PATH = 'checkpoints/sncp_ppo_v28.pt'",
     "'--num_envs', str(NUM_ENVS)",
     "'--horizon', str(HORIZON)",
     "'--total_steps', str(TOTAL_STEPS)",
@@ -30,18 +30,19 @@ TRAINING_TOKENS = (
     "'--holdout_scenarios', 'paper_standard', 'paper_challenging'",
     "'--holdout_episodes', '50'",
     "'--pre_mlp'",
+    "'--num_humans_range'",
     "'--save_path', SAVE_PATH",
     "if p.returncode != 0:",
     "raise SystemExit(p.returncode)",
 )
 
 EVALUATION_TOKENS = (
-    "CHECKPOINT = 'checkpoints/sncp_ppo_v27.pt'",
-    "EVAL_OUT = 'eval_v27'",
+    "CHECKPOINT = 'checkpoints/sncp_ppo_v28.pt'",
+    "EVAL_OUT = 'eval_v28'",
     "EVAL_SEED = 100",
     "EVAL_EPISODES = 50",
     "run_post_eval.py",
-    "'--version', '27'",
+    "'--version', '28'",
     "'--densities', '5', '10', '15', '20'",
     "'--scenario', 'paper_challenging'",
     "'--n_episodes', str(EVAL_EPISODES)",
@@ -132,22 +133,22 @@ def verify_v16_run_ready(repo_root: str | Path = ".") -> V16RunReadinessSummary:
     cells = _load_notebook(repo_root / "sncp_ppo_colab.ipynb") or []
     training_cell = _find_unique_cell(
         cells,
-        "SAVE_PATH = 'checkpoints/sncp_ppo_v27.pt'",
+        "SAVE_PATH = 'checkpoints/sncp_ppo_v28.pt'",
         notes,
-        "v27 training",
+        "v28 training",
     )
     evaluation_cell = _find_unique_cell(
         cells,
-        "CHECKPOINT = 'checkpoints/sncp_ppo_v27.pt'",
+        "CHECKPOINT = 'checkpoints/sncp_ppo_v28.pt'",
         notes,
-        "v27 evaluation",
+        "v28 evaluation",
     )
-    _check_tokens(training_cell, TRAINING_TOKENS, notes, "v27 training")
-    _check_tokens(evaluation_cell, EVALUATION_TOKENS, notes, "v27 evaluation")
+    _check_tokens(training_cell, TRAINING_TOKENS, notes, "v28 training")
+    _check_tokens(evaluation_cell, EVALUATION_TOKENS, notes, "v28 evaluation")
 
     densities = _baseline_densities(repo_root / "eval_v22" / "density_sweep.json", notes)
     if not notes:
-        notes.append("PASS: v27 Colab training and evaluation configuration is ready")
+        notes.append("PASS: v28 Colab training and evaluation configuration is ready")
 
     return V16RunReadinessSummary(
         status=_status(notes),
