@@ -686,7 +686,7 @@ def step_to_phase(steps_seen, total_steps, final_num_humans):
 
 def select_vectorized_phase(steps_seen, total_steps, final_num_humans,
                             replay_ratio=0.0, rng=random, fixed_scenario=None,
-                            bootstrap_easy_steps=0):
+                            bootstrap_easy_steps=0, num_humans_range=None):
     """Select the next vectorized PPO update phase.
 
     With replay enabled, a fraction of update windows re-samples a uniformly
@@ -706,7 +706,10 @@ def select_vectorized_phase(steps_seen, total_steps, final_num_humans,
             _, easy_vpref = SCENARIO_HOLDOUT_CONFIG['easy']
             return ('easy', 1, easy_vpref), False
         _, vpref = SCENARIO_HOLDOUT_CONFIG.get(fixed_scenario, (5, 0.26))
-        return (fixed_scenario, final_num_humans, vpref), False
+        n_humans = final_num_humans
+        if num_humans_range is not None:
+            n_humans = rng.randint(int(num_humans_range[0]), int(num_humans_range[1]))
+        return (fixed_scenario, n_humans, vpref), False
     phases = curriculum_phases(final_num_humans)
     current_idx = phase_index_for_steps(steps_seen, total_steps)
     if replay_ratio > 0.0 and current_idx > 0 and rng.random() < replay_ratio:
@@ -753,6 +756,7 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
     collision_threshold = getattr(args, 'collision_threshold', None)
     fixed_scenario = getattr(args, 'fixed_scenario', None)
     bootstrap_easy_steps = getattr(args, 'bootstrap_easy_steps', 0)
+    num_humans_range = getattr(args, 'num_humans_range', None)
     # Forces the paper budget on every env (incl. the easy bootstrap + holdout eval_env);
     # comfort_coeff/max_time above may be None, which the env resolves per this flag.
     paper_regime = fixed_scenario in PAPER_SCENARIO_CONFIG
@@ -810,7 +814,7 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
 
     (scenario, H, vpref), _ = select_vectorized_phase(
         0, args.total_steps, args.num_humans, fixed_scenario=fixed_scenario,
-        bootstrap_easy_steps=bootstrap_easy_steps,
+        bootstrap_easy_steps=bootstrap_easy_steps, num_humans_range=num_humans_range,
     )
     envs, obs_np = build_envs(H, scenario, vpref)
     h = policy.init_hidden(batch_size=N, num_humans=H, device=device)
@@ -835,6 +839,7 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
             rng=random,
             fixed_scenario=fixed_scenario,
             bootstrap_easy_steps=bootstrap_easy_steps,
+            num_humans_range=num_humans_range,
         )
         if next_H != H or next_scenario != scenario:
             replay_mark = " replay" if is_replay_update else ""
@@ -1016,6 +1021,10 @@ def build_parser():
     parser.add_argument('--episodes', type=int, default=1500)
     parser.add_argument('--num_humans', type=int, default=5,
                         help='Humans in final curriculum phase (and used by env eval).')
+    parser.add_argument('--num_humans_range', type=int, nargs=2, default=None,
+                        metavar=('MIN', 'MAX'),
+                        help='Density curriculum: sample N~U[MIN,MAX] per update window '
+                             '(paper trains 10-20). Default None = fixed --num_humans.')
     parser.add_argument('--scenario', type=str, default='easy',
                         help='Initial env scenario (curriculum overrides).')
     parser.add_argument('--seed', type=int, default=42)
