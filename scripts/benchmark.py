@@ -1,6 +1,8 @@
 """Micro-benchmark for CrowdSimEnv._get_obs (the vectorized spatial_edges path).
 Run directly: ``python benchmark.py``."""
 
+import os as _os, sys as _sys  # repo-root path bootstrap (run standalone: python scripts/X.py)
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 import timeit
 
 from crowd_sim.crowd_env import CrowdSimEnv

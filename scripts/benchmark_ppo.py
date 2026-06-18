@@ -1,3 +1,5 @@
+import os as _os, sys as _sys  # repo-root path bootstrap (run standalone: python scripts/X.py)
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 import torch
 import time
 

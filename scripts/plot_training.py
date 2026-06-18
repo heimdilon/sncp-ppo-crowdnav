@@ -12,6 +12,8 @@ Supports both:
   - Legacy single-scenario format: holdout_{success,collision,timeout,reward}
   - New multi-scenario format:     holdout_<scenario>_{success,collision,...}
 """
+import os as _os, sys as _sys  # repo-root path bootstrap (run standalone: python scripts/X.py)
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
 import argparse
 import csv
 import os
