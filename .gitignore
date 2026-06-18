@@ -60,3 +60,18 @@ checkpoints/*smoke*.pt
 checkpoints/*_ep*.pt
 checkpoints/sncp_ppo_default_test*.pt
 checkpoints/sncp_ppo_final.pt
+
+# --- Project: experiment artifacts & local deliverables (local only) ---
+/eval_v*/
+/*.zip
+/training_*.csv
+/*_multiseed_result.json
+/sncp_ppo_v*.pt
+checkpoints/*.pt
+/*.png
+/*.gif
+rapor/
+ltc_sunum/
+ltc_blog_app/
+scratch/
+.pytmp/
