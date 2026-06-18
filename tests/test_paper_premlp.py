@@ -19,6 +19,9 @@ def _dummy_obs(batch, humans):
 
 
 def test_default_policy_still_loads_v18_checkpoint():
+    import os, pytest
+    if not os.path.exists('checkpoints/sncp_ppo_v18.pt'):
+        pytest.skip('milestone checkpoint checkpoints/sncp_ppo_v18.pt is git-ignored; present only locally')
     state = torch.load('checkpoints/sncp_ppo_v18.pt', map_location='cpu')
     policy = build_policy_for_checkpoint(state)
     policy.load_state_dict(state)  # must not raise
