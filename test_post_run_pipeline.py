@@ -263,23 +263,24 @@ def test_versioned_post_eval_cli_derives_paths_from_version(tmp_path, monkeypatc
     assert "Overall status: pass" in capsys.readouterr().out
 
 
-def test_notebook_is_v28_density_curriculum():
-    # v28 = v27 (pre-MLP) + N~U(10,20) density curriculum ONLY. The defining change
-    # is --num_humans_range; --pre_mlp and the env-derived paper budget are retained.
+def test_notebook_is_v29_attn_count_scaling():
+    # v29 = v28 (pre-MLP + density curriculum) + Eq 13 attention count-scaling ONLY.
+    # The defining change is --attn_count_scaling; --pre_mlp and --num_humans_range stay.
     code = _colab_code_sources()
     train_cells = [s for s in code if "sncp_ppo.train" in s and "--fixed_scenario" in s]
     eval_cells = [s for s in code if "run_post_eval.py" in s]
     assert len(train_cells) == 1 and len(eval_cells) == 1
     train, ev = train_cells[0], eval_cells[0]
     assert "paper_challenging" in train
-    assert "checkpoints/sncp_ppo_v28.pt" in train
-    assert "'--pre_mlp'" in train                       # v27 carried forward
-    assert "'--num_humans_range'" in train              # the v28 change
+    assert "checkpoints/sncp_ppo_v29.pt" in train
+    assert "'--attn_count_scaling'" in train            # the v29 change
+    assert "'--pre_mlp'" in train                        # v27 carried forward
+    assert "'--num_humans_range'" in train               # v28 carried forward
     for tok in ("TOTAL_STEPS = 2_500_000", "SEED = 42", "'--robot_vpref', '1.0'",
                 "'--holdout_episodes', '50'"):
         assert tok in train, tok
-    # Eval: v28, paper baseline beeline 32 (8 m crossing at 1.0 m/s), no forced budget.
-    assert "'--version', '28'" in ev
+    # Eval: v29, paper baseline beeline 32 (8 m crossing at 1.0 m/s), no forced budget.
+    assert "'--version', '29'" in ev
     assert "'--baseline_nav_steps', '32'" in ev
     assert "'--max_time'" not in ev
 
