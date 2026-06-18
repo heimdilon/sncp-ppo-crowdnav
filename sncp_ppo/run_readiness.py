@@ -124,7 +124,7 @@ def verify_v16_run_ready(repo_root: str | Path = ".") -> V16RunReadinessSummary:
 
     required_files = (
         repo_root / "sncp_ppo_colab.ipynb",
-        repo_root / "run_post_eval.py",
+        repo_root / "scripts" / "run_post_eval.py",
         repo_root / "eval_v22" / "density_sweep.json",
     )
     for path in required_files:

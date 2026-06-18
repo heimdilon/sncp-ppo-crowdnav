@@ -64,8 +64,15 @@ repo/
    `plot_training.py`) → `scripts/<name>.py`. (Run-readiness/version-marker tokens are
    substrings like `run_post_eval.py`, so they still match.)
 5. **Untrack from GitHub (`git rm --cached`, local copies + history retained):**
-   `checkpoints/*.pt` (9 milestones, 19M), `eval_v15/ eval_v16/ eval_v18/ eval_v19/ eval_v21/
-   eval_v22/` (old eval artifacts), the root result images listed above.
+   - `checkpoints/*.pt` (9 milestones, 19M) — AND add a skip-guard so `test_attention_scaling`
+     (which `torch.load`s `checkpoints/sncp_ppo_v18.pt`) skips when that file is absent, so a
+     fresh clone's suite stays green.
+   - `eval_v18/ eval_v19/ eval_v21/` — **ZERO code/notebook references (verified)**.
+   - the 10 root result images (no references, verified).
+   - **KEEP tracked** (pipeline-referenced, verified — untracking would break a fresh clone):
+     `eval_v15/` (run_post_eval default baseline + v17/v18 pipelines, 7 refs), `eval_v16/`
+     (verify_v16_artifacts, 4 refs), `eval_v22/` (run-readiness REQUIRES
+     `eval_v22/density_sweep.json`; notebook eval baseline).
 6. **`.gitignore` additions:** `/eval_v*/`, `/*.zip`, `/training_*.csv`,
    `/*_multiseed_result.json`, `/sncp_ppo_v*.pt`, `checkpoints/*.pt`, `/*.png`, `/*.gif`
    (root-anchored — only repo-root images; `demo/` is a subdir and keeps its `!demo/*.gif`
