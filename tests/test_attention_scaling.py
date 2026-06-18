@@ -26,6 +26,9 @@ def test_default_has_no_scaling_buffer_and_is_checkpoint_compatible():
     assert default.attn_count_scaling is False
     assert '_attn_count_scaling' not in default.state_dict()
     # a v18 checkpoint (no scaling buffer) loads into a default policy unchanged
+    import os, pytest
+    if not os.path.exists('checkpoints/sncp_ppo_v18.pt'):
+        pytest.skip('milestone checkpoint checkpoints/sncp_ppo_v18.pt is git-ignored; present only locally')
     state = torch.load('checkpoints/sncp_ppo_v18.pt', map_location='cpu')
     policy = build_policy_for_checkpoint(state)
     policy.load_state_dict(state)
