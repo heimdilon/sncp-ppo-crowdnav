@@ -17,7 +17,7 @@ def _orthogonal_linear(layer, gain):
 
 class SNCPPolicy(nn.Module):
     def __init__(self, robot_vpref=0.26, robot_wmax=1.8, pre_mlp=False,
-                 attn_count_scaling=False):
+                 attn_count_scaling=False, meanmax_pool=False):
         super(SNCPPolicy, self).__init__()
 
         self.robot_vpref = robot_vpref
@@ -33,6 +33,14 @@ class SNCPPolicy(nn.Module):
         self.attn_count_scaling = attn_count_scaling
         if attn_count_scaling:
             self.register_buffer('_attn_count_scaling', torch.tensor(1.0))
+
+        # Mean+max attention pooling (v30): the default pool is a convex combination
+        # Sum_h alpha_h * M_rh,h, which regresses to the mean at high N and dilutes the
+        # most-threatening agent. meanmax_pool concats that mean with an element-wise
+        # max over humans (cardinality-robust) and merges them with pool_merge. The
+        # layer exists ONLY when on, so default checkpoints stay byte-identical and
+        # build_policy_for_checkpoint can auto-detect the variant (pre_mlp pattern).
+        self.meanmax_pool = meanmax_pool
 
         # 1. Robot Node Encoder (MLP)
         # Input robot_node: [dg_local_x, dg_local_y, v_linear, dist_to_goal, vpref, radius, w_angular] (dim 7)
@@ -89,6 +97,8 @@ class SNCPPolicy(nn.Module):
         # 4. Attention Pooling weights
         self.W_q = nn.Linear(256, 64)
         self.W_k = nn.Linear(256, 64)
+        if meanmax_pool:
+            self.pool_merge = nn.Linear(512, 256)
         
         # 5. Node NCP Encoder — sparse NCP fusing robot(128)+temporal(256)+
         # attention(256)=640 dims. Sized up to 128 units / 48 motor so the
@@ -136,6 +146,8 @@ class SNCPPolicy(nn.Module):
         _orthogonal_linear(self.W_q, gain=sqrt2)
         _orthogonal_linear(self.W_k, gain=sqrt2)
         _orthogonal_linear(self.node_proj, gain=sqrt2)
+        if self.meanmax_pool:
+            _orthogonal_linear(self.pool_merge, gain=sqrt2)
         
         linears = [m for m in self.actor_mu if isinstance(m, nn.Linear)]
         for m in linears[:-1]:
@@ -175,7 +187,11 @@ class SNCPPolicy(nn.Module):
         if self.attn_count_scaling:
             attn_scores = attn_scores * num_humans
         alpha = F.softmax(attn_scores, dim=1)   # [B, H, 1]
-        return torch.bmm(M_rh.transpose(1, 2), alpha).squeeze(2)  # [B, 256]
+        a_mean = torch.bmm(M_rh.transpose(1, 2), alpha).squeeze(2)  # [B, 256]
+        if not self.meanmax_pool:
+            return a_mean
+        a_max = M_rh.max(dim=1).values          # [B, 256] cardinality-robust
+        return self.pool_merge(torch.cat([a_mean, a_max], dim=1))  # [B, 256]
 
     def forward(self, obs, hidden_states):
         """
@@ -272,5 +288,7 @@ def build_policy_for_checkpoint(state_dict, robot_vpref=0.26, robot_wmax=1.8):
     """
     pre_mlp = any(key.startswith('temporal_pre_mlp') for key in state_dict)
     attn_count_scaling = '_attn_count_scaling' in state_dict
+    meanmax_pool = any(key.startswith('pool_merge') for key in state_dict)
     return SNCPPolicy(robot_vpref=robot_vpref, robot_wmax=robot_wmax,
-                      pre_mlp=pre_mlp, attn_count_scaling=attn_count_scaling)
+                      pre_mlp=pre_mlp, attn_count_scaling=attn_count_scaling,
+                      meanmax_pool=meanmax_pool)
