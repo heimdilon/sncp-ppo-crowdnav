@@ -80,3 +80,18 @@ def test_pre_mlp_and_meanmax_coexist():
     h = policy.init_hidden(2, 8, torch.device('cpu'))
     mu, std, value, _ = policy(_obs(2, 8), h)
     assert torch.isfinite(mu).all() and torch.isfinite(value).all()
+
+
+def test_train_cli_and_build_thread_the_flag():
+    import argparse
+    from crowd_sim.crowd_env import CrowdSimEnv
+    from sncp_ppo.train import build_or_load_policy, build_parser
+
+    assert build_parser().parse_args(['--meanmax_pool']).meanmax_pool is True
+    assert build_parser().parse_args([]).meanmax_pool is False
+
+    env = CrowdSimEnv(num_humans=3, scenario='hard', robot_vpref=1.0)
+    args = argparse.Namespace(init_checkpoint=None, pre_mlp=False,
+                              attn_count_scaling=False, meanmax_pool=True)
+    policy = build_or_load_policy(args, env, torch.device('cpu'))
+    assert policy.meanmax_pool is True

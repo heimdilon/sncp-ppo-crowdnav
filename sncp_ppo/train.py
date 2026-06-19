@@ -263,6 +263,7 @@ def build_or_load_policy(args, env, device):
         robot_wmax=env.robot_wmax,
         pre_mlp=getattr(args, 'pre_mlp', False),
         attn_count_scaling=getattr(args, 'attn_count_scaling', False),
+        meanmax_pool=getattr(args, 'meanmax_pool', False),
     ).to(device)
 
 
@@ -1103,6 +1104,11 @@ def build_parser():
                              'pedestrian count enters the softmax temperature — high-N candidate. '
                              'Default off preserves v14..v23 behavior. Ignored when --init_checkpoint '
                              'is set (the variant is taken from the checkpoint).')
+    parser.add_argument('--meanmax_pool', action='store_true',
+                        help='Mean+max attention pooling (v30): concat the attention-weighted '
+                             'mean with an element-wise max over humans, merged by Linear(512->256). '
+                             'Cardinality-robust fix for the high-N convex-combination washout. '
+                             'Default off preserves v14..v29 architecture and checkpoint compatibility.')
     parser.add_argument('--bootstrap_easy_steps', type=int, default=0,
                         help='Probe mode only: run an easy/1 warmup for this many env steps '
                              'before the --fixed_scenario phase. Cold-starting at fixed N=5 '
