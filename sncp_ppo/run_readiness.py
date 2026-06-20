@@ -8,16 +8,16 @@ from pathlib import Path
 from typing import Sequence
 
 
-# v30 = v28 (pre-MLP + density curriculum) + mean+max attention pooling
-# (--meanmax_pool), single-variable on the v28 champion. v29's --attn_count_scaling is
-# dropped. Budget (challenging 50s, standard 12.5s), 8m crossing and normalized comfort
-# stay env-DERIVED from --fixed_scenario paper_challenging. Change vs v28 is --meanmax_pool.
+# v31 = v30 (pre-MLP + density curriculum + mean+max pooling) + node-fusion NCP capacity
+# 256/96 (--node_units 256 --node_output 96), single-variable. Budget (challenging 50s,
+# standard 12.5s), 8m crossing and normalized comfort stay env-DERIVED from --fixed_scenario
+# paper_challenging. Change vs v30 is the node capacity + the v31 save path.
 TRAINING_TOKENS = (
     "NUM_ENVS = 16",
     "HORIZON = 128",
     "TOTAL_STEPS = 2_500_000",
     "LR = 1e-4",
-    "SAVE_PATH = 'checkpoints/sncp_ppo_v30.pt'",
+    "SAVE_PATH = 'checkpoints/sncp_ppo_v31.pt'",
     "'--num_envs', str(NUM_ENVS)",
     "'--horizon', str(HORIZON)",
     "'--total_steps', str(TOTAL_STEPS)",
@@ -32,18 +32,20 @@ TRAINING_TOKENS = (
     "'--pre_mlp'",
     "'--num_humans_range'",
     "'--meanmax_pool'",
+    "'--node_units', '256'",
+    "'--node_output', '96'",
     "'--save_path', SAVE_PATH",
     "if p.returncode != 0:",
     "raise SystemExit(p.returncode)",
 )
 
 EVALUATION_TOKENS = (
-    "CHECKPOINT = 'checkpoints/sncp_ppo_v30.pt'",
-    "EVAL_OUT = 'eval_v30'",
+    "CHECKPOINT = 'checkpoints/sncp_ppo_v31.pt'",
+    "EVAL_OUT = 'eval_v31'",
     "EVAL_SEED = 100",
     "EVAL_EPISODES = 50",
     "run_post_eval.py",
-    "'--version', '30'",
+    "'--version', '31'",
     "'--densities', '5', '10', '15', '20'",
     "'--scenario', 'paper_challenging'",
     "'--n_episodes', str(EVAL_EPISODES)",
@@ -134,22 +136,22 @@ def verify_v16_run_ready(repo_root: str | Path = ".") -> V16RunReadinessSummary:
     cells = _load_notebook(repo_root / "sncp_ppo_colab.ipynb") or []
     training_cell = _find_unique_cell(
         cells,
-        "SAVE_PATH = 'checkpoints/sncp_ppo_v30.pt'",
+        "SAVE_PATH = 'checkpoints/sncp_ppo_v31.pt'",
         notes,
-        "v30 training",
+        "v31 training",
     )
     evaluation_cell = _find_unique_cell(
         cells,
-        "CHECKPOINT = 'checkpoints/sncp_ppo_v30.pt'",
+        "CHECKPOINT = 'checkpoints/sncp_ppo_v31.pt'",
         notes,
-        "v30 evaluation",
+        "v31 evaluation",
     )
-    _check_tokens(training_cell, TRAINING_TOKENS, notes, "v29 training")
-    _check_tokens(evaluation_cell, EVALUATION_TOKENS, notes, "v29 evaluation")
+    _check_tokens(training_cell, TRAINING_TOKENS, notes, "v31 training")
+    _check_tokens(evaluation_cell, EVALUATION_TOKENS, notes, "v31 evaluation")
 
     densities = _baseline_densities(repo_root / "eval_v22" / "density_sweep.json", notes)
     if not notes:
-        notes.append("PASS: v30 Colab training and evaluation configuration is ready")
+        notes.append("PASS: v31 Colab training and evaluation configuration is ready")
 
     return V16RunReadinessSummary(
         status=_status(notes),
