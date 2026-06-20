@@ -9,7 +9,7 @@ def _source_text(cell):
     return "".join(source) if isinstance(source, list) else source
 
 
-def test_v31_run_readiness_passes_current_repo():
+def test_v32_run_readiness_passes_current_repo():
     summary = verify_v16_run_ready(Path("."))
 
     assert summary.status == "pass"
@@ -18,8 +18,8 @@ def test_v31_run_readiness_passes_current_repo():
     assert summary.baseline_densities == (1, 3, 5, 8, 10)
 
 
-def test_v31_run_readiness_flags_stale_notebook(tmp_path):
-    # A pre-v31 notebook (v23..v30 markers) must be flagged: the v31 cells are absent.
+def test_v32_run_readiness_flags_stale_notebook(tmp_path):
+    # A pre-v32 notebook (v23..v31 markers) must be flagged: the v32 cells are absent.
     notebook = {
         "cells": [
             {
@@ -44,8 +44,8 @@ def test_v31_run_readiness_flags_stale_notebook(tmp_path):
     summary = verify_v16_run_ready(tmp_path)
 
     assert summary.status == "fail"
-    assert any("v31 training" in note for note in summary.notes)
-    assert any("v31 evaluation" in note for note in summary.notes)
+    assert any("v32 training" in note for note in summary.notes)
+    assert any("v32 evaluation" in note for note in summary.notes)
     assert any("baseline densities" in note for note in summary.notes)
 
 
@@ -65,7 +65,7 @@ def test_write_readiness_report(tmp_path):
 # the old "preflight cell before training" test no longer applies and was removed.
 
 
-def test_colab_persist_cell_downloads_eval_v31_artifact_bundle():
+def test_colab_persist_cell_downloads_eval_v32_artifact_bundle():
     notebook = json.loads(Path("sncp_ppo_colab.ipynb").read_text(encoding="utf-8"))
     code_sources = [
         _source_text(cell)
@@ -77,6 +77,6 @@ def test_colab_persist_cell_downloads_eval_v31_artifact_bundle():
     assert len(persist_cells) == 1
     persist_cell = persist_cells[0]
     assert "shutil.make_archive" in persist_cell
-    assert "'eval_v31_artifacts'" in persist_cell
-    assert "'eval_v31'" in persist_cell
+    assert "'eval_v32_artifacts'" in persist_cell
+    assert "'eval_v32'" in persist_cell
     assert "files.download(archive)" in persist_cell
