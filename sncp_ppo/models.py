@@ -17,7 +17,7 @@ def _orthogonal_linear(layer, gain):
 
 class SNCPPolicy(nn.Module):
     def __init__(self, robot_vpref=0.26, robot_wmax=1.8, pre_mlp=False,
-                 attn_count_scaling=False, meanmax_pool=False):
+                 attn_count_scaling=False, meanmax_pool=False, node_units=128, node_output=48):
         super(SNCPPolicy, self).__init__()
 
         self.robot_vpref = robot_vpref
@@ -105,7 +105,8 @@ class SNCPPolicy(nn.Module):
         # inter-neuron layer (=60) that first absorbs the 640 fused inputs stays
         # WIDER than the old dense-32 bottleneck (the 640->32 squeeze the user
         # flagged as the capacity ceiling).
-        self.node_wiring = AutoNCP(units=128, output_size=48, seed=48203)
+        self.node_units, self.node_output = node_units, node_output
+        self.node_wiring = AutoNCP(units=node_units, output_size=node_output, seed=48203)
         self.node_ltc = LTC(input_size=640, units=self.node_wiring)
         self.node_proj = nn.Linear(self.node_wiring.output_dim, 256)
         
@@ -289,6 +290,10 @@ def build_policy_for_checkpoint(state_dict, robot_vpref=0.26, robot_wmax=1.8):
     pre_mlp = any(key.startswith('temporal_pre_mlp') for key in state_dict)
     attn_count_scaling = '_attn_count_scaling' in state_dict
     meanmax_pool = any(key.startswith('pool_merge') for key in state_dict)
+    gleak = state_dict.get('node_ltc.rnn_cell.gleak')
+    node_units = int(gleak.shape[0]) if gleak is not None else 128
+    out_w = state_dict.get('node_ltc.rnn_cell.output_w')
+    node_output = int(out_w.shape[0]) if out_w is not None else 48
     return SNCPPolicy(robot_vpref=robot_vpref, robot_wmax=robot_wmax,
                       pre_mlp=pre_mlp, attn_count_scaling=attn_count_scaling,
-                      meanmax_pool=meanmax_pool)
+                      meanmax_pool=meanmax_pool, node_units=node_units, node_output=node_output)
