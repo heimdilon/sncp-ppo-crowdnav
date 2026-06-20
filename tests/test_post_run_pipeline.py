@@ -263,26 +263,25 @@ def test_versioned_post_eval_cli_derives_paths_from_version(tmp_path, monkeypatc
     assert "Overall status: pass" in capsys.readouterr().out
 
 
-def test_notebook_is_v30_meanmax_pool():
-    # v30 = v28 (pre-MLP + density curriculum) + mean+max attention pooling ONLY.
-    # The defining change is --meanmax_pool; --pre_mlp and --num_humans_range stay;
-    # v29's --attn_count_scaling is DROPPED (v30 builds on the v28 champion, not v29).
+def test_notebook_is_v31_node_capacity():
+    # v31 = v30 (pre-MLP + density curriculum + mean+max) + node-fusion capacity 256/96 ONLY.
+    # The defining change is --node_units/--node_output; --meanmax_pool/--pre_mlp/--num_humans_range stay.
     code = _colab_code_sources()
     train_cells = [s for s in code if "sncp_ppo.train" in s and "--fixed_scenario" in s]
     eval_cells = [s for s in code if "run_post_eval.py" in s]
     assert len(train_cells) == 1 and len(eval_cells) == 1
     train, ev = train_cells[0], eval_cells[0]
     assert "paper_challenging" in train
-    assert "checkpoints/sncp_ppo_v30.pt" in train
-    assert "'--meanmax_pool'" in train                   # the v30 change
+    assert "checkpoints/sncp_ppo_v31.pt" in train
+    assert "'--node_units', '256'" in train              # the v31 change
+    assert "'--node_output', '96'" in train              # the v31 change
+    assert "'--meanmax_pool'" in train                   # v30 carried forward
     assert "'--pre_mlp'" in train                         # v27 carried forward
     assert "'--num_humans_range'" in train                # v28 carried forward
-    assert "'--attn_count_scaling'" not in train          # v29 dropped
     for tok in ("TOTAL_STEPS = 2_500_000", "SEED = 42", "'--robot_vpref', '1.0'",
                 "'--holdout_episodes', '50'"):
         assert tok in train, tok
-    # Eval: v30, paper baseline beeline 32 (8 m crossing at 1.0 m/s), no forced budget.
-    assert "'--version', '30'" in ev
+    assert "'--version', '31'" in ev
     assert "'--baseline_nav_steps', '32'" in ev
     assert "'--max_time'" not in ev
 
