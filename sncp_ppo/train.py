@@ -264,6 +264,8 @@ def build_or_load_policy(args, env, device):
         pre_mlp=getattr(args, 'pre_mlp', False),
         attn_count_scaling=getattr(args, 'attn_count_scaling', False),
         meanmax_pool=getattr(args, 'meanmax_pool', False),
+        node_units=getattr(args, 'node_units', 128),
+        node_output=getattr(args, 'node_output', 48),
     ).to(device)
 
 
@@ -1109,6 +1111,12 @@ def build_parser():
                              'mean with an element-wise max over humans, merged by Linear(512->256). '
                              'Cardinality-robust fix for the high-N convex-combination washout. '
                              'Default off preserves v14..v29 architecture and checkpoint compatibility.')
+    parser.add_argument('--node_units', type=int, default=128,
+                        help='Node-fusion NCP total neuron count (v31 capacity experiment; default '
+                             '128 preserves v14..v30). Auto-detected from the checkpoint on load.')
+    parser.add_argument('--node_output', type=int, default=48,
+                        help='Node-fusion NCP motor (output) neuron count; must be < --node_units '
+                             '(default 48; v31 uses 96 for units=256). Auto-detected on load.')
     parser.add_argument('--bootstrap_easy_steps', type=int, default=0,
                         help='Probe mode only: run an easy/1 warmup for this many env steps '
                              'before the --fixed_scenario phase. Cold-starting at fixed N=5 '

@@ -74,3 +74,20 @@ def test_node_capacity_coexists_with_premlp_and_meanmax():
     h = policy.init_hidden(2, 8, torch.device('cpu'))
     mu, std, value, _ = policy(_obs(2, 8), h)
     assert torch.isfinite(mu).all() and torch.isfinite(value).all()
+
+
+def test_train_cli_and_build_thread_node_size():
+    import argparse
+    from crowd_sim.crowd_env import CrowdSimEnv
+    from sncp_ppo.train import build_or_load_policy, build_parser
+
+    a = build_parser().parse_args(['--node_units', '256', '--node_output', '96'])
+    assert a.node_units == 256 and a.node_output == 96
+    d = build_parser().parse_args([])
+    assert d.node_units == 128 and d.node_output == 48
+
+    env = CrowdSimEnv(num_humans=3, scenario='hard', robot_vpref=1.0)
+    args = argparse.Namespace(init_checkpoint=None, pre_mlp=False, attn_count_scaling=False,
+                              meanmax_pool=False, node_units=256, node_output=96)
+    policy = build_or_load_policy(args, env, torch.device('cpu'))
+    assert policy.node_units == 256 and policy.node_output == 96
