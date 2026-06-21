@@ -129,3 +129,21 @@ def test_build_or_load_policy_respects_action_dist():
     policy = build_or_load_policy(args, FakeEnv(), torch.device('cpu'))
     assert policy.action_dist == 'beta'
     assert not hasattr(policy, 'actor_logstd')
+
+
+def test_diagnostic_row_handles_beta_no_logstd():
+    # The CSV diagnostics logger reads actor_logstd; beta has none -> must not crash.
+    from sncp_ppo.train import update_diagnostic_row
+    p = SNCPPolicy(meanmax_pool=True, action_dist='beta')
+
+    class _Rms:
+        std = 1.0
+
+    class _Agent:
+        last_entropy = 0.5
+        last_approx_kl = 0.01
+        return_rms = _Rms()
+
+    row = update_diagnostic_row(p, _Agent())
+    assert len(row) == 5
+    assert row[2] == 'nan' and row[3] == 'nan'   # no global std for beta

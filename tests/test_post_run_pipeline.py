@@ -263,27 +263,27 @@ def test_versioned_post_eval_cli_derives_paths_from_version(tmp_path, monkeypatc
     assert "Overall status: pass" in capsys.readouterr().out
 
 
-def test_notebook_is_v33_multihead_attention():
-    # v33 = v30 (pre-MLP + mean+max) + 4-head multi-head cross-attention (--attn_heads 4).
-    # Reverts v32's flat N->25/4M to the v30 recipe (--num_humans_range 10 20, TOTAL_STEPS 2.5M).
+def test_notebook_is_v34_beta_action():
+    # v34 = v30 (pre-MLP + mean+max) + Beta action distribution (--action_dist beta).
+    # Reverts v33's multi-head; keeps the v30 recipe (--num_humans_range 10 20, TOTAL_STEPS 2.5M).
     code = _colab_code_sources()
     train_cells = [s for s in code if "sncp_ppo.train" in s and "--fixed_scenario" in s]
     eval_cells = [s for s in code if "run_post_eval.py" in s]
     assert len(train_cells) == 1 and len(eval_cells) == 1
     train, ev = train_cells[0], eval_cells[0]
     assert "paper_challenging" in train
-    assert "checkpoints/sncp_ppo_v33.pt" in train
-    assert "'--attn_heads', '4'" in train                  # multi-head attention (v33)
-    assert "'--num_humans_range', '10', '20'" in train    # v30 recipe restored
-    assert "TOTAL_STEPS = 2_500_000" in train             # v30 budget restored
+    assert "checkpoints/sncp_ppo_v34.pt" in train
+    assert "'--action_dist', 'beta'" in train             # Beta action distribution (v34)
+    assert "'--attn_heads'" not in train                   # v33 multi-head reverted
+    assert "'--num_humans_range', '10', '20'" in train    # v30 recipe
+    assert "TOTAL_STEPS = 2_500_000" in train             # v30 budget
     assert "'--meanmax_pool'" in train                    # v30 carried forward
     assert "'--pre_mlp'" in train                          # v27 carried forward
-    assert "'--node_units'" not in train                   # v31 node capacity stays dropped
+    assert "'--node_units'" not in train                   # v31 stays dropped
     assert "'--attn_count_scaling'" not in train           # v29 stays dropped
-    assert "'10', '25'" not in train                        # v32 reach reverted
     for tok in ("SEED = 42", "'--robot_vpref', '1.0'", "'--holdout_episodes', '50'"):
         assert tok in train, tok
-    assert "'--version', '33'" in ev
+    assert "'--version', '34'" in ev
     assert "'--baseline_nav_steps', '32'" in ev
     assert "'--max_time'" not in ev
 

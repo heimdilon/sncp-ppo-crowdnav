@@ -200,15 +200,24 @@ UPDATE_DIAGNOSTIC_COLUMNS = [
 ]
 
 
+def _policy_std_pair(policy):
+    """(std_v, std_w) for the Gaussian global logstd, or (nan, nan) for Beta
+    (the Beta action dist is state-dependent and has no single global std)."""
+    if hasattr(policy, 'actor_logstd'):
+        with torch.no_grad():
+            s = policy.actor_logstd.exp().squeeze().detach().cpu().numpy()
+        return float(s[0]), float(s[1])
+    return float('nan'), float('nan')
+
+
 def update_diagnostic_row(policy, agent):
     """Return PPO stability diagnostics for CSV logging."""
-    with torch.no_grad():
-        std = policy.actor_logstd.exp().squeeze().detach().cpu().numpy()
+    std0, std1 = _policy_std_pair(policy)
     return [
         f"{float(agent.last_entropy):.6f}",
         f"{float(agent.last_approx_kl):.8f}",
-        f"{float(std[0]):.6f}",
-        f"{float(std[1]):.6f}",
+        f"{std0:.6f}",
+        f"{std1:.6f}",
         f"{float(agent.return_rms.std):.6f}",
     ]
 
@@ -599,11 +608,10 @@ def train(args):
             # PPO diagnostics from the most recent update — reveals policy
             # collapse (ent→0), exploding KL, or stuck std before the holdout
             # metrics catch up.
-            with torch.no_grad():
-                std = policy.actor_logstd.exp().squeeze().cpu().numpy()
+            std0, std1 = _policy_std_pair(policy)
             line += (f" | ent={agent.last_entropy:+.3f}"
                      f" kl={agent.last_approx_kl:.5f}"
-                     f" std=[{std[0]:.3f},{std[1]:.3f}]"
+                     f" std=[{std0:.3f},{std1:.3f}]"
                      f" rms={agent.return_rms.std:.2f}")
             # Live progress: elapsed wall-clock + moving-average ETA + clock
             # time of the projected finish (uses the last <=50 episodes, so the
@@ -986,12 +994,11 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
                 _train_vectorized._csv_io_warned = True
 
         if update_idx % 10 == 0:
-            with torch.no_grad():
-                stdv = policy.actor_logstd.exp().squeeze().cpu().numpy()
+            std0, std1 = _policy_std_pair(policy)
             replay_mark = "R" if is_replay_update else " "
             print(f"Update {update_idx} | step {total_steps}/{args.total_steps} [{scenario} {H}h] | "
                   f"[{replay_mark}] ent={agent.last_entropy:+.3f} kl={agent.last_approx_kl:.5f} "
-                  f"std=[{stdv[0]:.3f},{stdv[1]:.3f}] rms={agent.return_rms.std:.2f}")
+                  f"std=[{std0:.3f},{std1:.3f}] rms={agent.return_rms.std:.2f}")
 
     envs.close()
     # I/O-robust final save: on Colab the save dir may sit behind a Drive FUSE
