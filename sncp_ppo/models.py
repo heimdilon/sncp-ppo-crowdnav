@@ -17,7 +17,8 @@ def _orthogonal_linear(layer, gain):
 
 class SNCPPolicy(nn.Module):
     def __init__(self, robot_vpref=0.26, robot_wmax=1.8, pre_mlp=False,
-                 attn_count_scaling=False, meanmax_pool=False, node_units=128, node_output=48):
+                 attn_count_scaling=False, meanmax_pool=False, node_units=128,
+                 node_output=48, attn_heads=1):
         super(SNCPPolicy, self).__init__()
 
         self.robot_vpref = robot_vpref
@@ -95,8 +96,24 @@ class SNCPPolicy(nn.Module):
         self.spatial_proj = nn.Linear(self.spatial_wiring.output_dim, 256)
         
         # 4. Attention Pooling weights
-        self.W_q = nn.Linear(256, 64)
-        self.W_k = nn.Linear(256, 64)
+        # Single-head (default, attn_heads=1): legacy projection — robot key m_rr
+        # scores each human, Value = raw M_rh. Byte-identical to v14-v32.
+        # Multi-head (attn_heads>1, v33): canonical cross-attention — robot is the
+        # query token, humans are key/value tokens, d_model=256 split across heads
+        # so each head specializes on a different simultaneous threat (the high-N
+        # failure mode). A buffer persists the head count (not recoverable from any
+        # weight shape) so build_policy_for_checkpoint can auto-detect the variant.
+        self.attn_heads = attn_heads
+        if attn_heads > 1:
+            assert 256 % attn_heads == 0, "attn_heads must divide d_model=256"
+            self.W_q = nn.Linear(256, 256)
+            self.W_k = nn.Linear(256, 256)
+            self.W_v = nn.Linear(256, 256)
+            self.W_o = nn.Linear(256, 256)
+            self.register_buffer('_attn_heads', torch.tensor(float(attn_heads)))
+        else:
+            self.W_q = nn.Linear(256, 64)
+            self.W_k = nn.Linear(256, 64)
         if meanmax_pool:
             self.pool_merge = nn.Linear(512, 256)
         
@@ -146,6 +163,9 @@ class SNCPPolicy(nn.Module):
         _orthogonal_linear(self.spatial_proj, gain=sqrt2)
         _orthogonal_linear(self.W_q, gain=sqrt2)
         _orthogonal_linear(self.W_k, gain=sqrt2)
+        if self.attn_heads > 1:
+            _orthogonal_linear(self.W_v, gain=sqrt2)
+            _orthogonal_linear(self.W_o, gain=sqrt2)
         _orthogonal_linear(self.node_proj, gain=sqrt2)
         if self.meanmax_pool:
             _orthogonal_linear(self.pool_merge, gain=sqrt2)
@@ -177,11 +197,32 @@ class SNCPPolicy(nn.Module):
             'node': h_node
         }
 
+    def _multihead_attention(self, M_rh, m_rr):
+        """Canonical multi-head cross-attention: robot m_rr is the single query
+        token, humans M_rh are the key/value tokens. Returns (a_attn [B,256],
+        alpha [B, heads, 1, H]); each head has d_head = 256 // heads dims."""
+        B, H, _ = M_rh.shape
+        nh = self.attn_heads
+        dh = 256 // nh
+        Q = self.W_q(m_rr).view(B, nh, 1, dh)                        # [B, nh, 1, dh]
+        K = self.W_k(M_rh).view(B, H, nh, dh).permute(0, 2, 1, 3)    # [B, nh, H, dh]
+        V = self.W_v(M_rh).view(B, H, nh, dh).permute(0, 2, 1, 3)    # [B, nh, H, dh]
+        scores = torch.matmul(Q, K.transpose(-1, -2)) / math.sqrt(dh)  # [B, nh, 1, H]
+        alpha = F.softmax(scores, dim=-1)
+        ctx = torch.matmul(alpha, V).reshape(B, 256)                 # [B, 256]
+        return self.W_o(ctx), alpha
+
     def _attention_pool(self, M_rh, m_rr, num_humans):
-        """Attention-weighted pooling of the per-human spatial features M_rh
-        against the robot/temporal key m_rr. With attn_count_scaling, scores are
-        scaled by n (paper Eq 13, n/sqrt(d_k)) so the pedestrian count enters the
-        softmax temperature instead of being averaged away."""
+        """Attention-weighted pooling of per-human spatial features M_rh against
+        the robot/temporal key m_rr. attn_heads>1 uses multi-head cross-attention;
+        otherwise the legacy single-head weighted average. attn_count_scaling
+        (single-head only) scales scores by n (paper Eq 13)."""
+        if self.attn_heads > 1:
+            a_attn, _ = self._multihead_attention(M_rh, m_rr)
+            if not self.meanmax_pool:
+                return a_attn
+            a_max = M_rh.max(dim=1).values
+            return self.pool_merge(torch.cat([a_attn, a_max], dim=1))
         Q = self.W_q(M_rh)                      # [B, H, 64]
         K = self.W_k(m_rr).unsqueeze(1)         # [B, 1, 64]
         attn_scores = torch.bmm(Q, K.transpose(1, 2)) / 8.0   # /sqrt(d_k)
@@ -294,6 +335,9 @@ def build_policy_for_checkpoint(state_dict, robot_vpref=0.26, robot_wmax=1.8):
     node_units = int(gleak.shape[0]) if gleak is not None else 128
     out_w = state_dict.get('node_ltc.rnn_cell.output_w')
     node_output = int(out_w.shape[0]) if out_w is not None else 48
+    ah = state_dict.get('_attn_heads')
+    attn_heads = int(ah.item()) if ah is not None else 1
     return SNCPPolicy(robot_vpref=robot_vpref, robot_wmax=robot_wmax,
                       pre_mlp=pre_mlp, attn_count_scaling=attn_count_scaling,
-                      meanmax_pool=meanmax_pool, node_units=node_units, node_output=node_output)
+                      meanmax_pool=meanmax_pool, node_units=node_units,
+                      node_output=node_output, attn_heads=attn_heads)
