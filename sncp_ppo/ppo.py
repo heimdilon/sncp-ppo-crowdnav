@@ -207,15 +207,26 @@ class PPOAgent:
         }
 
         with torch.no_grad():
-            mu, std, value, h_states_new = self.policy(obs_tensor, h_states)
+            out1, out2, value, h_states_new = self.policy(obs_tensor, h_states)
 
-        if deterministic:
-            action = mu
-            log_prob_value = 0.0
+        if self.policy.action_dist == 'beta':
+            if deterministic:
+                action = self.policy.deterministic_action(out1, out2)
+                log_prob_value = 0.0
+            else:
+                dist = torch.distributions.Beta(out1, out2)
+                x = dist.sample()
+                action = self.policy._scale_action(x)        # store physical, in-bounds
+                log_prob_value = dist.log_prob(x).sum(-1).item()
         else:
-            dist = torch.distributions.Normal(mu, std)
-            action = dist.sample()
-            log_prob_value = dist.log_prob(action).sum(-1).item()
+            mu, std = out1, out2
+            if deterministic:
+                action = mu
+                log_prob_value = 0.0
+            else:
+                dist = torch.distributions.Normal(mu, std)
+                action = dist.sample()
+                log_prob_value = dist.log_prob(action).sum(-1).item()
 
         action_np = action.cpu().numpy()[0]
 
@@ -445,8 +456,8 @@ class PPOAgent:
                 valid_mask = (torch.arange(S, device=device)[None, :] < b_len_t[:, None]).float()
                 
                 # Unroll through the sequence with BPTT
-                all_mu = []
-                all_std = []
+                all_p1 = []
+                all_p2 = []
                 all_values = []
                 
                 h_temp = b_h_temp.clone()
@@ -471,9 +482,9 @@ class PPOAgent:
                         'node': h_node
                     }
                     
-                    mu, std, value, new_h = self.policy(step_obs, step_h)
-                    all_mu.append(mu)
-                    all_std.append(std)
+                    out1, out2, value, new_h = self.policy(step_obs, step_h)
+                    all_p1.append(out1)
+                    all_p2.append(out2)
                     all_values.append(value)
                     
                     # Update hidden states for next step (BPTT: keep graph!)
@@ -486,14 +497,22 @@ class PPOAgent:
                         h_spat = h_spat_out
                 
                 # Stack: [B, S, ...]
-                all_mu = torch.stack(all_mu, dim=1)      # [B, S, 2]
-                all_std = torch.stack(all_std, dim=1)     # [B, S, 2]
+                all_p1 = torch.stack(all_p1, dim=1)      # [B, S, 2]  mu or alpha
+                all_p2 = torch.stack(all_p2, dim=1)      # [B, S, 2]  std or beta
                 all_values = torch.stack(all_values, dim=1).squeeze(-1)  # [B, S]
-                
-                # Compute log probs and entropy
-                dist = torch.distributions.Normal(all_mu, all_std)
-                new_log_probs = dist.log_prob(b_actions).sum(-1)  # [B, S]
-                entropy = dist.entropy().sum(-1)                    # [B, S]
+
+                # Compute log probs and entropy under the policy's distribution.
+                # Beta: log_prob on the [0,1] pre-image of the stored physical action;
+                # the affine _scale Jacobian is constant so it cancels in the ratio.
+                if self.policy.action_dist == 'beta':
+                    x = self.policy._unscale_action(b_actions)
+                    dist = torch.distributions.Beta(all_p1, all_p2)
+                    new_log_probs = dist.log_prob(x).sum(-1)        # [B, S]
+                    entropy = dist.entropy().sum(-1)                 # [B, S]
+                else:
+                    dist = torch.distributions.Normal(all_p1, all_p2)
+                    new_log_probs = dist.log_prob(b_actions).sum(-1)  # [B, S]
+                    entropy = dist.entropy().sum(-1)                  # [B, S]
                 
                 # Apply valid mask
                 ratio = torch.exp(new_log_probs - b_old_lp)

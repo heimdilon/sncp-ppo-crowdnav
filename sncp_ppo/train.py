@@ -267,6 +267,7 @@ def build_or_load_policy(args, env, device):
         node_units=getattr(args, 'node_units', 128),
         node_output=getattr(args, 'node_output', 48),
         attn_heads=getattr(args, 'attn_heads', 1),
+        action_dist=getattr(args, 'action_dist', 'gaussian'),
     ).to(device)
 
 
@@ -1121,6 +1122,10 @@ def build_parser():
     parser.add_argument('--attn_heads', type=int, default=1,
                         help='Attention heads for crowd pooling. 1 (default) = legacy single-head; '
                              '>1 = canonical multi-head cross-attention (v33). Auto-detected on load.')
+    parser.add_argument('--action_dist', type=str, default='gaussian',
+                        choices=['gaussian', 'beta'],
+                        help='Policy action distribution. gaussian (default) = Normal+clip; '
+                             'beta = bounded state-dependent Beta head (v34). Auto-detected on load.')
     parser.add_argument('--bootstrap_easy_steps', type=int, default=0,
                         help='Probe mode only: run an easy/1 warmup for this many env steps '
                              'before the --fixed_scenario phase. Cold-starting at fixed N=5 '
