@@ -66,3 +66,18 @@ def test_heads_differentiate():
     a = alpha[0, :, 0, :]  # [4 heads, 6 humans]
     pair_diffs = (a.unsqueeze(0) - a.unsqueeze(1)).abs().sum(-1)  # [4, 4]
     assert pair_diffs.max().item() > 1e-3
+
+
+def test_build_or_load_policy_respects_attn_heads():
+    from types import SimpleNamespace
+    from sncp_ppo.train import build_or_load_policy
+
+    class FakeEnv:
+        robot_vpref = 0.26
+        robot_wmax = 1.8
+
+    args = SimpleNamespace(init_checkpoint=None, pre_mlp=True, attn_count_scaling=False,
+                           meanmax_pool=True, node_units=128, node_output=48, attn_heads=4)
+    policy = build_or_load_policy(args, FakeEnv(), torch.device('cpu'))
+    assert int(policy._attn_heads.item()) == 4
+    assert hasattr(policy, 'W_v')
