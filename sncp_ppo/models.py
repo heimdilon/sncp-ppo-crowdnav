@@ -18,7 +18,7 @@ def _orthogonal_linear(layer, gain):
 class SNCPPolicy(nn.Module):
     def __init__(self, robot_vpref=0.26, robot_wmax=1.8, pre_mlp=False,
                  attn_count_scaling=False, meanmax_pool=False, node_units=128,
-                 node_output=48, attn_heads=1):
+                 node_output=48, attn_heads=1, action_dist='gaussian'):
         super(SNCPPolicy, self).__init__()
 
         self.robot_vpref = robot_vpref
@@ -42,6 +42,7 @@ class SNCPPolicy(nn.Module):
         # layer exists ONLY when on, so default checkpoints stay byte-identical and
         # build_policy_for_checkpoint can auto-detect the variant (pre_mlp pattern).
         self.meanmax_pool = meanmax_pool
+        self.action_dist = action_dist
 
         # 1. Robot Node Encoder (MLP)
         # Input robot_node: [dg_local_x, dg_local_y, v_linear, dist_to_goal, vpref, radius, w_angular] (dim 7)
@@ -128,19 +129,33 @@ class SNCPPolicy(nn.Module):
         self.node_proj = nn.Linear(self.node_wiring.output_dim, 256)
         
         # 6. Actor & Critic Heads
-        self.actor_mu = nn.Sequential(
-            nn.Linear(256, 64),
-            nn.ReLU(),
-            nn.Linear(64, 2)
-        )
-        # Initial std scaled per action dimension to avoid wasted clipping.
-        # Linear v in [0, 0.26]: exp(-2.0) ≈ 0.135 → ~half-range exploration.
-        # Angular w in [-1.8, 1.8]: exp(-1.5) ≈ 0.22 — kept small so that
-        # σθ per step = 0.22 · 0.25 ≈ 3.2° and the 240-step heading random
-        # walk stays under ~50°. With the old exp(-0.5) ≈ 0.607 the heading
-        # drift was ~135° per episode and the robot could not maintain
-        # orientation toward the goal.
-        self.actor_logstd = nn.Parameter(torch.tensor([[-2.0, -1.5]]), requires_grad=True)
+        # action_dist='gaussian' (default): mean head (2) + global logstd; mean is
+        # scaled by sigmoid/tanh, sampled as Normal, then clipped by the env.
+        # action_dist='beta' (v34): head emits 4 raw values -> alpha,beta (softplus+1
+        # => unimodal) for a Beta on [0,1]^2, scaled to the physical action box by the
+        # PPO layer. No logstd. Naturally bounded (no clip bias), state-dependent.
+        if action_dist == 'beta':
+            self.actor_mu = nn.Sequential(
+                nn.Linear(256, 64),
+                nn.ReLU(),
+                nn.Linear(64, 4)
+            )
+            self.register_buffer('action_low', torch.tensor([0.0, -robot_wmax]))
+            self.register_buffer('action_high', torch.tensor([robot_vpref, robot_wmax]))
+        else:
+            self.actor_mu = nn.Sequential(
+                nn.Linear(256, 64),
+                nn.ReLU(),
+                nn.Linear(64, 2)
+            )
+            # Initial std scaled per action dimension to avoid wasted clipping.
+            # Linear v in [0, 0.26]: exp(-2.0) ≈ 0.135 → ~half-range exploration.
+            # Angular w in [-1.8, 1.8]: exp(-1.5) ≈ 0.22 — kept small so that
+            # σθ per step = 0.22 · 0.25 ≈ 3.2° and the 240-step heading random
+            # walk stays under ~50°. With the old exp(-0.5) ≈ 0.607 the heading
+            # drift was ~135° per episode and the robot could not maintain
+            # orientation toward the goal.
+            self.actor_logstd = nn.Parameter(torch.tensor([[-2.0, -1.5]]), requires_grad=True)
         
         self.critic = nn.Sequential(
             nn.Linear(256, 64),
@@ -174,13 +189,13 @@ class SNCPPolicy(nn.Module):
         for m in linears[:-1]:
             _orthogonal_linear(m, gain=sqrt2)
         _orthogonal_linear(linears[-1], gain=0.01)
-        # Bias the linear-velocity pre-activation so sigmoid(2.0)·vpref ≈ 0.88·vpref
-        # at init (~0.23 m/s vs the old 0.13 m/s = sigmoid(0)·vpref). The robot
-        # needs ≥0.133 m/s to cover the 8 m goal distance within max_time = 60 s;
-        # the old default was right on the timeout cliff so the agent never
-        # received a goal-reward signal to bootstrap learning.
-        with torch.no_grad():
-            linears[-1].bias.data.copy_(torch.tensor([2.0, 0.0]))
+        # Gaussian only: bias the linear-velocity pre-activation so sigmoid(2.0)·vpref
+        # ≈ 0.88·vpref at init. The robot needs ≥0.133 m/s to cover the 8 m goal within
+        # the budget; the old default sat on the timeout cliff. Beta keeps bias 0 ->
+        # alpha=beta=softplus(0)+1≈1.69 (symmetric, mean≈0.5·vpref, ample at vpref=1.0).
+        if self.action_dist == 'gaussian':
+            with torch.no_grad():
+                linears[-1].bias.data.copy_(torch.tensor([2.0, 0.0]))
 
         linears = [m for m in self.critic if isinstance(m, nn.Linear)]
         for m in linears[:-1]:
@@ -234,6 +249,21 @@ class SNCPPolicy(nn.Module):
             return a_mean
         a_max = M_rh.max(dim=1).values          # [B, 256] cardinality-robust
         return self.pool_merge(torch.cat([a_mean, a_max], dim=1))  # [B, 256]
+
+    def _scale_action(self, x):
+        """Map x in [0,1]^2 to the physical action box [0,vpref]x[-wmax,wmax]."""
+        return self.action_low + (self.action_high - self.action_low) * x
+
+    def _unscale_action(self, a):
+        """Inverse of _scale_action; clamp to (eps,1-eps) for Beta.log_prob safety."""
+        x = (a - self.action_low) / (self.action_high - self.action_low)
+        return x.clamp(1e-6, 1.0 - 1e-6)
+
+    def deterministic_action(self, out1, out2):
+        """Greedy action: Gaussian mean (already physical) or scaled Beta mean."""
+        if self.action_dist == 'beta':
+            return self._scale_action(out1 / (out1 + out2))   # alpha/(alpha+beta)
+        return out1
 
     def forward(self, obs, hidden_states):
         """
@@ -292,17 +322,18 @@ class SNCPPolicy(nn.Module):
         sf = self.node_proj(sf_seq.squeeze(1))
         
         # 6. Actor & Critic Outputs
-        mu_raw = self.actor_mu(sf)  # [batch_size, 2]
-        
-        # Scale actor outputs to physical robot limits
-        # Linear velocity: [0, robot_vpref]
-        v_mu = torch.sigmoid(mu_raw[:, 0:1]) * self.robot_vpref
-        # Angular velocity: [-robot_wmax, robot_wmax]
-        w_mu = torch.tanh(mu_raw[:, 1:2]) * self.robot_wmax
-        mu = torch.cat([v_mu, w_mu], dim=-1)
-        
-        # Standard deviation for PPO exploration
-        std = torch.exp(self.actor_logstd).expand_as(mu)
+        actor_raw = self.actor_mu(sf)
+        if self.action_dist == 'beta':
+            # alpha,beta for a Beta on [0,1]^2; +1 => unimodal. Scaling to the
+            # physical action box happens in the PPO layer (_scale_action).
+            out1 = F.softplus(actor_raw[:, :2]) + 1.0   # alpha [B,2]
+            out2 = F.softplus(actor_raw[:, 2:]) + 1.0   # beta  [B,2]
+        else:
+            # Gaussian: scale mean to physical limits, std from the global logstd.
+            v_mu = torch.sigmoid(actor_raw[:, 0:1]) * self.robot_vpref
+            w_mu = torch.tanh(actor_raw[:, 1:2]) * self.robot_wmax
+            out1 = torch.cat([v_mu, w_mu], dim=-1)               # mu  [B,2]
+            out2 = torch.exp(self.actor_logstd).expand_as(out1)  # std [B,2]
         
         # State value
         value = self.critic(sf)  # [batch_size, 1]
@@ -318,7 +349,7 @@ class SNCPPolicy(nn.Module):
             'node': h_node_new
         }
 
-        return mu, std, value, new_hidden_states
+        return out1, out2, value, new_hidden_states
 
 
 def build_policy_for_checkpoint(state_dict, robot_vpref=0.26, robot_wmax=1.8):
@@ -337,7 +368,9 @@ def build_policy_for_checkpoint(state_dict, robot_vpref=0.26, robot_wmax=1.8):
     node_output = int(out_w.shape[0]) if out_w is not None else 48
     ah = state_dict.get('_attn_heads')
     attn_heads = int(ah.item()) if ah is not None else 1
+    action_dist = 'gaussian' if 'actor_logstd' in state_dict else 'beta'
     return SNCPPolicy(robot_vpref=robot_vpref, robot_wmax=robot_wmax,
                       pre_mlp=pre_mlp, attn_count_scaling=attn_count_scaling,
                       meanmax_pool=meanmax_pool, node_units=node_units,
-                      node_output=node_output, attn_heads=attn_heads)
+                      node_output=node_output, attn_heads=attn_heads,
+                      action_dist=action_dist)
