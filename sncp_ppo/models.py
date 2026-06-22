@@ -18,7 +18,7 @@ def _orthogonal_linear(layer, gain):
 class SNCPPolicy(nn.Module):
     def __init__(self, robot_vpref=0.26, robot_wmax=1.8, pre_mlp=False,
                  attn_count_scaling=False, meanmax_pool=False, node_units=128,
-                 node_output=48, attn_heads=1, action_dist='gaussian'):
+                 node_output=48, attn_heads=1, action_dist='gaussian', sense_range=0.0):
         super(SNCPPolicy, self).__init__()
 
         self.robot_vpref = robot_vpref
@@ -43,6 +43,13 @@ class SNCPPolicy(nn.Module):
         # build_policy_for_checkpoint can auto-detect the variant (pre_mlp pattern).
         self.meanmax_pool = meanmax_pool
         self.action_dist = action_dist
+        # Sense-range masking (v35): when >0, humans beyond this radius (metres) are
+        # excluded from the crowd attention pool — the paper's limited perception
+        # (challenging = 6 m). A buffer persists it for auto-detect; default 0 = sense
+        # all humans (v14-v34 byte-identical).
+        self.sense_range = sense_range
+        if sense_range > 0:
+            self.register_buffer('_sense_range', torch.tensor(float(sense_range)))
 
         # 1. Robot Node Encoder (MLP)
         # Input robot_node: [dg_local_x, dg_local_y, v_linear, dist_to_goal, vpref, radius, w_angular] (dim 7)
@@ -212,10 +219,19 @@ class SNCPPolicy(nn.Module):
             'node': h_node
         }
 
-    def _multihead_attention(self, M_rh, m_rr):
+    @staticmethod
+    def _masked_max(M_rh, mask, none_visible):
+        """Element-wise max over visible humans (mask True = visible); rows with no
+        visible human return a zero vector instead of -inf."""
+        masked = M_rh.masked_fill((~mask).unsqueeze(-1), float('-inf'))
+        a_max = masked.max(dim=1).values
+        return torch.where(none_visible.unsqueeze(-1), torch.zeros_like(a_max), a_max)
+
+    def _multihead_attention(self, M_rh, m_rr, mask=None):
         """Canonical multi-head cross-attention: robot m_rr is the single query
         token, humans M_rh are the key/value tokens. Returns (a_attn [B,256],
-        alpha [B, heads, 1, H]); each head has d_head = 256 // heads dims."""
+        alpha [B, heads, 1, H]); each head has d_head = 256 // heads dims. mask
+        ([B,H] bool, True = visible) zeroes hidden humans' attention weights."""
         B, H, _ = M_rh.shape
         nh = self.attn_heads
         dh = 256 // nh
@@ -223,31 +239,45 @@ class SNCPPolicy(nn.Module):
         K = self.W_k(M_rh).view(B, H, nh, dh).permute(0, 2, 1, 3)    # [B, nh, H, dh]
         V = self.W_v(M_rh).view(B, H, nh, dh).permute(0, 2, 1, 3)    # [B, nh, H, dh]
         scores = torch.matmul(Q, K.transpose(-1, -2)) / math.sqrt(dh)  # [B, nh, 1, H]
+        if mask is not None:
+            scores = scores.masked_fill((~mask).view(B, 1, 1, H), float('-inf'))
         alpha = F.softmax(scores, dim=-1)
+        if mask is not None:
+            alpha = torch.nan_to_num(alpha, nan=0.0)                 # all-hidden rows -> 0
         ctx = torch.matmul(alpha, V).reshape(B, 256)                 # [B, 256]
         return self.W_o(ctx), alpha
 
-    def _attention_pool(self, M_rh, m_rr, num_humans):
+    def _attention_pool(self, M_rh, m_rr, num_humans, mask=None):
         """Attention-weighted pooling of per-human spatial features M_rh against
         the robot/temporal key m_rr. attn_heads>1 uses multi-head cross-attention;
         otherwise the legacy single-head weighted average. attn_count_scaling
-        (single-head only) scales scores by n (paper Eq 13)."""
+        (single-head only) scales scores by n (paper Eq 13). mask ([B,N] bool, True
+        = visible) restricts pooling to humans within the sensing radius: hidden
+        humans get zero attention weight and are excluded from the max; rows with no
+        visible human return a zero crowd vector."""
+        none_visible = (~mask).all(dim=1) if mask is not None else None
         if self.attn_heads > 1:
-            a_attn, _ = self._multihead_attention(M_rh, m_rr)
+            a_attn, _ = self._multihead_attention(M_rh, m_rr, mask)
             if not self.meanmax_pool:
                 return a_attn
-            a_max = M_rh.max(dim=1).values
+            a_max = (self._masked_max(M_rh, mask, none_visible) if mask is not None
+                     else M_rh.max(dim=1).values)
             return self.pool_merge(torch.cat([a_attn, a_max], dim=1))
         Q = self.W_q(M_rh)                      # [B, H, 64]
         K = self.W_k(m_rr).unsqueeze(1)         # [B, 1, 64]
         attn_scores = torch.bmm(Q, K.transpose(1, 2)) / 8.0   # /sqrt(d_k)
         if self.attn_count_scaling:
             attn_scores = attn_scores * num_humans
+        if mask is not None:
+            attn_scores = attn_scores.masked_fill((~mask).unsqueeze(-1), float('-inf'))
         alpha = F.softmax(attn_scores, dim=1)   # [B, H, 1]
+        if mask is not None:
+            alpha = torch.nan_to_num(alpha, nan=0.0)   # all-hidden rows -> 0 weights
         a_mean = torch.bmm(M_rh.transpose(1, 2), alpha).squeeze(2)  # [B, 256]
         if not self.meanmax_pool:
             return a_mean
-        a_max = M_rh.max(dim=1).values          # [B, 256] cardinality-robust
+        a_max = (self._masked_max(M_rh, mask, none_visible) if mask is not None
+                 else M_rh.max(dim=1).values)          # [B, 256] cardinality-robust
         return self.pool_merge(torch.cat([a_mean, a_max], dim=1))  # [B, 256]
 
     def _scale_action(self, x):
@@ -312,8 +342,13 @@ class SNCPPolicy(nn.Module):
         M_rh_proj = self.spatial_proj(M_rh_seq.squeeze(1))
         M_rh = M_rh_proj.reshape(batch_size, num_humans, 256)
         
-        # 4. Attention Pooling
-        u_att = self._attention_pool(M_rh, m_rr, num_humans)
+        # 4. Attention Pooling — optionally mask humans beyond the sensing radius
+        # (paper's limited perception: only nearby humans influence the action).
+        sense_mask = None
+        if self.sense_range > 0:
+            dist = torch.hypot(spatial_edges[:, :, 0], spatial_edges[:, :, 1])  # [B, N] m
+            sense_mask = dist <= self.sense_range                                # [B, N] bool
+        u_att = self._attention_pool(M_rh, m_rr, num_humans, sense_mask)
         
         # 5. Node LTC Encoder
         node_input = torch.cat([v_m, m_rr, u_att], dim=-1).unsqueeze(1)
@@ -369,8 +404,10 @@ def build_policy_for_checkpoint(state_dict, robot_vpref=0.26, robot_wmax=1.8):
     ah = state_dict.get('_attn_heads')
     attn_heads = int(ah.item()) if ah is not None else 1
     action_dist = 'gaussian' if 'actor_logstd' in state_dict else 'beta'
+    sr = state_dict.get('_sense_range')
+    sense_range = float(sr.item()) if sr is not None else 0.0
     return SNCPPolicy(robot_vpref=robot_vpref, robot_wmax=robot_wmax,
                       pre_mlp=pre_mlp, attn_count_scaling=attn_count_scaling,
                       meanmax_pool=meanmax_pool, node_units=node_units,
                       node_output=node_output, attn_heads=attn_heads,
-                      action_dist=action_dist)
+                      action_dist=action_dist, sense_range=sense_range)
