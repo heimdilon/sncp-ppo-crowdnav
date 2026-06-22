@@ -71,3 +71,19 @@ def test_v30_checkpoint_autodetects_no_masking():
     rebuilt = build_policy_for_checkpoint(p.state_dict())
     assert rebuilt.sense_range == 0.0
     assert '_sense_range' not in dict(rebuilt.named_buffers())
+
+
+def test_build_or_load_policy_respects_sense_range():
+    from types import SimpleNamespace
+    from sncp_ppo.train import build_or_load_policy
+
+    class FakeEnv:
+        robot_vpref = 1.0
+        robot_wmax = 1.8
+
+    args = SimpleNamespace(init_checkpoint=None, pre_mlp=True, attn_count_scaling=False,
+                           meanmax_pool=True, node_units=128, node_output=48,
+                           attn_heads=1, action_dist='gaussian', sense_range=6.0)
+    policy = build_or_load_policy(args, FakeEnv(), torch.device('cpu'))
+    assert policy.sense_range == 6.0
+    assert float(policy._sense_range.item()) == 6.0

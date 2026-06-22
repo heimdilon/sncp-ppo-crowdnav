@@ -277,6 +277,7 @@ def build_or_load_policy(args, env, device):
         node_output=getattr(args, 'node_output', 48),
         attn_heads=getattr(args, 'attn_heads', 1),
         action_dist=getattr(args, 'action_dist', 'gaussian'),
+        sense_range=getattr(args, 'sense_range', 0.0),
     ).to(device)
 
 
@@ -1133,6 +1134,10 @@ def build_parser():
                         choices=['gaussian', 'beta'],
                         help='Policy action distribution. gaussian (default) = Normal+clip; '
                              'beta = bounded state-dependent Beta head (v34). Auto-detected on load.')
+    parser.add_argument('--sense_range', type=float, default=0.0,
+                        help='Robot crowd sensing radius (m). 0 (default) = sense all humans; '
+                             '>0 = mask humans beyond this range in the attention pool (v35; '
+                             'paper challenging = 6.0). Auto-detected on load.')
     parser.add_argument('--bootstrap_easy_steps', type=int, default=0,
                         help='Probe mode only: run an easy/1 warmup for this many env steps '
                              'before the --fixed_scenario phase. Cold-starting at fixed N=5 '
