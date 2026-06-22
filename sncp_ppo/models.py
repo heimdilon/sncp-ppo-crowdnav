@@ -239,6 +239,8 @@ class SNCPPolicy(nn.Module):
         K = self.W_k(M_rh).view(B, H, nh, dh).permute(0, 2, 1, 3)    # [B, nh, H, dh]
         V = self.W_v(M_rh).view(B, H, nh, dh).permute(0, 2, 1, 3)    # [B, nh, H, dh]
         scores = torch.matmul(Q, K.transpose(-1, -2)) / math.sqrt(dh)  # [B, nh, 1, H]
+        if self.attn_count_scaling:
+            scores = scores * H   # paper Eq 13 n-factor; matches single-head num_humans
         if mask is not None:
             scores = scores.masked_fill((~mask).view(B, 1, 1, H), float('-inf'))
         alpha = F.softmax(scores, dim=-1)
@@ -251,7 +253,7 @@ class SNCPPolicy(nn.Module):
         """Attention-weighted pooling of per-human spatial features M_rh against
         the robot/temporal key m_rr. attn_heads>1 uses multi-head cross-attention;
         otherwise the legacy single-head weighted average. attn_count_scaling
-        (single-head only) scales scores by n (paper Eq 13). mask ([B,N] bool, True
+        scales attention scores by n (paper Eq 13) in BOTH paths. mask ([B,N] bool, True
         = visible) restricts pooling to humans within the sensing radius: hidden
         humans get zero attention weight and are excluded from the max; rows with no
         visible human return a zero crowd vector."""
