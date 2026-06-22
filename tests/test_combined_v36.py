@@ -1,6 +1,18 @@
 import torch
 
 from sncp_ppo.models import SNCPPolicy, build_policy_for_checkpoint
+from sncp_ppo.ppo import PPOAgent
+
+
+# ---------------- Task 2: --ent_coef -> PPOAgent.c2 ----------------
+
+def test_ppo_agent_respects_ent_coef():
+    """c2 (entropy coefficient) is the knob --ent_coef wires to. Default 0.01
+    (gaussian, backward-compatible); v36 lowers it for beta (0.001). The CLI
+    flag->c2 wiring is covered end-to-end by the v36 smoke run."""
+    p = SNCPPolicy(meanmax_pool=True)
+    assert PPOAgent(policy=p).c2 == 0.01
+    assert PPOAgent(policy=p, c2=0.001).c2 == 0.001
 
 
 # ---------------- Task 1: count-scaling inside multi-head ----------------

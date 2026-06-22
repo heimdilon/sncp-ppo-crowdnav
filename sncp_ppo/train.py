@@ -335,6 +335,7 @@ def train(args):
         total_updates=total_updates,
         lr_end_factor=args.lr_end_factor,
         target_kl=args.target_kl,
+        c2=args.ent_coef,
     )
 
     # Defensive: if `checkpoints` exists as a *file* (e.g. left over from a
@@ -1138,6 +1139,11 @@ def build_parser():
                         help='Robot crowd sensing radius (m). 0 (default) = sense all humans; '
                              '>0 = mask humans beyond this range in the attention pool (v35; '
                              'paper challenging = 6.0). Auto-detected on load.')
+    parser.add_argument('--ent_coef', type=float, default=0.01,
+                        help='PPO entropy coefficient c2 (default 0.01 = gaussian-tuned, '
+                             'backward-compatible). The Beta head (v34) has a different entropy '
+                             'scale; v36 lowers this (e.g. 0.001) to prevent over-diffusion. '
+                             'Training-time only; does not affect evaluation.')
     parser.add_argument('--bootstrap_easy_steps', type=int, default=0,
                         help='Probe mode only: run an easy/1 warmup for this many env steps '
                              'before the --fixed_scenario phase. Cold-starting at fixed N=5 '
