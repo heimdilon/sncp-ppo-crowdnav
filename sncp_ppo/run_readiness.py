@@ -8,17 +8,17 @@ from pathlib import Path
 from typing import Sequence
 
 
-# v34 = v30 (pre-MLP + mean+max pooling) + Beta action distribution (--action_dist beta).
-# Reverts v33's multi-head; keeps the v30 recipe (--num_humans_range 10 20,
-# --total_steps 2_500_000). Model+PPO single-variable; the Beta variant is auto-detected
-# from the checkpoint (absence of actor_logstd). Budget/8m crossing/comfort stay
-# env-DERIVED from --fixed_scenario paper_challenging.
+# v35 = v30 (pre-MLP + mean+max pooling) + sense-range masking (--sense_range 6.0).
+# Reverts v34's Beta; keeps the v30 recipe (--num_humans_range 10 20,
+# --total_steps 2_500_000). Model-only single-variable; the masking variant is
+# auto-detected from the checkpoint (_sense_range buffer). Budget/8m crossing/comfort
+# stay env-DERIVED from --fixed_scenario paper_challenging.
 TRAINING_TOKENS = (
     "NUM_ENVS = 16",
     "HORIZON = 128",
     "TOTAL_STEPS = 2_500_000",
     "LR = 1e-4",
-    "SAVE_PATH = 'checkpoints/sncp_ppo_v34.pt'",
+    "SAVE_PATH = 'checkpoints/sncp_ppo_v35.pt'",
     "'--num_envs', str(NUM_ENVS)",
     "'--horizon', str(HORIZON)",
     "'--total_steps', str(TOTAL_STEPS)",
@@ -33,19 +33,19 @@ TRAINING_TOKENS = (
     "'--pre_mlp'",
     "'--num_humans_range'",
     "'--meanmax_pool'",
-    "'--action_dist'",
+    "'--sense_range'",
     "'--save_path', SAVE_PATH",
     "if p.returncode != 0:",
     "raise SystemExit(p.returncode)",
 )
 
 EVALUATION_TOKENS = (
-    "CHECKPOINT = 'checkpoints/sncp_ppo_v34.pt'",
-    "EVAL_OUT = 'eval_v34'",
+    "CHECKPOINT = 'checkpoints/sncp_ppo_v35.pt'",
+    "EVAL_OUT = 'eval_v35'",
     "EVAL_SEED = 100",
     "EVAL_EPISODES = 50",
     "run_post_eval.py",
-    "'--version', '34'",
+    "'--version', '35'",
     "'--densities', '5', '10', '15', '20'",
     "'--scenario', 'paper_challenging'",
     "'--n_episodes', str(EVAL_EPISODES)",
@@ -136,22 +136,22 @@ def verify_v16_run_ready(repo_root: str | Path = ".") -> V16RunReadinessSummary:
     cells = _load_notebook(repo_root / "sncp_ppo_colab.ipynb") or []
     training_cell = _find_unique_cell(
         cells,
-        "SAVE_PATH = 'checkpoints/sncp_ppo_v34.pt'",
+        "SAVE_PATH = 'checkpoints/sncp_ppo_v35.pt'",
         notes,
-        "v34 training",
+        "v35 training",
     )
     evaluation_cell = _find_unique_cell(
         cells,
-        "CHECKPOINT = 'checkpoints/sncp_ppo_v34.pt'",
+        "CHECKPOINT = 'checkpoints/sncp_ppo_v35.pt'",
         notes,
-        "v34 evaluation",
+        "v35 evaluation",
     )
-    _check_tokens(training_cell, TRAINING_TOKENS, notes, "v34 training")
-    _check_tokens(evaluation_cell, EVALUATION_TOKENS, notes, "v34 evaluation")
+    _check_tokens(training_cell, TRAINING_TOKENS, notes, "v35 training")
+    _check_tokens(evaluation_cell, EVALUATION_TOKENS, notes, "v35 evaluation")
 
     densities = _baseline_densities(repo_root / "eval_v22" / "density_sweep.json", notes)
     if not notes:
-        notes.append("PASS: v34 Colab training and evaluation configuration is ready")
+        notes.append("PASS: v35 Colab training and evaluation configuration is ready")
 
     return V16RunReadinessSummary(
         status=_status(notes),
