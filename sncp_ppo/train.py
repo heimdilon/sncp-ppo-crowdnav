@@ -872,10 +872,15 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
         for t in range(T):
             obs_t = to_tensor(obs_np)
             with torch.no_grad():
-                mu, std, value, h_next = policy(obs_t, h)
-                dist = torch.distributions.Normal(mu, std)
-                action = dist.sample()
-                log_prob = dist.log_prob(action).sum(-1)
+                out1, out2, value, h_next = policy(obs_t, h)
+                dist = policy.make_action_dist(out1, out2)
+                if policy.action_dist == 'beta':
+                    x = dist.sample()                       # in [0,1]
+                    action = policy._scale_action(x)        # store physical, in-bounds
+                    log_prob = dist.log_prob(x).sum(-1)
+                else:
+                    action = dist.sample()
+                    log_prob = dist.log_prob(action).sum(-1)
             act_np = action.cpu().numpy()
             act_np[:, 0] = np.clip(act_np[:, 0], 0.0, env.robot_vpref)
             act_np[:, 1] = np.clip(act_np[:, 1], -env.robot_wmax, env.robot_wmax)

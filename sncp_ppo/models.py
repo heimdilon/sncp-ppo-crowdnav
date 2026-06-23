@@ -291,6 +291,15 @@ class SNCPPolicy(nn.Module):
         x = (a - self.action_low) / (self.action_high - self.action_low)
         return x.clamp(1e-6, 1.0 - 1e-6)
 
+    def make_action_dist(self, p1, p2):
+        """Single source of truth for the action distribution: Beta(alpha,beta)
+        when action_dist=='beta', else Normal(mu,std). Used by BOTH the single-env
+        and the vectorized PPO paths so the Beta branch can never be silently
+        skipped (the bug this method fixes)."""
+        if self.action_dist == 'beta':
+            return torch.distributions.Beta(p1, p2)
+        return torch.distributions.Normal(p1, p2)
+
     def deterministic_action(self, out1, out2):
         """Greedy action: Gaussian mean (already physical) or scaled Beta mean."""
         if self.action_dist == 'beta':

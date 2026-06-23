@@ -706,8 +706,15 @@ class PPOAgent:
                 all_std = torch.stack(stds, dim=1)
                 all_val = torch.stack(vals, dim=1).squeeze(-1)
 
-                dist = torch.distributions.Normal(all_mu, all_std)
-                new_lp = dist.log_prob(b_act).sum(-1)
+                # Beta vs Gaussian: shared builder so the Beta branch is never
+                # skipped here (the vectorized-path bug). Beta log_prob is on the
+                # [0,1] pre-image of the stored physical action (affine Jacobian
+                # is constant -> cancels in the ratio).
+                dist = self.policy.make_action_dist(all_mu, all_std)
+                if self.policy.action_dist == 'beta':
+                    new_lp = dist.log_prob(self.policy._unscale_action(b_act)).sum(-1)
+                else:
+                    new_lp = dist.log_prob(b_act).sum(-1)
                 entropy = dist.entropy().sum(-1)
                 ratio = torch.exp(new_lp - b_olp)
                 surr1 = ratio * b_adv
