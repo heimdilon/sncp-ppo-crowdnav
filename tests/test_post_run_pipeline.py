@@ -263,31 +263,30 @@ def test_versioned_post_eval_cli_derives_paths_from_version(tmp_path, monkeypatc
     assert "Overall status: pass" in capsys.readouterr().out
 
 
-def test_notebook_is_v36_combined():
-    # v36 = v30 base + ALL levers combined (deliberately multi-variable):
-    # node-cap (v31) + reach/budget (v32) + multi-head (v33) + count-scaling (v29)
-    # + Beta with tuned entropy (v34 + --ent_coef) + sense-range (v35).
+def test_notebook_is_v34_clean_beta():
+    # v34 (redo) = v30 base (pre-MLP + mean+max + density curriculum) + Beta action
+    # distribution with tuned entropy (--action_dist beta --ent_coef 0.001), single-variable.
+    # The v36-only levers (node-cap, multi-head, count-scaling, sense-range, N->25, 4M) are OUT.
     code = _colab_code_sources()
     train_cells = [s for s in code if "sncp_ppo.train" in s and "--fixed_scenario" in s]
     eval_cells = [s for s in code if "run_post_eval.py" in s]
     assert len(train_cells) == 1 and len(eval_cells) == 1
     train, ev = train_cells[0], eval_cells[0]
     assert "paper_challenging" in train
-    assert "checkpoints/sncp_ppo_v36.pt" in train
+    assert "checkpoints/sncp_ppo_v34.pt" in train
     assert "'--pre_mlp'" in train                          # v27 carried forward
     assert "'--meanmax_pool'" in train                    # v30 carried forward
-    assert "'--sense_range', '6.0'" in train               # v35
-    assert "'--num_humans_range', '10', '25'" in train    # v32 reach
-    assert "TOTAL_STEPS = 4_000_000" in train             # v32 budget
-    assert "'--node_units', '256'" in train                # v31 capacity
-    assert "'--node_output', '96'" in train
-    assert "'--attn_heads', '4'" in train                  # v33 multi-head
-    assert "'--attn_count_scaling'" in train               # v29 count-scaling
+    assert "'--num_humans_range', '10', '20'" in train    # v30 recipe
+    assert "TOTAL_STEPS = 2_500_000" in train             # v30 budget
     assert "'--action_dist', 'beta'" in train              # v34 Beta
-    assert "'--ent_coef', '0.001'" in train                # tuned entropy ("duzgun beta")
+    assert "'--ent_coef', '0.001'" in train                # tuned entropy
+    # v36-only levers must be absent (clean single-variable Beta ablation)
+    for absent in ("'--node_units'", "'--node_output'", "'--attn_heads'",
+                   "'--attn_count_scaling'", "'--sense_range'", "'10', '25'"):
+        assert absent not in train, absent
     for tok in ("'--robot_vpref', '1.0'", "'--holdout_episodes', '50'"):
         assert tok in train, tok
-    assert "'--version', '36'" in ev
+    assert "'--version', '34'" in ev
     assert "'--baseline_nav_steps', '32'" in ev
     assert "'--max_time'" not in ev
 
