@@ -8,17 +8,18 @@ from pathlib import Path
 from typing import Sequence
 
 
-# v35 = v30 (pre-MLP + mean+max pooling) + sense-range masking (--sense_range 6.0).
-# Reverts v34's Beta; keeps the v30 recipe (--num_humans_range 10 20,
-# --total_steps 2_500_000). Model-only single-variable; the masking variant is
-# auto-detected from the checkpoint (_sense_range buffer). Budget/8m crossing/comfort
-# stay env-DERIVED from --fixed_scenario paper_challenging.
+# v36 = v30 base + ALL previously-tried levers combined (deliberately MULTI-variable):
+# v31 node capacity (--node_units 256 --node_output 96), v32 reach+budget
+# (--num_humans_range 10 25, --total_steps 4_000_000), v33 multi-head (--attn_heads 4),
+# v29 count-scaling (--attn_count_scaling), v34 Beta (--action_dist beta) with a tuned
+# entropy (--ent_coef 0.001), v35 sense-range (--sense_range 6.0). All auto-detected from
+# the checkpoint. Tests the "does the resourced/retuned combination rescue them?" hypothesis.
 TRAINING_TOKENS = (
     "NUM_ENVS = 16",
     "HORIZON = 128",
-    "TOTAL_STEPS = 2_500_000",
+    "TOTAL_STEPS = 4_000_000",
     "LR = 1e-4",
-    "SAVE_PATH = 'checkpoints/sncp_ppo_v35.pt'",
+    "SAVE_PATH = 'checkpoints/sncp_ppo_v36.pt'",
     "'--num_envs', str(NUM_ENVS)",
     "'--horizon', str(HORIZON)",
     "'--total_steps', str(TOTAL_STEPS)",
@@ -31,21 +32,27 @@ TRAINING_TOKENS = (
     "'--holdout_scenarios', 'paper_standard', 'paper_challenging'",
     "'--holdout_episodes', '50'",
     "'--pre_mlp'",
-    "'--num_humans_range'",
     "'--meanmax_pool'",
-    "'--sense_range'",
+    "'--num_humans_range', '10', '25'",
+    "'--node_units', '256'",
+    "'--node_output', '96'",
+    "'--attn_heads', '4'",
+    "'--attn_count_scaling'",
+    "'--action_dist', 'beta'",
+    "'--ent_coef', '0.001'",
+    "'--sense_range', '6.0'",
     "'--save_path', SAVE_PATH",
     "if p.returncode != 0:",
     "raise SystemExit(p.returncode)",
 )
 
 EVALUATION_TOKENS = (
-    "CHECKPOINT = 'checkpoints/sncp_ppo_v35.pt'",
-    "EVAL_OUT = 'eval_v35'",
+    "CHECKPOINT = 'checkpoints/sncp_ppo_v36.pt'",
+    "EVAL_OUT = 'eval_v36'",
     "EVAL_SEED = 100",
     "EVAL_EPISODES = 50",
     "run_post_eval.py",
-    "'--version', '35'",
+    "'--version', '36'",
     "'--densities', '5', '10', '15', '20'",
     "'--scenario', 'paper_challenging'",
     "'--n_episodes', str(EVAL_EPISODES)",
@@ -136,22 +143,22 @@ def verify_v16_run_ready(repo_root: str | Path = ".") -> V16RunReadinessSummary:
     cells = _load_notebook(repo_root / "sncp_ppo_colab.ipynb") or []
     training_cell = _find_unique_cell(
         cells,
-        "SAVE_PATH = 'checkpoints/sncp_ppo_v35.pt'",
+        "SAVE_PATH = 'checkpoints/sncp_ppo_v36.pt'",
         notes,
-        "v35 training",
+        "v36 training",
     )
     evaluation_cell = _find_unique_cell(
         cells,
-        "CHECKPOINT = 'checkpoints/sncp_ppo_v35.pt'",
+        "CHECKPOINT = 'checkpoints/sncp_ppo_v36.pt'",
         notes,
-        "v35 evaluation",
+        "v36 evaluation",
     )
-    _check_tokens(training_cell, TRAINING_TOKENS, notes, "v35 training")
-    _check_tokens(evaluation_cell, EVALUATION_TOKENS, notes, "v35 evaluation")
+    _check_tokens(training_cell, TRAINING_TOKENS, notes, "v36 training")
+    _check_tokens(evaluation_cell, EVALUATION_TOKENS, notes, "v36 evaluation")
 
     densities = _baseline_densities(repo_root / "eval_v22" / "density_sweep.json", notes)
     if not notes:
-        notes.append("PASS: v35 Colab training and evaluation configuration is ready")
+        notes.append("PASS: v36 Colab training and evaluation configuration is ready")
 
     return V16RunReadinessSummary(
         status=_status(notes),

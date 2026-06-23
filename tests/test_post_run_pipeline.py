@@ -263,27 +263,31 @@ def test_versioned_post_eval_cli_derives_paths_from_version(tmp_path, monkeypatc
     assert "Overall status: pass" in capsys.readouterr().out
 
 
-def test_notebook_is_v35_sense_range():
-    # v35 = v30 (pre-MLP + mean+max) + sense-range masking (--sense_range 6.0).
-    # Reverts v34's Beta; keeps the v30 recipe (--num_humans_range 10 20, TOTAL_STEPS 2.5M).
+def test_notebook_is_v36_combined():
+    # v36 = v30 base + ALL levers combined (deliberately multi-variable):
+    # node-cap (v31) + reach/budget (v32) + multi-head (v33) + count-scaling (v29)
+    # + Beta with tuned entropy (v34 + --ent_coef) + sense-range (v35).
     code = _colab_code_sources()
     train_cells = [s for s in code if "sncp_ppo.train" in s and "--fixed_scenario" in s]
     eval_cells = [s for s in code if "run_post_eval.py" in s]
     assert len(train_cells) == 1 and len(eval_cells) == 1
     train, ev = train_cells[0], eval_cells[0]
     assert "paper_challenging" in train
-    assert "checkpoints/sncp_ppo_v35.pt" in train
-    assert "'--sense_range', '6.0'" in train               # sense-range masking (v35)
-    assert "'--action_dist'" not in train                  # v34 Beta reverted
-    assert "'--num_humans_range', '10', '20'" in train    # v30 recipe
-    assert "TOTAL_STEPS = 2_500_000" in train             # v30 budget
-    assert "'--meanmax_pool'" in train                    # v30 carried forward
+    assert "checkpoints/sncp_ppo_v36.pt" in train
     assert "'--pre_mlp'" in train                          # v27 carried forward
-    assert "'--node_units'" not in train                   # v31 stays dropped
-    assert "'--attn_count_scaling'" not in train           # v29 stays dropped
-    for tok in ("SEED = 42", "'--robot_vpref', '1.0'", "'--holdout_episodes', '50'"):
+    assert "'--meanmax_pool'" in train                    # v30 carried forward
+    assert "'--sense_range', '6.0'" in train               # v35
+    assert "'--num_humans_range', '10', '25'" in train    # v32 reach
+    assert "TOTAL_STEPS = 4_000_000" in train             # v32 budget
+    assert "'--node_units', '256'" in train                # v31 capacity
+    assert "'--node_output', '96'" in train
+    assert "'--attn_heads', '4'" in train                  # v33 multi-head
+    assert "'--attn_count_scaling'" in train               # v29 count-scaling
+    assert "'--action_dist', 'beta'" in train              # v34 Beta
+    assert "'--ent_coef', '0.001'" in train                # tuned entropy ("duzgun beta")
+    for tok in ("'--robot_vpref', '1.0'", "'--holdout_episodes', '50'"):
         assert tok in train, tok
-    assert "'--version', '35'" in ev
+    assert "'--version', '36'" in ev
     assert "'--baseline_nav_steps', '32'" in ev
     assert "'--max_time'" not in ev
 
