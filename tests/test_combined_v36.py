@@ -31,6 +31,44 @@ def test_count_scaling_affects_multihead_output():
     assert not torch.allclose(out_on, out_off), "count-scaling must change multi-head scores"
 
 
+def _obs(batch=2, humans=6, offset=0.0):
+    return {
+        'robot_node': torch.randn(batch, 7),
+        'spatial_edges': torch.randn(batch, humans, 6) + offset,
+        'temporal_edges': torch.randn(batch, 2),
+    }
+
+
+# ---------------- Task 4: combined auto-detect round-trip ----------------
+
+def test_combined_v36_autodetect_roundtrip():
+    """v36 stacks every lever at once: build it, then build_policy_for_checkpoint
+    must recover ALL variants from the state_dict and load with no missing/unexpected."""
+    p = SNCPPolicy(pre_mlp=True, meanmax_pool=True, node_units=256, node_output=96,
+                   attn_heads=4, attn_count_scaling=True, action_dist='beta', sense_range=6.0)
+    sd = p.state_dict()
+    rebuilt = build_policy_for_checkpoint(sd)
+    assert rebuilt.pre_mlp is True
+    assert rebuilt.meanmax_pool is True
+    assert rebuilt.attn_heads == 4
+    assert rebuilt.attn_count_scaling is True
+    assert rebuilt.action_dist == 'beta'
+    assert float(rebuilt._sense_range.item()) == 6.0
+    assert rebuilt.node_units == 256 and rebuilt.node_output == 96
+    missing, unexpected = rebuilt.load_state_dict(sd, strict=False)
+    assert not missing and not unexpected
+
+
+def test_combined_v36_forward_is_finite():
+    """The fully-combined policy produces finite beta params + value in a forward pass."""
+    p = SNCPPolicy(pre_mlp=True, meanmax_pool=True, node_units=256, node_output=96,
+                   attn_heads=4, attn_count_scaling=True, action_dist='beta', sense_range=6.0)
+    h = p.init_hidden(2, 6, torch.device('cpu'))
+    out1, out2, value, _ = p(_obs(2, 6), h)
+    assert torch.isfinite(out1).all() and torch.isfinite(out2).all()
+    assert torch.isfinite(value).all()
+
+
 def test_multihead_no_count_scaling_is_unaffected():
     """attn_count_scaling=False leaves the multi-head path on its plain softmax."""
     p = SNCPPolicy(meanmax_pool=True, attn_heads=4)  # count-scaling off (default)
