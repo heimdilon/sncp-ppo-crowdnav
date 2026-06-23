@@ -1,0 +1,514 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+
+% ---- encoding & language ----
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[shorthands=off,turkish]{babel} % shorthands off: '=' kısayolu keyval'ı (\includegraphics) bozar
+
+% ---- math, tables, figures ----
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{url}
+\usepackage[hidelinks]{hyperref}
+
+\newcommand{\isp}{I_{\mathrm{sp}}}
+\newcommand{\dcol}{d_{\mathrm{col}}}
+\newcommand{\up}{$\uparrow$}
+\newcommand{\dn}{$\downarrow$}
+
+\begin{document}
+
+\title{Kalabalıkta İnsan-Merkezli Navigasyonun Sadık Bir Reprodüksiyonu:\\
+SNCP--PPO Açığını Ne Kapatır, Ne Kapatmaz?}
+
+\author{\IEEEauthorblockN{Orkun Koray Güngör}
+\IEEEauthorblockA{% TODO: kurum bilginizi guncelleyin (bolum / universite / e-posta)
+\textit{Bilgisayar Mühendisliği Bölümü}\\
+\textit{Üniversite Adı}, Şehir, Türkiye\\
+Haziran 2026}
+\thanks{Kaynak kodu, eğitim notebook'u ve makale kaynağı (\LaTeX):
+\url{https://github.com/heimdilon/sncp-ppo-crowdnav}}}
+
+\maketitle
+
+\begin{abstract}
+Yayımlanmış güçlü sonuçları bağımsız olarak yeniden üretmek, makalelerin tasarım kararlarının çoğunu
+belirtmemesi nedeniyle zordur. Bu çalışma, kalabalıkta insan-merkezli navigasyon için SNCP--PPO mimarisini
+makalenin değerlendirme rejiminde (dağınık yayalar, $15\times15$~m arena, görünmez robot, ORCA kalabalık,
+1.0~m/s) sadık biçimde yeniden kurar ve bildirilen \%94 ``challenging'' başarısına olan açığı \emph{neyin
+kapatıp neyin kapatmadığını} tek-değişkenli ablasyonlarla ayrıştırır. Tüm kıyasları, eğitim-içi ``best''
+ölçütünün seçim-saplı olduğunu gösterdikten sonra, dürüst bir çok-tohumlu protokole (5 tohum $\times$ 50
+bölüm $=250$ bölüm/yoğunluk; Wilson güven aralığı, iki-oranlı $z$, Bonferroni) bağlarız. Üç \emph{sadakat
+düzeltmesi} (Denklem~11 ön-MLP gömmesi, yoğunluk müfredatı, mean+max dikkat havuzlaması) N=10 yayada başarıyı
+\%61.6'dan \%89.6'ya, N=20'de \%43.6'dan \%79.2'ye çıkarır ve çarpışmayı 2--3 kat düşürür; buna karşın, bu
+şampiyonun üzerine denenen altı model kaldıracı (ek kapasite, çok-başlı dikkat, Beta eylem dağılımı,
+algı-menzili maskesi vb.) onu yüksek yoğunlukta \emph{geçemez}. En çarpıcı bulgu, robotun algısını makalenin
+kendi 6~m bütçesine indirmenin açığı \emph{kapatmak yerine genişletmesidir} (N=20 \%79.2$\rightarrow$\%69.6):
+kalan açık ``robot ne kadar görüyor'' ile değil, ``gördüğünü nasıl kullanıyor'' (temsil kullanımı) ile
+ilgilidir.
+\end{abstract}
+
+\begin{IEEEkeywords}
+kalabalıkta navigasyon, pekiştirmeli öğrenme, nöral devre politikaları, sıvı zaman-sabitli ağlar,
+reprodüksiyon, dikkat havuzlaması
+\end{IEEEkeywords}
+
+% =====================================================================
+\section{Giriş}
+% =====================================================================
+Kalabalık ortamlarda hareket planlama, bir mobil robotun hedefe \emph{hızlı} ulaşması ile çevredeki
+insanların \emph{konforunu} koruması arasındaki çok-amaçlı bir gerilimdir. Referans aldığımız çalışma,
+Ao vd.~\cite{ao2026sncp}, bu problemi \emph{Yapısal Nöral Devre Politikası} (Structured Neural Circuit
+Policy, SNCP) ile çözer: insan--robot etkileşimini uzay-zamansal bir grafa dönüştürür, üç ayrı Sıvı
+Zaman-Sabitli (Liquid Time-Constant, LTC)~\cite{hasani2021ltc} nöral devre~\cite{lechner2020ncp} kodlayıcı
+ile işler, dikkat havuzlamasıyla kalabalığı tek bir vektöre indirger ve PPO~\cite{schulman2017ppo} ile
+uçtan uca eğitir. Robot eylemi $a_t=(\omega_t,v_t)$ bir tekerlekli (unicycle) modeldir. Makale, standart
+senaryoda \%99.5, challenging senaryosunda \%94 başarı bildirir.
+
+Bu sonucu \emph{bağımsız bir uygulamada} yeniden üretmek beklenenden zordur. Mimari bloklar, ödül fonksiyonu,
+yaya modeli (ORCA~\cite{vandenberg2011orca}) ve PPO hattı makaleyle eşleşmesine rağmen, naif bir uygulama
+challenging \%94'ün çok altında kalır. Bunun iki nedeni vardır. Birincisi, makale en az 12 değişkeni (NCP
+kablolaması, eylem aralıkları, eğitim bütçesi, müfredat, ORCA parametreleri, vb.) belirtmez; ikincisi,
+eğitim-içi ``en iyi'' (best holdout) ölçütü, çok sayıda gürültülü değerlendirmenin maksimumu olduğundan
+\emph{yukarı yönlü saplıdır} ve sürüm kıyaslarını yanıltır.
+
+Bu çalışmanın amacı, ``\%94'e neden ulaşılamıyor?'' sorusunu spekülasyondan çıkarıp \emph{ölçülebilir}
+bileşenlere ayrıştırmaktır. Vardığımız cevap nettir: açığın yarıdan çoğu \emph{sadakat} düzeltmeleriyle
+(temsil + eğitim dağılımı) kapanır, ancak ham kapasite, alternatif dikkat/dağılım veya algı menzili eklemekle
+kapanmaz --- yani kalan açık ``ne kadar algılandığı'' değil, ``algılananın nasıl kullanıldığı'' sorunudur.
+Katkılarımız:
+\begin{itemize}
+\item \textbf{Sadık, rejim-eşlenik bir reprodüksiyon} ve makalede belirtilmeyen 12 değişkenin açık denetimi
+(Bölüm~\ref{sec:method}, Tablo~\ref{tab:paperdiff}).
+\item \textbf{Dürüst bir çok-tohumlu değerlendirme protokolü:} best-holdout seçim sapması gösterilir; tüm
+kıyaslar 250 bölüm/yoğunluk + Wilson \%95 GA + iki-oranlı $z$ + Bonferroni ile yapılır
+(Bölüm~\ref{sec:protocol}, Şekil~\ref{fig:seedbias}).
+\item \textbf{Açığın yarıdan çoğunu kapatan üç sadakat düzeltmesi:} ön-MLP gömmesi, yoğunluk müfredatı ve
+mean+max havuzlaması; N=10'da \%61.6$\rightarrow$\%89.6, tek-değişkenli atıf (Bölüm~\ref{sec:fidelity},
+Şekil~\ref{fig:fidelity}).
+\item \textbf{Kalan açığı sınırlayan altı negatif ablasyon.} Özellikle, robotun algısını makalenin 6~m
+bütçesine indirmek açığı \emph{genişletir}; bu, açıklamayı ``ne kadar algılıyor''dan ``algıladığını nasıl
+kullanıyor''a kaydırır (Bölüm~\ref{sec:ablations}, Şekil~\ref{fig:sense}).
+\end{itemize}
+
+% =====================================================================
+\section{İlgili Çalışmalar}
+% =====================================================================
+\textbf{Kalabalıkta navigasyon ve etkileşim.} Sosyal-farkında navigasyon literatürünün önemli bir kolu,
+robotu kalabalığa \emph{görünmez} kabul eden ve yayaları yalnızca birbirinden kaçınan ORCA ajanları olarak
+modelleyen CrowdNav rejimini~\cite{chen2019crowdnav} kullanır. Bu kurulum, robotu kendi kaçınma sorumluluğunu
+tek başına taşımaya zorladığından zorludur. Referans çalışma~\cite{ao2026sncp} de bu rejimi benimser; biz de
+sadakat için aynı görünmez-robot/ORCA ayarını koruruz.
+
+\textbf{Nöral devre politikaları.} LTC ağları~\cite{hasani2021ltc}, sürekli-zamanlı ve girdiye bağlı zaman
+sabitleriyle ifade gücü yüksek dinamik sistemlerdir; Nöral Devre Politikaları (NCP)~\cite{lechner2020ncp}
+bunları \emph{seyrek}, C.~elegans-esin\-li bir bağlantı topolojisiyle birleştirir. Referans mimari bu
+bileşenleri kullandığını belirtir ancak somut kablolama (nöron sayısı, seyreklik) vermez; biz AutoNCP
+kablolamasını mühendislik seçimi olarak işaretleriz.
+
+\textbf{Küme-değişmez havuzlama.} Değişken sayıda yayayı tek bir özet vektöre indirgemek, permütasyona
+değişmez bir küme fonksiyonu gerektirir. Dikkat havuzlaması~\cite{vaswani2017attention} öğrenilmiş bir
+ağırlıklı ortalama sağlarken, DeepSets~\cite{zaheer2017deepsets} ve PointNet~\cite{qi2017pointnet}
+\emph{maksimum} havuzlamanın kardinaliteye dayanıklı olduğunu gösterir. Bizim en etkili sadakat-dışı
+düzeltmemiz (mean+max), tam da bu içgörüye dayanır: yoğun kalabalıkta saf dikkat ortalaması en tehditkâr
+ajanı seyreltir.
+
+\textbf{Eylem dağılımları.} Sınırlı kontrol uzayında Gauss politikasının kırpılması sınır-sapması yaratır;
+Beta dağılımı~\cite{chou2017beta} bu sınırı doğal biçimde modeller. Bu alternatifi de bir ablasyon olarak
+deneriz.
+
+% =====================================================================
+\section{Yöntem}\label{sec:method}
+% =====================================================================
+\subsection{Politika mimarisi}
+Politika ağı (Şekil~\ref{fig:arch}), makalenin anlamsal bölümlemesini izler. Robot düğümü bir MLP ile
+128 boyuta gömülür (Denklem~14). Zamansal ve uzaysal kenarlar birer LTC (seyrek AutoNCP kablolaması) ile
+işlenir. Dikkat havuzlaması, her yayanın uzaysal özniteliğini robot/zaman anahtarına göre ağırlıklandırır:
+\begin{equation}
+\alpha^t=\mathrm{softmax}\!\left(\tfrac{1}{\sqrt{d_k}}\,Q^t (K^t)^{\!\top}\right),\quad
+u^t_{\mathrm{att}}=(M^t_{r\text{-}h})^{\!\top}\alpha^t,
+\label{eq:attn}
+\end{equation}
+burada $d_k=64$. Füzyon düğümü NCP'si robot~(128) + zaman~(256) + dikkat çıktısını birleştirir;
+aktör--kritik başı $(\omega,v)$ ve değeri üretir (Denklem~16).
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{figures/ieee_arch.png}
+\caption{SNCP--PPO politika mimarisi. Şampiyon (v30) iki sadakat/yapı eklentisini içerir: kırmızı,
+makalenin Denklem~11 ön-MLP gömmesi (ham kenar girdisi NCP'den önce 256 boyuta yükseltilir); mor,
+mean+max dikkat havuzlaması (öğrenilmiş ağırlıklı ortalamaya kardinaliteye-dayanıklı bir maksimum dalı eklenir).}
+\label{fig:arch}
+\end{figure}
+
+\subsection{Ödül fonksiyonu}
+Çok amaçlı ödül üç terimden oluşur, $r^t = r_g^t + r_c^t + r_s^t$:
+\begin{align}
+r_g^t &= \begin{cases} 20, & \lVert p^t-p_g\rVert < p'_{\mathrm{robot}}\\
+2\big(\lVert p^{t-1}-p_g\rVert - \lVert p^t-p_g\rVert\big), & \text{aksi} \end{cases}\\
+r_c^t &= \begin{cases} -20, & d_{\min} < \dcol\\ 0, & \text{aksi} \end{cases}
+\qquad r_s^t = -2\,\isp,
+\end{align}
+burada sosyal baskı indeksi $\isp\in[0,1]$, komşu yayaların ters-mesafe ağırlıklı \emph{normalize}
+ortalamasıdır (makale Denklem~5--7). Reprodüksiyon sürecinde bu terimin normalize edilmemiş ve kırpılmış
+bir uygulama hatası içerdiği bulunmuş ve makaledeki forma düzeltilmiştir.
+
+\subsection{Eğitim ve değerlendirme rejimi}
+Senaryo \texttt{paper\_challenging} (dağınık yayalar, $15\times15$~m arena, algı yarıçapı 6~m). Robot
+geçişi $(0,-4)\!\rightarrow\!(0,4)$, yani 8~m. Robot hızı 1.0~m/s; yayalar ORCA, hız paritesi 1.0~m/s,
+görünmez-robot rejimi. Bütçe per-senaryo (challenging 50~s, standard 12.5~s) ortamdan türetilir; çarpışma
+eşiği $\dcol=0.3$~m; öğrenme oranı $10^{-4}$; PPO clip 0.2, $\gamma=0.99$, $dt=0.25$~s. Eğitim 2.5\,M adım,
+16 paralel ortam $\times$ 128 ufuk, sıfırdan (taklit ısıtması yok).
+
+\begin{algorithm}[t]
+\caption{SNCP--PPO: yoğunluk müfredatı + holdout-best}
+\label{alg:train}
+\begin{algorithmic}[1]
+\State Politikayı $\pi_\theta$ ve değeri $V_\phi$ sıfırdan başlat
+\State $\theta^\star \gets \theta$;\quad $m^\star \gets -\infty$ \Comment{en iyi checkpoint}
+\For{$k = 1 \dots K$ (güncelleme penceresi)}
+  \State $N \sim U(10,20)$ \Comment{yoğunluk müfredatı (v28+)}
+  \State 16 paralel ortamda $N$ yaya ile rollout topla
+  \State GAE avantajları; PPO clip kaybı ($\epsilon{=}0.2$) ile $\theta,\phi$ güncelle
+  \If{$k \bmod K_{\text{eval}} = 0$}
+     \State $m \gets \min(\text{holdout}_{\text{std}}, \text{holdout}_{\text{chal}})$
+     \If{$m > m^\star$} \State $m^\star \gets m$;\ \ $\theta^\star \gets \theta$ \EndIf
+  \EndIf
+\EndFor
+\State \Return $\theta^\star$ \Comment{değerlendirme bu ağırlıkları kullanır}
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Dürüst çok-tohumlu protokol}\label{sec:protocol}
+Politika belirlenimci (deterministic) modda çalıştırılır (eylem $=$ ortalama). Sürüm kıyasları için her
+yoğunlukta (N=5/10/15/20) \textbf{5 tohum $\times$ 50 bölüm $=250$ bölüm} havuzlanır. Bir oranın $\hat p=k/n$
+\%95 güven aralığı, küçük örnek ve uç oranlarda sağlam olan \emph{Wilson} aralığıdır:
+\begin{equation}
+\frac{\hat p + \frac{z^2}{2n} \pm z\sqrt{\hat p(1-\hat p)/n + z^2/4n^2}}{1+z^2/n},\quad z{=}1.96.
+\end{equation}
+İki sürümün farkı için havuzlanmış iki-oranlı $z$-testi ve Cohen $h = 2(\arcsin\!\sqrt{p_1}-\arcsin\!\sqrt{p_2})$
+etki büyüklüğü raporlanır. Dört yoğunlukta çoklu karşılaştırma yapıldığından anlamlılık eşiği Bonferroni ile
+$\alpha=0.05/4=0.0125$ alınır. Bir kaldıracın ``yardımcı'' sayılması için önceden-kayıtlı kural:
+yüksek-N (N=15/20) başarısı \emph{artmalı} ve/veya çarpışması \emph{düşmeli} (Bonferroni-anlamlı),
+N=5/10'da gerileme olmamalı ve zaman aşımı 0 kalmalıdır.
+
+\begin{table}[t]
+\centering
+\caption{Makalenin SNCP--PPO için bildirdiği hedef metrikler.}
+\label{tab:paper}
+\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Senaryo} & \textbf{Başarı} & \textbf{Çarpışma} & \textbf{Nav-süre} \\
+\midrule
+Standard (5 yaya)    & 0.995 & 0.005 & 10.39~s \\
+Challenging (10--20) & 0.94  & 0.04  & 15.92~s \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{Makalede \emph{belirtilmeyen} ve bizim mühendislik seçimi olarak işaretlediğimiz başlıca değişkenler.}
+\label{tab:paperdiff}
+\footnotesize
+\begin{tabular}{@{}p{0.30\columnwidth}p{0.58\columnwidth}@{}}
+\toprule
+\textbf{Kategori} & \textbf{Belirtilmemiş değişken} \\
+\midrule
+Mimari   & uzay-kenarı gömme boyutu; NCP kablolaması (units/sparsity/motor) \\
+Eylem    & doğrusal hız aralığı; $\omega_{\max}$; geri hareket; sim ivme \\
+Yaya     & ORCA parametreleri; hedefe varınca davranış (durma/respawn) \\
+Eğitim   & challenging zaman bütçesi; toplam adım; paralel ortam; müfredat \\
+\midrule
+\multicolumn{2}{@{}p{0.92\columnwidth}@{}}{\emph{Makale-içi çelişkiler:} algı menzili (Tablo~1: 3~m vs \S5.1.2: 4/6~m);
+$t_{\lim}$ (Tablo~1 standard 12.5~s vs Tablo~3 challenging nav-süre 15.92~s).} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% =====================================================================
+\section{Makale ile Birebir Karşılaştırma}\label{sec:compare}
+% =====================================================================
+Sadık bir reprodüksiyon iddiası, hangi değişkenlerin eşleştiğinin ve hangilerinin makalede hiç
+verilmediğinin açık bir denetimini gerektirir. Mevcut uygulamamızdaki her değişkeni makaledeki karşılığıyla
+karşılaştırdık (Tablo~\ref{tab:audit}); kategori bazında özet Şekil~\ref{fig:compare}'dedir. Yaklaşık 29
+değişken eşleşir, 4'ü farklı/kısmîdir ve \textbf{12 değişken makalede hiç belirtilmemiştir} --- bunlar bizim
+mühendislik seçimlerimizdir (Tablo~\ref{tab:paperdiff}). Bu belirsizlikler, reprodüksiyon açığının bir
+kısmının \emph{kaçınılmaz} olduğunu gösterir: aynı algoritmayı yazsak bile bu 12 seçim farklı olabilir.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.96\columnwidth]{figures/fig_compare.png}
+\caption{Makale ile karşılaştırmanın kategori bazında özeti. Yeşil: eşleşiyor; kırmızı: farklı/kısmî;
+turuncu: makalede belirtilmemiş. Belirtilmeyen değişkenlerin çoğu mimari kablolaması, eylem aralıkları ve
+eğitim/değerlendirme bütçesidir.}
+\label{fig:compare}
+\end{figure}
+
+\begin{table*}[t]
+\centering
+\caption{Değişken-bazında karşılaştırma (PDF'ten doğrulandı). \textbf{E}: eşleşiyor; \textbf{F}: farklı/kısmî;
+\textbf{B}: makalede belirtilmemiş (mühendislik seçimimiz).}
+\label{tab:audit}
+\small
+\begin{tabular}{@{}p{0.20\textwidth}p{0.30\textwidth}p{0.34\textwidth}c@{}}
+\toprule
+\textbf{Değişken} & \textbf{Makale} & \textbf{Bizde (v30)} & \textbf{Durum} \\
+\midrule
+\multicolumn{4}{@{}l}{\textit{Ortam / senaryo}}\\
+Challenging arena & $15\times15$~m & $15\times15$~m & E \\
+Algı menzili (chal) & 6~m (\S5.1.2) & 6~m (gözlemde; maskelenmez$^\dagger$) & E \\
+Robot geçişi & $(0,-4)\!\to\!(0,4)=8$~m & 8~m & E \\
+Çarpışma eşiği $\dcol$ & 0.3~m & 0.3~m & E \\
+Robot hızı (sim) & 1.0~m/s & 1.0~m/s & E \\
+Challenging yaya & 10--20 & eğitim $U(10,20)$; eval 5--20 & E \\
+Süre bütçesi & std 12.5~s (Tablo~1) & std 12.5 / chal 50~s & B \\
+\midrule
+\multicolumn{4}{@{}l}{\textit{Robot kinematiği / yaya}}\\
+Eylem uzayı & $(\omega,v)$ unicycle (Eq 16) & $(\omega,v)$ unicycle & E \\
+Doğrusal hız aralığı & belirtilmemiş & $[0,\,1.0]$~m/s & B \\
+Açısal hız $\omega_{\max}$ & belirtilmemiş & 1.8~rad/s & B \\
+Yaya modeli & ORCA & ORCA & E \\
+Görünmez robot & evet & evet & E \\
+ORCA parametreleri & belirtilmemiş & varsayılan seçim & B \\
+\midrule
+\multicolumn{4}{@{}l}{\textit{Ödül / mimari}}\\
+$r_g,r_c,r_s$ (Eq 18--20) & 20 / $-20$ / $-2\isp$ & aynı & E \\
+$\isp$ (Eq 5--7) & normalize ağırlıklı ort. & normalize (düzeltildi) & E \\
+Gömme boyutları & robot 128, zaman 256, $d_k$ 64 & aynı & E \\
+Dikkat ölçeği (Eq 13) & $n/\sqrt{d_k}$ & $1/\sqrt{d_k}$ (n-ölçeği v29'da denendi) & F \\
+Eq 11 ön-MLP & var & var (v27) & E \\
+NCP kablolaması & belirtilmemiş & AutoNCP (units/sparsity) & B \\
+\midrule
+\multicolumn{4}{@{}l}{\textit{RL / değerlendirme}}\\
+PPO clip / $\gamma$ / lr & 0.2 / 0.99 / $10^{-4}$ & aynı & E \\
+Toplam eğitim bütçesi & belirtilmemiş & 2.5\,M adım & B \\
+Test örneği & 500/yoğunluk & 250 (5 tohum$\times$50) & F \\
+Değerlendirme & tek model, 500 test & 5 tohum $\times$ 50, çok-tohumlu & F \\
+\bottomrule
+\end{tabular}
+\par\vspace{2pt}{\footnotesize $^\dagger$Makale algıyı 6~m ile sınırlar; bizim gözlemimiz tüm yayaları içerir.
+Bu uyumsuzluk Bölüm~\ref{sec:ablations}'te v35 ile doğrudan sınanır.}
+\end{table*}
+
+% =====================================================================
+\section{Sonuçlar}
+% =====================================================================
+\subsection{Metodoloji: ``best holdout'' seçim-saplıdır}\label{sec:seedbias}
+Eğitim sırasında ``best'' checkpoint, holdout genelist-min ölçütü yeni bir maksimuma ulaştığında kaydedilir;
+ancak her holdout değerlendirmesi \emph{farklı} bir tohum kümesi kullanır. 2.5\,M boyunca onlarca gürültülü
+değerlendirme (her biri 50 bölüm, SE\,$\approx$\,4--7 puan) yapıldığından, bu serinin \emph{maksimumu} yukarı
+yönlü saplıdır (Şekil~\ref{fig:seedbias}). Aynı checkpoint, farklı tohumla \%56'dan \%76'ya kadar değişebilir.
+Bu nedenle bu makaledeki tüm sürüm kıyasları çok-tohumlu havuzlanmış orandan gelir; eğitim-içi ``best''
+sayıları rapor edilmez.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.92\columnwidth]{figures/ieee_seedbias.png}
+\caption{N=10'da seçim sapması. Gri noktalar bağımsız tohum bloklarıdır; mavi bant dürüst ortalamanın
+\%95 GA'sıdır. Kırmızı yıldız, eğitimin kaydettiği seçim-saplı ``best'' tepesidir. Tüm kıyaslar artık
+çok-tohumludur.}
+\label{fig:seedbias}
+\end{figure}
+
+\subsection{Açığı kapatan üç sadakat düzeltmesi}\label{sec:fidelity}
+Naif taban (v26) makale rejimini kurar ve zaman aşımını her yoğunlukta sıfırlar; başarısızlık tamamen
+çarpışmaya indirgenir, ancak dürüst başarı düşüktür (N=10 \%61.6). Üç tek-değişkenli sadakat düzeltmesi
+art arda uygulanır (Tablo~\ref{tab:fidelity}, Şekil~\ref{fig:fidelity}):
+\begin{enumerate}
+\item \textbf{v27 --- ön-MLP gömmesi (Eq.~11).} Ham 2/6 boyutlu kenar girdisi NCP'ye girmeden önce bir MLP
+ile gömülür. Her yoğunlukta \%16--19 puanlık kazanç; N=10 \%61.6$\rightarrow$\%80.0.
+\item \textbf{v28 --- yoğunluk müfredatı.} Eğitim yoğunluğu sabit N=10 yerine $N\sim U(10,20)$ örneklenir
+(makale 10--20 arasında eğitir). Yüksek yoğunlukta büyük kazanç; N=20 \%59.6$\rightarrow$\%73.2.
+\item \textbf{v30 --- mean+max havuzlaması.} Dikkatin öğrenilmiş ağırlıklı ortalamasına kardinaliteye-dayanıklı
+bir maksimum dalı eklenir. Her yoğunlukta v28'i \emph{zayıf domine eder} (başarı $\geq$, çarpışma $\leq$);
+N=10 \%89.6, N=20 \%79.2, çarpışma 2--3 kat düşük.
+\end{enumerate}
+Birlikte bu üç düzeltme N=10 açığını (makaleye göre 32~pp) yaklaşık 4~pp'ye indirir ve yüksek yoğunluk
+düşüşünü belirgin biçimde yumuşatır.
+
+\begin{table}[t]
+\centering
+\caption{Sadakat düzeltmeleri: dürüst çok-tohumlu başarı / çarpışma (\%), 250 bölüm/yoğunluk.
+Zaman aşımı tüm sürümlerde \%0. \textbf{v30 = şampiyon.}}
+\label{tab:fidelity}
+\small
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{N} & \textbf{v26 taban} & \textbf{v27 +ön-MLP} & \textbf{v28 +müfr.} & \textbf{v30 +m+m} \\
+\midrule
+5  & 74.8 / 25.2 & 93.6 / 6.8  & 94.4 / 5.6  & \textbf{97.2 / 2.8} \\
+10 & 61.6 / 38.4 & 80.0 / 20.0 & 87.6 / 12.4 & \textbf{89.6 / 10.4} \\
+15 & 53.2 / 46.8 & 70.8 / 29.6 & 79.2 / 20.8 & \textbf{85.6 / 14.4} \\
+20 & 43.6 / 56.4 & 59.6 / 40.4 & 73.2 / 27.2 & \textbf{79.2 / 20.8} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=0.92\textwidth]{figures/ieee_fidelity.png}
+\caption{Üç sadakat düzeltmesi makale hedefine doğru tırmanır. \emph{Sol:} başarı; \emph{sağ:} çarpışma.
+v26 (gri) tabanından v30 (mavi, şampiyon) noktasına her yoğunlukta tutarlı iyileşme; yeşil kesikli çizgi
+makalenin challenging hedefidir. Kalan açık yüksek yoğunlukta yoğunlaşır.}
+\label{fig:fidelity}
+\end{figure*}
+
+\subsection{Niteliksel: gerçek yörüngeler}\label{sec:traj}
+Şekil~\ref{fig:traj}, şampiyonun (v30) kalabalık içinde ürettiği gerçek yörüngeleri gösterir. Robot,
+düz-çizgi (beeline) yerine kalabalığın arasından kavisli bir güzergâh izler; yoğunluk arttıkça (N=10$\to$20)
+güzergâh uzar ve karmaşıklaşır (45$\to$78 adım). Bu, nav-sürenin yoğunlukla artması beklentisiyle tutarlıdır
+--- yani gerçek bir sosyal kaçınma, kalabalığın yol açmasıyla oluşan bir beeline değil.
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=0.88\textwidth]{figures/ieee_traj.png}
+\caption{Şampiyon (v30) gerçek yörüngeleri (\texttt{paper\_challenging}, robot 1.0~m/s). Mavi: robot
+yörüngesi; gri: yayalar (yol + son konum); kırmızı yıldız: hedef. Robot her iki yoğunlukta da kavisli
+kaçınma yapar; N=20'de güzergâh belirgin biçimde uzar (gerçek kaçınma, beeline değil).}
+\label{fig:traj}
+\end{figure*}
+
+\subsection{Açığı kapatmayan altı kaldıraç}\label{sec:ablations}
+Şampiyonun (v30) üzerine, kalan yüksek-N açığını hedefleyen altı tek-değişkenli model kaldıracı denenir;
+\emph{hiçbiri} v30'u yüksek yoğunlukta anlamlı biçimde geçmez (Tablo~\ref{tab:ablations},
+Şekil~\ref{fig:ablations}):
+\begin{itemize}
+\item \textbf{Ek kapasite} iki biçimde başarısız: daha büyük NCP düğümü (v31) ve kanonik 4-başlı dikkat
+(v33) yüksek-N'i \emph{kötüleştirir} (v33 N=15 $-$9.6~pp, $p=0.006$, Bonferroni-anlamlı). v30, bu
+bütçe/tohum için bir kapasite tatlı-noktasıdır.
+\item \textbf{Müfredat erişimi + bütçe} (v32; $N\to25$, 4\,M adım) düz kalır: en güçlü etki in-distribution
+N=10'dadır, hedeflenen N=20 ise düzdür ($-$0.4~pp).
+\item \textbf{Beta eylem dağılımı} (v34) tüm sürümlerin en kötüsüdür ve zaman aşımını geri getirir; muhtemel
+neden, entropi katsayısının Gauss'a göre ayarlı kalmasıdır (adil bir test yeniden ayar gerektirir).
+\item \textbf{Dikkat sayı-ölçeklemesi} (v29, Eq~13 $n/\sqrt{d_k}$): tek somut kalan paper-sadakat
+kaldıracı. v28 tabanı üzerine denendi (başarı 87.6/89.2/86.4/78.8) ve yüksek-N'i anlamlı iyileştirmedi ---
+bu nedenle v30, bunun yerine mean+max havuzlamasını temel aldı.
+\item \textbf{Algı-menzili maskesi} (v35) --- bir sonraki alt-bölümün konusu.
+\end{itemize}
+
+\begin{table*}[t]
+\centering
+\caption{Negatif ablasyonlar: dürüst çok-tohumlu \textbf{başarı / çarpışma} (\%) vs şampiyon v30
+(250 bölüm/yoğunluk). Kalın = v30. Hiçbir kaldıraç yüksek-N'de v30'u geçmez; v34 (Beta) zaman aşımını
+da geri getirir.}
+\label{tab:ablations}
+\small
+\begin{tabular}{@{}lcccccc@{}}
+\toprule
+\textbf{N} & \textbf{v30 (şampiyon)} & \textbf{v31 node-kap.} & \textbf{v32 $N{\to}25$+4M} & \textbf{v33 4-baş MHA} & \textbf{v34 Beta} & \textbf{v35 sense-6m} \\
+\midrule
+5  & \textbf{97.2 / 2.8}  & 92.8 / 7.2  & 97.6 / 2.8  & 95.6 / 4.8  & 83.2 / 12.0 & 96.8 / 2.8 \\
+10 & \textbf{89.6 / 10.4} & 84.0 / 16.0 & 94.0 / 6.0  & 84.4 / 15.6 & 71.6 / 21.2 & 89.6 / 10.0 \\
+15 & \textbf{85.6 / 14.4} & 78.8 / 21.2 & 87.6 / 13.2 & 76.0 / 24.0 & 56.4 / 34.4 & 79.2 / 20.8 \\
+20 & \textbf{79.2 / 20.8} & 72.8 / 27.6 & 78.8 / 21.2 & 70.8 / 29.2 & 44.8 / 47.2 & 69.6 / 30.4 \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=0.92\textwidth]{figures/ieee_ablations.png}
+\caption{Altı model kaldıracının şampiyon v30'a göre yüksek-N farkı. \emph{Sol:} başarı farkı (pp) ---
+v32'nin N=15'teki küçük $+$2.0'ı dışında tümü $\leq0$; v34 (Beta) felaket. \emph{Sağ:} çarpışma farkı (pp)
+--- tümü $\geq0$ (daha kötü). Hiçbir kaldıraç şampiyonu yüksek yoğunlukta iyileştirmez.}
+\label{fig:ablations}
+\end{figure*}
+
+\subsection{Kilit bulgu: makalenin algı bütçesine inmek açığı genişletir}
+Makale, robotun algısını challenging arenada 6~m ile sınırlar; bizim uygulamamız ise (v30 dahil) tüm
+yayaları gözlemler. Bu, hem bir sadakat uyumsuzluğu hem de bir ``washout'' adayıdır: belki uzak yayalar
+dikkat ortalamasını seyreltmektedir. v35, bu hipotezi sınar --- politika \emph{içinde} 6~m ötesindeki yayaları
+maskeler (eğitim ve değerlendirme bu maskeyle yapılır), başka hiçbir şey değişmez.
+
+Sonuç hipotezi yalnızca doğrulamaz, \emph{tersine çevirir} (Şekil~\ref{fig:sense}). v35, v30'a karşı yüksek
+yoğunlukta gerileyer: N=15 \%85.6$\rightarrow$\%79.2, N=20 \%79.2$\rightarrow$\%69.6 ($z=-2.46$,
+$h=-0.22$; fark \%95 GA $[-17.2,-2.0]$ sıfırı dışlar). Kaybedilen her başarı bir çarpışmaya dönüşür
+(N=20 çarpışma \%20.8$\rightarrow$\%30.4). Yorum: 6~m ötesini gizlemek gürültüyü değil, robotun uzaktan
+yaklaşan tehdidi \emph{erken} görüp kaçınmak için kullandığı sinyali siler; N büyüdükçe daha çok yaya 6~m
+dışında kaldığından zarar artar.
+
+Asıl çıkarım, açık sorusunu doğrudan yanıtlar. Makale \%94'ü \emph{yalnızca} 6~m algıyla alır; bizim v30
+(tüm yayalar) N=15/20'de \%85.6/\%79.2, v35 (6~m, makale bütçesi) ise \%79.2/\%69.6 alır. Yani makalenin
+algı bütçesine inmek açığı kapatmaz, \emph{genişletir}. Açık ``robot ne kadar görüyor'' değil, ``gördüğüyle
+ne yapıyor'' (temsil/kodlama kalitesi) sorunudur.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{figures/ieee_sense.png}
+\caption{Algı-menzili ablasyonu (v35). v30 (tüm yayalar) ile v35 (6~m maske $=$ makale bütçesi) ve makale
+(yeşil) karşılaştırması. 6~m bütçeye inmek başarıyı yüksek-N'de düşürür (sol) ve çarpışmayı artırır (sağ):
+algı menzili açığın nedeni değildir.}
+\label{fig:sense}
+\end{figure}
+
+\subsection{Standard senaryo: ikinci, bütçe-kaynaklı açık}\label{sec:standard}
+Şampiyonu makalenin \emph{standard} senaryosunda da (5 yaya, $10\times10$ arena, 12.5~s bütçe) aynı dürüst
+protokolle değerlendirdik. v30 burada \textbf{\%85.6 başarı / \%3.6 çarpışma / \%10.8 zaman aşımı} (250 bölüm)
+alır; makale \%99.5 bildirir (Tablo~\ref{tab:paper}). Önemli nokta: challenging'de açık \emph{çarpışma}
+kaynaklıyken (zaman aşımı \%0), standard'da açık büyük ölçüde \emph{zaman aşımı} kaynaklıdır --- robot, dar
+12.5~s bütçesi altında bazı bölümleri zamanında tamamlayamaz. Bu, iki ayrı arıza kipini ortaya koyar ve
+şampiyonumuzun (esas olarak challenging holdout'unda seçilmiş) standard senaryonun sıkı bütçesine tam
+genelleşmediğini gösterir. Standard açığı, eğitim/seçim ölçütünün her iki senaryo bütçesini de eşit
+ağırlıklamasıyla (ör.\ standard-ağırlıklı holdout veya senaryoya-özel ince-ayar) hedeflenmelidir.
+
+% =====================================================================
+\section{Tartışma}
+% =====================================================================
+Sonuçlar tutarlı bir resim çizer. Açığı kapatan değişiklikler \emph{temsil sadakati ve eğitim dağılımı}
+ile ilgilidir: ön-MLP, ham sinyali NCP'ye vermeden önce zenginleştirir; mean+max, küme özetini kardinaliteye
+dayanıklı kılar; müfredat, test yoğunluklarını eğitim dağılımına dahil eder. Açığı kapatmayan değişiklikler
+ise \emph{ham kapasite, alternatif dikkat/dağılım veya algı kısıtı} ile ilgilidir. İki kapasite-ekleme
+(v31, v33) ve perception kısıtı (v35) yüksek-N'i bozar; bu, v30'un sabit bütçe/tohum altında bir denge
+noktası olduğunu ve kalan açığın temsil-\emph{kullanımı}nda yattığını gösterir.
+
+Kalan açık iki ayrı eksene ayrışır. \emph{Challenging} senaryoda açık \emph{çarpışma} kaynaklıdır
+(zaman aşımı \%0) ve yukarıdaki temsil-kullanımı tartışmasına aittir. \emph{Standard} senaryoda ise açık
+\emph{zaman aşımı} kaynaklıdır (\%10.8): challenging holdout'unda seçilen şampiyon, standard'ın dar 12.5~s
+bütçesine fazla temkinli davranır. İki arıza kipinin farklı olması, tek bir ``açık'' yerine iki ayrı
+müdahale gerektiğini ima eder: challenging için daha iyi temsil, standard için bütçe-duyarlı seçim/ince-ayar.
+
+Bu, gelecek çalışma için somut bir yön verir: kalan $\sim$9~pp'lik yüksek-N (challenging) açığı, daha fazla
+algı veya parametre ile değil, kodlayıcının \emph{aynı} yerel bilgiden daha iyi yararlanmasıyla (ör.\ daha
+güçlü zamansal modelleme, daha iyi kalibre edilmiş eğitim sinyali) hedeflenmelidir; standard açığı ise
+senaryoya-özel bütçe duyarlılığıyla.
+
+% =====================================================================
+\section{Sınırlamalar}
+% =====================================================================
+\textbf{Tek eğitim-tohumu.} Tüm sürümler tek bir eğitim tohumuyla eğitildi; değerlendirme çok-tohumlu olsa
+da eğitim varyansı tahmin edilmedi ($\pm$\,birkaç puanlık gölge mümkün). Çoklu eğitim-tohumu en öncelikli
+sağlamlaştırmadır. \textbf{Değerlendirme ölçeği.} Yoğunluk başına 50 (havuzda 250) bölüm kullandık; makale
+500 kullanır. \textbf{İki-değişken (v32).} Müfredat erişimi ve bütçe birlikte değiştiği için atıf muğlaktır.
+\textbf{Beta ablasyonu (v34).} Gauss'a ayarlı hiperparametrelerle test edildi; ``Beta kötüdür'' değil,
+``Beta + yeniden-ayarsız HP kötüdür'' sonucu çıkar. \textbf{Senaryo-genellemesi.} Şampiyon esas olarak
+challenging holdout'unda seçildiğinden standard senaryoda zaman-aşımı kaynaklı geriler (\%85.6); tek bir
+checkpoint'in her iki paper senaryosunda da yüksek olması (makaledeki gibi) ayrı bir hedef olarak ele
+alınmadı. \textbf{Doğrulanamayan makale ayrıntıları.} ORCA parametreleri ve bazı eylem sınırları makalede
+verilmediğinden reprodüksiyon açığının bir kısmı \emph{kaçınılmazdır}.
+
+% =====================================================================
+\section{Sonuç}
+% =====================================================================
+SNCP--PPO'yu makalenin değerlendirme rejiminde sadık biçimde yeniden kurduk ve ``\%94'e neden ulaşılamıyor''
+sorusunu ölçülebilir bileşenlere ayrıştırdık. Üç sadakat düzeltmesi (ön-MLP, yoğunluk müfredatı, mean+max
+havuzlaması) açığın yarıdan çoğunu kapatır (N=10 \%61.6$\rightarrow$\%89.6); buna karşın ek kapasite,
+çok-başlı dikkat, Beta dağılımı ve algı-menzili maskesi dahil altı model kaldıracı şampiyonu yüksek yoğunlukta
+geçemez. Özellikle, robotun algısını makalenin kendi 6~m bütçesine indirmek açığı genişletir --- bu, kalan
+açığın algı menzilinden değil, temsil kullanımından kaynaklandığını gösterir. Kalan açığın iki ayrı eksene
+ayrıştığını da gösterdik: challenging'de \emph{çarpışma} (temsil-kullanımı), standard'da \emph{zaman aşımı}
+(bütçe duyarlılığı). Bir metodolojik katkı olarak, best-holdout ölçütünün seçim-saplı olduğunu gösterdik ve
+tüm kıyasları çok-tohumlu, istatistiksel olarak denetlenmiş bir protokole bağladık.
+
+% =====================================================================
+\bibliographystyle{IEEEtran}
+\bibliography{refs}
+
+\end{document}

@@ -70,7 +70,17 @@ checkpoints/sncp_ppo_final.pt
 checkpoints/*.pt
 /*.png
 /*.gif
-rapor/
+# rapor/ (paper): track .tex/.bib/figures + the compiled IEEE PDF; ignore LaTeX build cruft + bundles
+rapor/*.aux
+rapor/*.log
+rapor/*.out
+rapor/*.bbl
+rapor/*.blg
+rapor/*.synctex.gz
+rapor/*.fls
+rapor/*.fdb_latexmk
+rapor/*.zip
+!rapor/sncp_ppo_ieee.pdf
 ltc_sunum/
 ltc_blog_app/
 scratch/

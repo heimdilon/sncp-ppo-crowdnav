@@ -1,196 +1,127 @@
-# SNCP-PPO Social Navigation
+# SNCP-PPO: Kalabalıkta İnsan-Merkezli Navigasyon (Reprodüksiyon Çalışması)
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/heimdilon/sncp-ppo-crowdnav/blob/main/sncp_ppo_colab.ipynb)
 
-PPO-based crowd-aware navigation policy for the TurtleBot3 Waffle, using an LTC
-(Liquid Time Constant) recurrent backbone for spatio-temporal reasoning over
-nearby pedestrians.
+Ao vd. (2026, *Int. J. Social Robotics*) **SNCP-PPO** mimarisinin (Yapısal Nöral Devre
+Politikası + PPO) bağımsız bir reprodüksiyonu. Politika, kalabalığı bir uzay-zamansal grafa
+dönüştürür; üç **LTC** (Liquid Time-Constant) nöral-devre kodlayıcıyla işler, dikkat
+havuzlamasıyla özetler ve PPO ile uçtan uca eğitir.
 
-> **Want to train/eval without a local GPU?** Open
-> [`sncp_ppo_colab.ipynb`](sncp_ppo_colab.ipynb) in Google Colab (badge above) —
-> end-to-end setup, smoke tests, full 3000-episode training, evaluation, and
-> trajectory visualization, all in one notebook.
+> **Makale (bu çalışma):** [`rapor/sncp_ppo_ieee.pdf`](rapor/sncp_ppo_ieee.pdf) — Türkçe,
+> IEEEtran. Kaynak: [`rapor/sncp_ppo_ieee.tex`](rapor/sncp_ppo_ieee.tex) (+ `refs.bib`, figür
+> üretici scriptler). Overleaf'e `rapor/` klasörünü yükleyip `pdfLaTeX` ile derleyin.
 
-## Architecture
+> **Yerel GPU olmadan eğitim/değerlendirme:** [`sncp_ppo_colab.ipynb`](sncp_ppo_colab.ipynb)
+> (yukarıdaki Colab rozeti) — uçtan uca kurulum, eğitim, değerlendirme, yörünge görselleştirme.
 
-![SNCP-PPO architecture](demo/architecture.png)
+## Ana sonuç: "açığı ne kapatır, ne kapatmaz"
 
-The policy (`sncp_ppo/models.py::SNCPPolicy`) maps three robot-local observation
-streams to a continuous action through three parallel encoders, attention
-pooling, and an LTC fusion core:
+Makale "challenging" senaryosunda (10–20 yaya) **~%94 başarı / ~%4 çarpışma** bildirir. Naif bir
+reprodüksiyon bunun çok altında kalır. Üç **sadakat düzeltmesi** açığın yarıdan çoğunu kapatır;
+buna karşın denenen altı model kaldıracı şampiyonu yüksek yoğunlukta **geçemez**. Tüm kıyaslar
+dürüst bir çok-tohumlu protokolle yapılır (5 tohum × 50 bölüm = 250 bölüm/yoğunluk, Wilson %95 GA,
+iki-oranlı *z*, Bonferroni α=0.0125).
 
-- **Inputs** — `robot_node` (7), `spatial_edges` (H×2, one per pedestrian),
-  `temporal_edges` (2 = the robot's own `[v, w]`)
-- **Encoders** — a Robot MLP (7→64→128) plus two LTC recurrent encoders
-  (temporal + per-pedestrian spatial, each 2→32→256)
-- **Attention** — pedestrians (Q) are scored against the robot's motion state
-  (K) and pooled into `u_att`
-- **Fusion** — a Node LTC fuses `concat[v_m, m_rr, u_att]` (640→32→256) into the
-  shared trunk `sf`
-- **Heads** — Actor μ → `[v∈[0, 0.26], w∈[-1.8, 1.8]]` and Critic → V(s)
+**Şampiyon v30** — `paper_challenging`, robot 1.0 m/s, görünmez-robot ORCA kalabalık:
 
-The three LTC hidden states are carried across timesteps (trained via BPTT), so
-the policy infers pedestrian *motion* over time — the observation deliberately
-omits pedestrian velocity. Regenerate the diagram with
-`python visualize_architecture.py --output demo/architecture.png`.
+| N (yaya) | Başarı | Çarpışma | Zaman aşımı |
+|:--------:|:------:|:--------:|:-----------:|
+| 5  | 97.2% | 2.8%  | 0% |
+| 10 | 89.6% | 10.4% | 0% |
+| 15 | 85.6% | 14.4% | 0% |
+| 20 | 79.2% | 20.8% | 0% |
 
-## Project layout
+*(Makale: standard %99.5, challenging %94. N=10'da ~4 pp'lik kalan açık gerçektir; ayrıntı +
+negatif ablasyonlar makalede.)*
+
+**Sadakat düzeltmeleri (açığı kapatır):** Denklem 11 ön-MLP gömmesi (v27) + yoğunluk müfredatı
+N~U(10,20) (v28) + mean+max dikkat havuzlaması (v30). N=10: %61.6 → %89.6.
+
+**Açığı kapatmayan kaldıraçlar:** node kapasite (v31), N→25 + 4M bütçe (v32), 4-başlı dikkat (v33),
+Beta aksiyon dağılımı (v34), sayı-ölçekleme (v29), 6 m algı-menzili maskesi (v35). **Kilit bulgu:**
+robotun algısını makalenin kendi 6 m bütçesine indirmek açığı *genişletir* → kalan açık "ne kadar
+görüyor" değil "gördüğüyle ne yapıyor" (temsil kullanımı). *(v36 = hepsini birleştiren koşu —
+değerlendirme bekliyor.)*
+
+## Mimari
+
+Politika (`sncp_ppo/models.py::SNCPPolicy`), makalenin anlamsal bölümlemesini izler:
+
+- **Girdiler** — `robot_node` (7), `spatial_edges` (N×6, yaya başına), `temporal_edges` (2)
+- **Ön-MLP (Eq 11)** — ham kenar girdisi NCP'ye girmeden önce 256 boyuta gömülür *(v27)*
+- **Kodlayıcılar** — Robot MLP (→128) + iki LTC (temporal + uzaysal, seyrek AutoNCP kablolama)
+- **Dikkat havuzu** — yayalar robot/zaman anahtarına göre ağırlıklanır; v30 buna kardinaliteye-
+  dayanıklı bir **mean+max** dalı ekler (yoğunlukta washout'u azaltır)
+- **Füzyon + başlar** — Node LTC füzyonu → Aktör (ω, v) + Kritik V(s)
+
+Üç LTC gizli durumu zaman boyunca taşınır (BPTT). Mimari diyagramı:
+[`rapor/figures/ieee_arch.png`](rapor/figures/ieee_arch.png).
+
+## Değerlendirme rejimi (makale-sadık)
+
+`paper_challenging`: dağınık yayalar, 15×15 m arena, 8 m geçiş, **robot 1.0 m/s**, ORCA yayalar
+(hız paritesi 1.0, **görünmez-robot** = CrowdNav rejimi), çarpışma eşiği 0.3 m, dt 0.25 s,
+challenging bütçe 50 s / standard 12.5 s (ortamdan türetilir). Ödül = makale Eq 17–20
+(`r_g`/`r_c`/`r_s`, normalize sosyal-baskı indeksi).
+
+## Proje düzeni
 
 ```
 .
-├── crowd_sim/           Gymnasium environment (Social Force pedestrians)
-│   └── crowd_env.py
-├── sncp_ppo/            Policy + PPO algorithm
-│   ├── models.py        SNCPPolicy: robot MLP + LTC + attention + actor/critic
-│   ├── ppo.py           PPOAgent + PPOMemory (GAE with truncation bootstrap)
-│   └── train.py         Training loop with curriculum + holdout evaluation
-├── waffle_ros/          ROS node for deploying the policy on a real Waffle
-├── test_env.py          Smoke test: env reset/step + observation shapes
-├── test_model.py        Smoke test: policy forward pass
-├── test_eval.py         Run N episodes, report success/collision/timeout stats
-├── visualize_trajectory.py        Single trajectory PNG plot
-├── visualize_trajectory_gif.py    Single trajectory animated GIF
-├── visualize_all_scenarios_gif.py All scenarios (easy/medium/hard/extreme) GIFs
-├── visualize_architecture.py      Policy architecture diagram (PNG)
-├── requirements.txt
-└── README.md
+├── crowd_sim/crowd_env.py     Gymnasium ortamı (ORCA kalabalık, paper senaryoları)
+├── sncp_ppo/
+│   ├── models.py              SNCPPolicy (ön-MLP + LTC + dikkat + mean+max + aktör/kritik)
+│   ├── ppo.py                 PPOAgent + GAE (gaussian & beta dalları)
+│   ├── train.py               Eğitim döngüsü: yoğunluk müfredatı + holdout-best
+│   ├── eval_report.py         Yoğunluk taraması / rapor / yörünge render
+│   └── run_readiness.py       Colab koşu-öncesi marker denetimi
+├── tests/                     Pytest (250+ test); `--basetemp=./.pytmp` ŞART (ACL)
+├── scripts/                   Eval/karşılaştırma/görselleştirme CLI'ları
+├── rapor/                     Makale: sncp_ppo_ieee.tex + refs.bib + figures/ + PDF
+├── sncp_ppo_colab.ipynb       Uçtan uca Colab notebook'u
+└── requirements.txt
 ```
 
-## Setup
+## Kurulum
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate            # Linux/macOS
-# .venv\Scripts\activate              # Windows PowerShell
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-## Quick smoke tests
-
-```bash
-python test_env.py        # environment + observation shapes
-python test_model.py      # policy forward pass
-```
-
-## Training
+## Eğitim (paper rejimi)
 
 ```bash
 python -m sncp_ppo.train \
-    --episodes 3000 \
-    --num_humans 5 \
-    --seed 42 \
-    --lr 1e-4 \
-    --lr_end_factor 0.1 \
-    --eval_freq 50 \
-    --holdout_episodes 30 \
-    --holdout_scenarios easy hard \
-    --save_path checkpoints/sncp_ppo.pt
+    --num_envs 16 --horizon 128 --total_steps 2500000 \
+    --fixed_scenario paper_challenging --num_humans 10 --num_humans_range 10 20 \
+    --robot_vpref 1.0 --lr 1e-4 \
+    --holdout_scenarios paper_standard paper_challenging --holdout_episodes 50 \
+    --pre_mlp --meanmax_pool \
+    --save_path checkpoints/sncp_ppo_v30.pt
 ```
 
-- 5-phase curriculum (1→2→3→4→5 pedestrians) with monotone speed ramp.
-  Override boundaries with `--curriculum_easy_until / _easy_plus_until /
-  _medium_until / _hard_until` (defaults: 10% / 25% / 50% / 75% of episodes).
-- A CSV log is written to `logs/training_<timestamp>.csv` with per-episode
-  metrics and the most-recent **per-scenario** holdout result.
-- The best model is saved when the **min** success rate across holdout
-  scenarios improves — a true generalist metric (e.g. "100% easy + 0% hard"
-  is rejected as 0%, not 50%).
+Mimari bayrakları (hepsi varsayılan-kapalı, checkpoint'ten **otomatik algılanır**): `--pre_mlp`
+(Eq 11), `--meanmax_pool` (v30), `--node_units/--node_output` (v31), `--attn_heads` (v33),
+`--attn_count_scaling` (v29), `--action_dist beta` + `--ent_coef` (v34), `--sense_range` (v35).
 
-## Evaluation
+## Değerlendirme (dürüst çok-tohumlu tarama)
 
 ```bash
-python test_eval.py \
-    --checkpoint checkpoints/sncp_ppo.pt \
-    --num_humans 5 \
-    --scenario hard \
-    --n_episodes 20 \
-    --seed 42
+python scripts/run_post_eval.py --version 30 \
+    --densities 5 10 15 20 --scenario paper_challenging \
+    --n_episodes 50 --robot_vpref 1.0 --human_vpref_override 1.0
 ```
 
-`num_humans` must match what the policy was trained with for fair comparison.
+## Sınırlamalar (dürüst)
 
-## Results — v6 (3000-episode run)
+Tüm sürümler **tek eğitim-tohumuyla** eğitildi (değerlendirme çok-tohumlu); makale 500 test
+kullanır, biz 250. Makalede belirtilmeyen ~12 değişken (NCP kablolama, ORCA parametreleri, eğitim
+bütçesi vb.) bizim mühendislik seçimimizdir → reprodüksiyon açığının bir kısmı kaçınılmazdır.
+Ayrıntı ve istatistik: [`rapor/sncp_ppo_ieee.pdf`](rapor/sncp_ppo_ieee.pdf).
 
-Trained for 3000 episodes (5-phase curriculum, `seed=42`, ~2h40m on a Colab T4).
-The shipped checkpoint (`checkpoints/sncp_ppo_v6_colab.pt`) is the generalist
-that maximised `min(success)` across the easy + hard holdouts.
+## Referans
 
-**Final evaluation** (100 deterministic episodes per scenario, `seed=100`):
-
-| Scenario  | Pedestrians | Success | Collision | Timeout | Avg reward |
-|-----------|:-----------:|:-------:|:---------:|:-------:|:----------:|
-| easy      | 1 | **100%** | 0%  | 0% | 85.2 |
-| easy_plus | 2 | **100%** | 0%  | 0% | 85.7 |
-| medium    | 3 | **100%** | 0%  | 0% | 86.4 |
-| hard      | 5 | **86%**  | 14% | 0% | 75.4 |
-| extreme\* | 5 | 26%      | 74% | 0% | 13.6 |
-
-<sub>\*`extreme` uses random spawns; the curriculum trains only on circle-pattern
-spawns, so this row is the out-of-distribution generalisation floor, not an
-in-distribution target.</sub>
-
-- **Catastrophic forgetting solved:** unlike v3 (which collapsed to ~6% on the
-  1-pedestrian case after training on dense crowds), v6 holds **100%** on
-  easy/easy_plus/medium while reaching **86%** on the 5-pedestrian hard scenario
-  — achieved *without* curriculum replay, via longer training plus the
-  `min(success)` best-checkpoint metric.
-- **Timeout = 0% everywhere:** the policy never stalls; failures are collisions
-  in dense traffic, not hesitation.
-
-### Learning curve
-
-![Training curves](demo/learning_curves_v6.png)
-
-Holdout-easy (green) locks to 100% by ~ep 300 and never drifts — the forgetting
-fix in action. Holdout-hard (red) is high-variance (the policy oscillates rather
-than settling), but the best-checkpoint metric (black dashed) is a monotonic
-staircase that captures the peaks.
-
-### Sample trajectories
-
-Robot (green) navigating to its goal (★) through Social-Force pedestrians; shaded
-ellipses are per-pedestrian comfort zones.
-
-| Easy (N=1) | Hard (N=5) | Extreme (N=5, random) |
-|:----------:|:----------:|:---------------------:|
-| ![easy](demo/traj_easy.png) | ![hard](demo/traj_hard.png) | ![extreme](demo/traj_extreme.png) |
-
-Animated versions of the dense scenarios live in [`demo/`](demo/)
-(`hard_trajectory.gif`, `extreme_trajectory.gif`).
-
-## Visualization
-
-```bash
-# Static trajectory plot
-python visualize_trajectory.py --checkpoint checkpoints/sncp_ppo.pt
-
-# Single animated GIF
-python visualize_trajectory_gif.py --checkpoint checkpoints/sncp_ppo.pt
-
-# All scenarios at once
-python visualize_all_scenarios_gif.py --checkpoint checkpoints/sncp_ppo.pt
-```
-
-## Reward components (see `crowd_sim/crowd_env.py`)
-
-| Component       | Formula                                          | Range          |
-|-----------------|--------------------------------------------------|----------------|
-| Goal            | +20 on success, +10·Δd dense, small angle pen.   | [-10, +20]     |
-| Collision       | -20 on contact                                   | [-20, 0]       |
-| Comfort (I_sp)  | **-0.5·I_sp / N** (per-human capped at 10/d_hr)  | bounded < 0    |
-| Standstill      | -0.5 if v < 0.05 m/s                             | [-0.5, 0]      |
-
-Comfort is divided by `num_humans` so the per-step social cost is roughly
-phase-invariant — without this, the I_sp sum scaled linearly with crowd size
-and shocked the value function on every curriculum shift.
-
-## PPO correctness notes
-
-- Bootstrap value V(s_final) is computed when an episode is **truncated**
-  (timeout), preventing biased GAE estimates.
-- The stored action and its log-probability come from the **un-clipped sample**
-  drawn from Normal(mu, std); only the env receives the clipped version. This
-  preserves the PPO ratio identity (`exp(new_logp - old_logp)`).
-- Recurrent hidden states are stored per step and re-fed during PPO updates.
-  This is the standard SB3/CleanRL approximation — see `sncp_ppo/ppo.py:60-135`
-  comments.
+Ao, T., Li, H., Tian, Y. vd. (2026). *Human-Centric Motion Planning in Crowded Spaces: A
+Structured Neural Circuit Approach with Social Interaction-Awareness.* International Journal of
+Social Robotics, 18(52). DOI: 10.1007/s12369-026-01389-9
