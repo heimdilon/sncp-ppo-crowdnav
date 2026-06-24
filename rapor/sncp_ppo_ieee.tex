@@ -42,15 +42,17 @@ Yayımlanmış güçlü sonuçları bağımsız olarak yeniden üretmek, makalel
 belirtmemesi nedeniyle zordur. Bu çalışma, kalabalıkta insan-merkezli navigasyon için SNCP--PPO mimarisini
 makalenin değerlendirme rejiminde (dağınık yayalar, $15\times15$~m arena, görünmez robot, ORCA kalabalık,
 1.0~m/s) sadık biçimde yeniden kurar ve bildirilen \%94 ``challenging'' başarısına olan açığı \emph{neyin
-kapatıp neyin kapatmadığını} tek-değişkenli ablasyonlarla ayrıştırır. Tüm kıyasları, eğitim-içi ``best''
+kapatıp neyin kapatmadığını} çoğunlukla tek-değişkenli ablasyonlarla ayrıştırır (v32 ve v34 bilinçli olarak
+iki-değişkenlidir). Tüm kıyasları, eğitim-içi ``best''
 ölçütünün seçim-saplı olduğunu gösterdikten sonra, dürüst bir çok-tohumlu protokole (5 tohum $\times$ 50
 bölüm $=250$ bölüm/yoğunluk; Wilson güven aralığı, iki-oranlı $z$, Bonferroni) bağlarız. Üç \emph{sadakat
 düzeltmesi} (Denklem~11 ön-MLP gömmesi, yoğunluk müfredatı) ve bir \emph{mimari katkı} (mean+max dikkat
 havuzlaması) N=10 yayada başarıyı \%61.6'dan \%89.6'ya, N=20'de \%43.6'dan \%79.2'ye çıkarır ve çarpışmayı
 2.7--9.0 kat düşürür; buna karşın, benimsenen bu yapılandırmanın üzerine denenen altı model kaldıracından
 \emph{beşi} (ek kapasite, çok-başlı dikkat, algı-menzili maskesi vb.) onu yüksek yoğunlukta geçemez; yalnızca
-Beta eylem dağılımı yön-doğru bir iyileşme gösterir (nokta-tahminle her yoğunlukta v30'u domine eder) ancak
-tek-tohum gücüyle Bonferroni eşiğini aşamaz. En çarpıcı bulgu, robotun algısını makalenin
+Beta eylem dağılımı yön-doğru bir iyileşme gösterir (N=10/15/20'de v30'u nokta-tahminle geçer; N=5'te
+eşdeğer olduğundan tüm-yoğunluk Pareto üstünlüğü ve ön-kayıtlı geçiş ölçütü sağlanmaz) ancak tek-tohum
+gücüyle Bonferroni eşiğini aşamaz. En çarpıcı bulgu, robotun algısını makalenin
 kendi 6~m bütçesine indirmenin açığı \emph{kapatmak yerine genişletmesidir} (N=20 \%79.2$\rightarrow$\%69.6):
 kalan açık ``robot ne kadar görüyor'' ile değil, ``gördüğünü nasıl kullanıyor'' (temsil kullanımı) ile
 ilgilidir.
@@ -117,8 +119,8 @@ kablolamasını mühendislik seçimi olarak işaretleriz.
 
 \textbf{Küme-değişmez havuzlama.} Değişken sayıda yayayı tek bir özet vektöre indirgemek, permütasyona
 değişmez bir küme fonksiyonu gerektirir. Dikkat havuzlaması~\cite{vaswani2017attention} öğrenilmiş bir
-ağırlıklı ortalama sağlarken, DeepSets~\cite{zaheer2017deepsets} ve PointNet~\cite{qi2017pointnet}
-\emph{maksimum} havuzlamanın kardinaliteye dayanıklı olduğunu gösterir. Bizim en etkili sadakat-dışı
+ağırlıklı ortalama sağlarken, DeepSets~\cite{zaheer2017deepsets} küme-değişmez (permütasyona bağışık) havuzlamayı kurar; PointNet~\cite{qi2017pointnet}
+ise \emph{maksimum} havuzlamanın kardinaliteye dayanıklılığını gösterir. Bizim en etkili sadakat-dışı
 düzeltmemiz (mean+max), tam da bu içgörüye dayanır: yoğun kalabalıkta saf dikkat ortalaması en tehditkâr
 ajanı seyreltir.
 
@@ -203,8 +205,11 @@ $\alpha=0.05/4=0.0125$ alınır. Bir kaldıracın ``yardımcı'' sayılması iç
 yüksek-N (N=15/20) başarısı \emph{artmalı} ve/veya çarpışması \emph{düşmeli} (Bonferroni-anlamlı),
 N=5/10'da gerileme olmamalı ve zaman aşımı 0 kalmalıdır. Bu çok-tohumlu, etki-büyüklüğü ve aralık-temelli
 raporlama, derin RL'de tekrarlanabilirlik ve istatistiksel titizlik çağrılarını
-izler~\cite{henderson2018matters,agarwal2021precipice}; bağımsız iki-oranlı $z$ yerine eşleştirilmiş
-testler (McNemar) veya daha az tutucu düzeltmeler (Holm) de kullanılabilirdi.
+izler~\cite{henderson2018matters,agarwal2021precipice}. Başarı ve çarpışma ayrı önceden-kayıtlı test
+aileleri sayılır (her biri dört yoğunlukta düzeltilir); sekizini tek aile kabul eden daha katı eşikte
+($0.05/8$) de hüküm değişmez. Sürümler aynı tohumları paylaştığından bölümler \emph{eşleştirilmiştir}:
+bağımsız $z$ bu nedenle tutucudur, eşleştirilmiş bir test (McNemar) daha güçlü olurdu; ancak havuzlanmış
+kayıt per-episode eşleşme tutmadığından bu sonradan uygulanamaz (gelecek çalışma).
 
 \begin{table}[t]
 \centering
@@ -311,18 +316,21 @@ Bu uyumsuzluk Bölüm~\ref{sec:ablations}'te v35 ile doğrudan sınanır.}
 % =====================================================================
 \subsection{Metodoloji: ``best holdout'' seçim-saplıdır}\label{sec:seedbias}
 Eğitim sırasında ``best'' checkpoint, holdout genelist-min ölçütü yeni bir maksimuma ulaştığında kaydedilir;
-ancak her holdout değerlendirmesi \emph{farklı} bir tohum kümesi kullanır. 2.5\,M boyunca onlarca gürültülü
-değerlendirme (her biri 50 bölüm, SE\,$\approx$\,4--7 puan) yapıldığından, bu serinin \emph{maksimumu} yukarı
-yönlü saplıdır (Şekil~\ref{fig:seedbias}). Aynı checkpoint, farklı tohumla \%56'dan \%76'ya kadar değişebilir.
-Bu nedenle bu makaledeki tüm sürüm kıyasları çok-tohumlu havuzlanmış orandan gelir; eğitim-içi ``best''
-sayıları rapor edilmez.
+ancak her holdout değerlendirmesi \emph{farklı} bir tohum kümesi kullanır ve her biri (50 bölüm) yalnızca
+SE\,$\approx$\,4--7 puanlık bir tahmindir; 2.5\,M boyunca yapılan onlarca böyle değerlendirmenin
+\emph{maksimumu} yukarı yönlü saplıdır. Şekil~\ref{fig:seedbias} bunu şampiyonun kendi beş tohum bloğuyla
+somutlaştırır: blok başarıları \%86--94 arasında değişir (havuz ortalaması \%89.6) ve yalnız bu beş bloğun
+maksimumu (\%94) bile ortalamadan $+$4.4~pp yukarıdadır --- eğitim onlarca holdout değerlendirmesi
+yaptığından kaydedilen ``best'' daha da saplıdır. Bu nedenle tüm sürüm kıyasları çok-tohumlu havuzlanmış
+orandan gelir; eğitim-içi ``best'' sayıları rapor edilmez.
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=0.92\columnwidth]{figures/ieee_seedbias.png}
-\caption{N=10'da seçim sapması. Gri noktalar bağımsız tohum bloklarıdır; mavi bant dürüst ortalamanın
-\%95 GA'sıdır. Kırmızı yıldız, eğitimin kaydettiği seçim-saplı ``best'' tepesidir. Tüm kıyaslar artık
-çok-tohumludur.}
+\caption{N=10'da seçim sapması. Gri noktalar bağımsız tohum bloklarıdır (gerçek v30 değerleri); mavi bant
+dürüst ortalamanın $\pm$1.96\,SE (Wald) aralığıdır. Kırmızı yıldız bu beş bloğun \emph{maksimumudur}
+(seçim sapmasının bir alt sınırı; eğitimin onlarca eval'inden kaydettiği gerçek ``best'' daha da yüksektir).
+Tüm kıyaslar artık çok-tohumludur.}
 \label{fig:seedbias}
 \end{figure}
 
@@ -408,8 +416,9 @@ güzergâh uzar ve karmaşıklaşır (45$\to$78 adım). Bu, nav-sürenin yoğunl
 \centering
 \includegraphics[width=0.88\textwidth]{figures/ieee_traj.png}
 \caption{Şampiyon (v30) gerçek yörüngeleri (\texttt{paper\_challenging}, robot 1.0~m/s). Mavi: robot
-yörüngesi; gri: yayalar (yol + son konum); kırmızı yıldız: hedef. Robot her iki yoğunlukta da kavisli
-kaçınma yapar; N=20'de güzergâh belirgin biçimde uzar (gerçek kaçınma, beeline değil).}
+yörüngesi; gri: yayalar (yol + son konum); kırmızı yıldız: hedef. Gösterilenler \emph{temsilî başarılı}
+epizotlardır (her yoğunlukta sabit bir seçim kuralıyla bulunan ilk başarılı epizot). Robot her iki yoğunlukta
+da kavisli kaçınma yapar; N=20'de güzergâh belirgin biçimde uzar (gerçek kaçınma, beeline değil).}
 \label{fig:traj}
 \end{figure*}
 
@@ -426,8 +435,8 @@ N=10'dadır, hedeflenen N=20 ise düzdür ($-$0.4~pp).
 \item \textbf{Beta eylem dağılımı} (v34) altı kaldıraç içinde \emph{tek yön-doğru olanıdır}: v30'u
 N=10/15/20'de hem başarı hem çarpışmada nokta-tahminle domine eder (N=20 başarı $+$6.8~pp, $p=0.045$;
 çarpışma $-$7.6~pp, $p=0.024$) ve tüm sweep'in en iyi yüksek-N değerlerini verir (N=15/20 başarı
-\%91.2/\%86.0). Ancak hiçbir yoğunlukta Bonferroni eşiğini ($\alpha{=}0.0125$) aşamaz --- etki gerçek ama
-tek-tohum gücü yetersizdir (Cohen $h\approx0.18$). Saf tek-değişken değildir: Beta, Gauss'tan farklı entropi
+\%91.2/\%86.0). Ancak hiçbir yoğunlukta Bonferroni eşiğini ($\alpha{=}0.0125$) aşamaz --- gözlenen nokta
+etki yön-doğru, ancak tek eğitim-tohumu altında istatistiksel olarak kesinleşmez (Cohen $h\approx0.18$). Saf tek-değişken değildir: Beta, Gauss'tan farklı entropi
 ölçeği nedeniyle ayarlı bir entropi katsayısıyla ($c_2{=}0.001$) birlikte uygulanır; ayrıca 1000 bölümde
 3 zaman aşımı görülür.
 \item \textbf{Dikkat sayı-ölçeklemesi} (v29, Eq~13 $n/\sqrt{d_k}$): tek somut kalan paper-sadakat
@@ -481,14 +490,15 @@ tüm yayaları görmeye devam eder; dolayısıyla bu, tam bir kısmî-gözlem (P
 seviyesinde bir bilgi kısıtıdır.
 
 Asıl çıkarım, açık sorusunu doğrudan yanıtlar. Makale \%94'ü \emph{yalnızca} 6~m algıyla alır; bizim v30
-(tüm yayalar) N=15/20'de \%85.6/\%79.2, v35 (6~m, makale bütçesi) ise \%79.2/\%69.6 alır. Yani makalenin
+(tüm yayalar) N=15/20'de \%85.6/\%79.2, v35 (6~m havuz-maskesi, makalenin algı kısıtına yaklaşım) ise
+\%79.2/\%69.6 alır. Yani makalenin
 algı bütçesine inmek açığı kapatmaz, \emph{genişletir}. Açık ``robot ne kadar görüyor'' değil, ``gördüğüyle
 ne yapıyor'' (temsil/kodlama kalitesi) sorunudur.
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=\columnwidth]{figures/ieee_sense.png}
-\caption{Algı-menzili ablasyonu (v35). v30 (tüm yayalar) ile v35 (6~m maske $=$ makale bütçesi) ve makale
+\caption{Algı-menzili ablasyonu (v35). v30 (tüm yayalar) ile v35 (6~m havuz-maskesi $\approx$ makalenin algı kısıtı) ve makale
 (yeşil) karşılaştırması. 6~m bütçeye inmek başarıyı yüksek-N'de düşürür (sol) ve çarpışmayı artırır (sağ):
 algı menzili açığın nedeni değildir.}
 \label{fig:sense}
@@ -534,8 +544,8 @@ sağlamlaştırmadır. \textbf{Değerlendirme ölçeği.} Yoğunluk başına 50 
 500 kullanır. \textbf{İki-değişken (v32).} Müfredat erişimi ve bütçe birlikte değiştiği için atıf muğlaktır.
 \textbf{Beta ablasyonu (v34).} Beta, Gauss'tan farklı entropi ölçeği nedeniyle ayarlı bir entropi katsayısıyla
 ($c_2{=}0.001$) birlikte eğitildi; dolayısıyla saf tek-değişken değildir (kazanç yalnız Beta'ya atfedilemez).
-Yön-doğru sonucu (nokta-tahminle v30'u domine) tek-tohumda Bonferroni-altı kalır; çoklu eğitim-tohumu bunu
-doğrulayabilir. \textbf{Senaryo-genellemesi.} Şampiyon esas olarak
+Yön-doğru sonucu (N=10/15/20'de nokta-tahminle üstün) tek-tohumda Bonferroni-altı kalır; çoklu eğitim-tohumu
+veya per-episode kaydedilmiş \emph{eşleştirilmiş} bir test bunu doğrulayabilir. \textbf{Senaryo-genellemesi.} Şampiyon esas olarak
 challenging holdout'unda seçildiğinden standard senaryoda zaman-aşımı kaynaklı geriler (\%85.6); tek bir
 checkpoint'in her iki paper senaryosunda da yüksek olması (makaledeki gibi) ayrı bir hedef olarak ele
 alınmadı. \textbf{Doğrulanamayan makale ayrıntıları.} ORCA parametreleri ve bazı eylem sınırları makalede
@@ -547,8 +557,8 @@ verilmediğinden reprodüksiyon açığının bir kısmı \emph{kaçınılmazdı
 SNCP--PPO'yu makalenin değerlendirme rejiminde sadık biçimde yeniden kurduk ve ``\%94'e neden ulaşılamıyor''
 sorusunu ölçülebilir bileşenlere ayrıştırdık. İki sadakat düzeltmesi ve mean+max katkımız açığın yarıdan çoğunu kapatır (N=10 \%61.6$\rightarrow$\%89.6);
 buna karşın denenen altı model kaldıracından beşi (ek kapasite, çok-başlı dikkat, algı-menzili maskesi vb.)
-şampiyonu yüksek yoğunlukta geçemez; yalnızca Beta eylem dağılımı yön-doğru (nokta-tahminle domine) ama
-tek-tohumda Bonferroni-altı bir iyileşme verir. Özellikle, robotun algısını makalenin kendi 6~m bütçesine indirmek açığı genişletir --- bu, kalan
+şampiyonu yüksek yoğunlukta geçemez; yalnızca Beta eylem dağılımı yön-doğru (N=10/15/20'de nokta-tahminle
+üstün, N=5'te eşdeğer) ama tek-tohumda Bonferroni-altı bir iyileşme verir. Özellikle, robotun algısını makalenin kendi 6~m bütçesine indirmek açığı genişletir --- bu, kalan
 açığın algı menzilinden değil, temsil kullanımından kaynaklandığını gösterir. Kalan açığın iki ayrı eksene
 ayrıştığını da gösterdik: challenging'de \emph{çarpışma} (temsil-kullanımı), standard'da \emph{zaman aşımı}
 (bütçe duyarlılığı). Bir metodolojik katkı olarak, best-holdout ölçütünün seçim-saplı olduğunu gösterdik ve

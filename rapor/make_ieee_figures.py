@@ -177,7 +177,7 @@ bestof = float(blocks10.max())                             # secim-sapmasi: blok
 fig, ax = plt.subplots(figsize=(7.6, 4.4))
 xj = np.random.RandomState(0).normal(1.0, 0.045, len(blocks10))
 ax.fill_between([0.6, 1.4], mean10 - hw10, mean10 + hw10, color=BLUE, alpha=0.15, zorder=0,
-                label="dürüst ortalama %95 GA")
+                label="dürüst ortalama ±1.96·SE")
 ax.scatter(xj, blocks10, s=85, color=GRAY, edgecolor="k", zorder=3,
            label="bağımsız tohum blokları (5×50 ep)")
 ax.hlines(mean10, 0.6, 1.4, color=BLUE, lw=2.5, zorder=4, label=f"dürüst ortalama %{mean10:.1f}")
