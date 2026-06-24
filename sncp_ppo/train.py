@@ -881,7 +881,11 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
                 else:
                     action = dist.sample()
                     log_prob = dist.log_prob(action).sum(-1)
-            act_np = action.cpu().numpy()
+            # .copy(): on CPU, action.cpu().numpy() aliases the tensor's storage, so
+            # the in-place clips below would mutate the action stored in buf (whose
+            # log_prob is on the UN-clipped sample) -> ratio/log_prob mismatch.
+            # No-op on GPU (.cpu() already copies) and for Beta (already in-bounds).
+            act_np = action.cpu().numpy().copy()
             act_np[:, 0] = np.clip(act_np[:, 0], 0.0, env.robot_vpref)
             act_np[:, 1] = np.clip(act_np[:, 1], -env.robot_wmax, env.robot_wmax)
             next_obs, reward, term, trunc, info = envs.step(act_np)

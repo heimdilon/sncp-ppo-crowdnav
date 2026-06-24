@@ -1,0 +1,17 @@
+{
+  "scenario": "paper_standard",
+  "num_humans": 5,
+  "block_means": [
+    0.88,
+    0.86,
+    0.86,
+    0.86,
+    0.82
+  ],
+  "pooled_success": 0.856,
+  "pooled_se": 0.022204864331943127,
+  "pooled_collision": 0.036,
+  "pooled_timeout": 0.108,
+  "n": 250,
+  "elapsed_s": 143.70257258415222
+}

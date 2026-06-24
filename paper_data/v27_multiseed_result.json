@@ -1,0 +1,59 @@
+{
+  "5": {
+    "block_means": [
+      0.94,
+      0.92,
+      0.94,
+      0.92,
+      0.96
+    ],
+    "pooled_success": 0.936,
+    "pooled_se": 0.01547953487673321,
+    "pooled_collision": 0.068,
+    "pooled_timeout": 0.0,
+    "n": 250
+  },
+  "10": {
+    "block_means": [
+      0.78,
+      0.8,
+      0.8,
+      0.8,
+      0.82
+    ],
+    "pooled_success": 0.8,
+    "pooled_se": 0.025298221281347035,
+    "pooled_collision": 0.2,
+    "pooled_timeout": 0.0,
+    "n": 250
+  },
+  "15": {
+    "block_means": [
+      0.74,
+      0.72,
+      0.72,
+      0.7,
+      0.66
+    ],
+    "pooled_success": 0.708,
+    "pooled_se": 0.028756634017214185,
+    "pooled_collision": 0.296,
+    "pooled_timeout": 0.0,
+    "n": 250
+  },
+  "20": {
+    "block_means": [
+      0.6,
+      0.66,
+      0.56,
+      0.52,
+      0.64
+    ],
+    "pooled_success": 0.596,
+    "pooled_se": 0.031034432490380744,
+    "pooled_collision": 0.404,
+    "pooled_timeout": 0.0,
+    "n": 250
+  },
+  "_elapsed_s": 645.6650378704071
+}

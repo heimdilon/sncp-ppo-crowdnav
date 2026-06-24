@@ -1,0 +1,67 @@
+{
+  "5": {
+    "block_means": [
+      0.96,
+      0.96,
+      1.0,
+      0.96,
+      0.96
+    ],
+    "pooled_success": 0.968,
+    "pooled_se": 0.011131217363792701,
+    "pooled_collision": 0.028,
+    "pooled_timeout": 0.004,
+    "avg_success_steps": 46.570247933884296,
+    "avg_i_sp": 0.009391572929387224,
+    "n": 250
+  },
+  "_elapsed_s": 863.4945673942566,
+  "10": {
+    "block_means": [
+      0.9,
+      0.92,
+      0.98,
+      0.96,
+      0.88
+    ],
+    "pooled_success": 0.928,
+    "pooled_se": 0.01634821091128934,
+    "pooled_collision": 0.072,
+    "pooled_timeout": 0.0,
+    "avg_success_steps": 51.73706896551724,
+    "avg_i_sp": 0.008577213572040675,
+    "n": 250
+  },
+  "15": {
+    "block_means": [
+      0.94,
+      0.92,
+      0.92,
+      0.86,
+      0.92
+    ],
+    "pooled_success": 0.912,
+    "pooled_se": 0.01791714262933685,
+    "pooled_collision": 0.088,
+    "pooled_timeout": 0.0,
+    "avg_success_steps": 56.76315789473684,
+    "avg_i_sp": 0.006475691107505336,
+    "n": 250
+  },
+  "20": {
+    "block_means": [
+      0.9,
+      0.82,
+      0.88,
+      0.88,
+      0.82
+    ],
+    "pooled_success": 0.86,
+    "pooled_se": 0.021945386758952325,
+    "pooled_collision": 0.132,
+    "pooled_timeout": 0.008,
+    "avg_success_steps": 59.36279069767442,
+    "avg_i_sp": 0.005479258245774316,
+    "n": 250
+  }
+}
