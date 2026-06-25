@@ -20,15 +20,16 @@
   PDF `s12369-026-01389-9.pdf` in repo root, **git-ignored**).
 - Stack: Python, PyTorch, Gymnasium, **`ncps`** (Liquid Time-Constant / Neural Circuit Policies), pytest.
 - Robot = **TurtleBot3 Waffle**, max linear speed **0.26 m/s** (real hardware), wmax 1.8, radius 0.3.
-- **v37 = CODE READY FOR PAIRED PROBE; full training is gated and has NOT started.** Persistent design, probe gates,
-  checkpoint-upgrade contract, and Colab runbook: `docs/superpowers/plans/2026-06-24-v37-gated-intention-graph.md`.
-  Core hypothesis = zero-init gated human-human self-attention + 1–4 step constant-velocity intent geometry;
-  Social-NCE is explicitly deferred to a contingent v38 probe. Implementation adds a safe v34→v37 upgrade
-  path (`--upgrade_checkpoint`), exact gate=0 equivalence, checkpoint auto-detection, HH-gate diagnostics,
-  and `scripts/run_v37_probes.py` for paired C0/C1 seeds 40/41/42 with shared episode banks. The notebook and
-  readiness markers now launch the V37 paired probe (not the failed v36 full run); full v37 training still
-  requires a probe `GO`. Local real-v34 CLI smoke passed and the full suite is green (**272 passed,
-  1 pre-existing warning**) after the notebook-wire fix.
+- **v37 = COMPLETE, NO-GO; full training is CANCELLED, v34-fixed-beta remains the champion/base.**
+  The paired probe ran C0/C1 from the same locked `sncp_ppo_v34.pt` base across seeds 40/41/42 with
+  shared episode banks. Verdict: **NO-GO**. C1 (zero-gated HH self-attention + 1?4 step CV intent
+  geometry) did not beat C0: success at N=5/10/15/20 was C0 **97.0/91.0/93.7/81.0%** vs C1
+  **96.7/88.7/88.0/80.7%**; collision was C0 **2.7/8.7/6.3/19.3%** vs C1
+  **3.3/11.0/11.3/18.7%**. High-N success delta was **?3.0 pp**, high-N collision delta
+  **+2.17 pp**, direction-matching seeds **0/3**, low-N regression true, timeout nonzero.
+  HH gate stayed inactive (`0.0034/0.0058/?0.0021`) and diagnostics were not healthy due probe
+  collapse deltas. Do **not** launch full v37; keep v34-fixed-beta as the base. Probe artifacts are
+  local/ignored: `eval_v37_probe_artifacts.zip` / `eval_v37_probe/`.
 - **v36 = COMPLETE, NEGATIVE/FLAT; v34-fixed-beta is locked as the v37 base.** The full 4M combined-levers
   run was healthy and the best checkpoint retained genuine detours, but the honest 5-seed × 50-episode sweep
   failed the preregistered gate. Success at N=5/10/15/20 was **97.6/88.4/82.0/73.2%**, collision

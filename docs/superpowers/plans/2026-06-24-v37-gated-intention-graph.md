@@ -376,13 +376,25 @@ selected v37 base: v34-fixed-beta
 selection reason: v36 failed the preregistered gate and regressed vs v34 at high N
                   (N=15/20 success -9.2/-12.8 pp; collision +6.8/+10.0 pp).
 
-probe C0 runs: TBD
-probe C1 runs: TBD
-probe verdict: TBD
-learned hh_gate: TBD
+probe C0 runs: seeds 40/41/42, 300k steps each from sncp_ppo_v34.pt, eval 100 eps/density
+probe C1 runs: seeds 40/41/42, 300k steps each with --upgrade_checkpoint + --hh_intent_graph
+probe artifact: eval_v37_probe_artifacts.zip (runtime artifact, git-ignored)
+probe C0 N=5/10/15/20 success: 97.0 / 91.0 / 93.7 / 81.0%
+probe C1 N=5/10/15/20 success: 96.7 / 88.7 / 88.0 / 80.7%
+probe C0 N=5/10/15/20 collision: 2.7 / 8.7 / 6.3 / 19.3%
+probe C1 N=5/10/15/20 collision: 3.3 / 11.0 / 11.3 / 18.7%
+probe C1 N=5/10/15/20 timeout: 0.0 / 0.3 / 0.7 / 0.7%
+probe high-N success delta: -3.0 pp
+probe high-N collision delta: +2.17 pp
+probe direction-matching seeds: 0/3
+probe low-N regression: true
+probe timeout_zero: false
+probe diagnostics_healthy: false
+probe verdict: NO-GO
+learned hh_gate: s40=0.00345, s41=0.00583, s42=-0.00210 (inactive; |gate| < 0.01)
 
-full v37 checkpoint: checkpoints/sncp_ppo_v37.pt
-full v37 verdict: TBD
+full v37 checkpoint: not produced
+full v37 verdict: CANCELLED_BY_PROBE_NO_GO
 ```
 
 ---
@@ -395,5 +407,5 @@ Yeni bir agent bu dosyayı gördüğünde:
 2. Default ve kilitli model tabanı `v34-fixed-beta`; v36 warm-start olarak kullanılmamalı.
 3. v37 core tek mekanizmadır: **gated HH self-attention + model-içi 1–4 adım constant-velocity intent geometry**.
 4. Social-NCE v37'ye otomatik dahil değildir; v38 contingent probe'dur.
-5. Notebook marker'ları V37 paired-probe launcher'ını doğrular; probe PASS/GO olmadan full A100 v37 run yapılmaz.
+5. V37 paired probe `NO-GO`; full A100 v37 run yap?lmaz.
 6. Tüm testler yeşil olmadan commit/push yapılmaz.
