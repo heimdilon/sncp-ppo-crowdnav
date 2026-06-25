@@ -433,6 +433,9 @@ def evaluate_density(
     human_vpref_override: float | None = None,
     max_time: float | None = None,
     human_goal_noise: float = 0.0,
+    action_shield: bool = False,
+    shield_horizon_steps: int = 6,
+    shield_safety_margin: float = 0.0,
 ) -> list[EpisodeResult]:
     """Run deterministic policy episodes for one density/scenario pair.
 
@@ -443,6 +446,7 @@ def evaluate_density(
     import torch
 
     from crowd_sim.crowd_env import CrowdSimEnv
+    from sncp_ppo.action_shield import ActionShieldConfig, shield_action
     from sncp_ppo.models import build_policy_for_checkpoint
     from sncp_ppo.ppo import PPOAgent
 
@@ -461,6 +465,10 @@ def evaluate_density(
     policy.train(False)
     agent = PPOAgent(policy=policy)
     max_steps = int(env.max_time / env.time_step) + 1
+    shield_cfg = ActionShieldConfig(
+        horizon_steps=shield_horizon_steps,
+        safety_margin=shield_safety_margin,
+    )
 
     results: list[EpisodeResult] = []
     for episode_idx in range(n_episodes):
@@ -479,6 +487,8 @@ def evaluate_density(
                 device,
                 deterministic=True,
             )
+            if action_shield:
+                action = shield_action(env, action, shield_cfg)
             obs, reward, terminated, truncated, info = env.step(action)
             total_reward += float(reward)
             total_i_sp += float(info.get("I_sp", 0.0))
@@ -514,6 +524,9 @@ def render_trajectory(
     human_vpref_override: float | None = None,
     max_time: float = 50.0,
     human_goal_noise: float = 0.0,
+    action_shield: bool = False,
+    shield_horizon_steps: int = 6,
+    shield_safety_margin: float = 0.0,
 ) -> None:
     from visualize_trajectory import run_and_visualize
 
@@ -527,6 +540,9 @@ def render_trajectory(
         human_vpref_override=human_vpref_override,
         max_time=max_time,
         human_goal_noise=human_goal_noise,
+        action_shield=action_shield,
+        shield_horizon_steps=shield_horizon_steps,
+        shield_safety_margin=shield_safety_margin,
     )
 
 
@@ -544,6 +560,9 @@ def run_report(
     human_vpref_override: float | None = None,
     max_time: float = 50.0,
     human_goal_noise: float = 0.0,
+    action_shield: bool = False,
+    shield_horizon_steps: int = 6,
+    shield_safety_margin: float = 0.0,
     evaluator: Evaluator = evaluate_density,
     trajectory_renderer: TrajectoryRenderer = render_trajectory,
 ) -> dict[str, Path | list[Path]]:
@@ -568,6 +587,9 @@ def run_report(
             human_vpref_override=human_vpref_override,
             max_time=max_time,
             human_goal_noise=human_goal_noise,
+            action_shield=action_shield,
+            shield_horizon_steps=shield_horizon_steps,
+            shield_safety_margin=shield_safety_margin,
         )
         summaries.append(
             summarize_density(
@@ -590,6 +612,9 @@ def run_report(
             human_vpref_override=human_vpref_override,
             max_time=max_time,
             human_goal_noise=human_goal_noise,
+            action_shield=action_shield,
+            shield_horizon_steps=shield_horizon_steps,
+            shield_safety_margin=shield_safety_margin,
         )
         trajectory_paths.append(output_path)
 

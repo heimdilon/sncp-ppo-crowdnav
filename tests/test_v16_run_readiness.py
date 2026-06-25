@@ -9,7 +9,7 @@ def _source_text(cell):
     return "".join(source) if isinstance(source, list) else source
 
 
-def test_v37_probe_run_readiness_passes_current_repo():
+def test_v38_shield_probe_run_readiness_passes_current_repo():
     summary = verify_v16_run_ready(Path("."))
 
     assert summary.status == "pass"
@@ -18,9 +18,9 @@ def test_v37_probe_run_readiness_passes_current_repo():
     assert summary.baseline_densities == ()
 
 
-def test_v37_probe_run_readiness_flags_stale_notebook(tmp_path):
+def test_v38_shield_probe_run_readiness_flags_stale_notebook(tmp_path):
     # A stale notebook that still launches a versioned full-run must be flagged:
-    # the current Colab entry point is the v37 paired probe.
+    # the current Colab entry point is the v38 training-free shield probe.
     notebook = {
         "cells": [
             {
@@ -36,16 +36,16 @@ def test_v37_probe_run_readiness_flags_stale_notebook(tmp_path):
     (tmp_path / "sncp_ppo_colab.ipynb").write_text(json.dumps(notebook), encoding="utf-8")
     scripts_dir = tmp_path / "scripts"
     scripts_dir.mkdir()
-    (scripts_dir / "run_v37_probes.py").write_text("stub\n", encoding="utf-8")
-    scratch_dir = tmp_path / "scratch"
-    scratch_dir.mkdir()
-    (scratch_dir / "_analyze_v37_probe.py").write_text("stub\n", encoding="utf-8")
+    (scripts_dir / "run_v38_shield_probe.py").write_text("stub\n", encoding="utf-8")
+    package_dir = tmp_path / "sncp_ppo"
+    package_dir.mkdir()
+    (package_dir / "action_shield.py").write_text("stub\n", encoding="utf-8")
 
     summary = verify_v16_run_ready(tmp_path)
 
     assert summary.status == "fail"
-    assert any("v37 probe training" in note for note in summary.notes)
-    assert any("v37 probe analysis" in note for note in summary.notes)
+    assert any("v38 shield probe" in note for note in summary.notes)
+    assert any("v38 shield analysis" in note for note in summary.notes)
 
 
 def test_write_readiness_report(tmp_path):
@@ -64,7 +64,7 @@ def test_write_readiness_report(tmp_path):
 # the old "preflight cell before training" test no longer applies and was removed.
 
 
-def test_colab_persist_cell_downloads_eval_v37_probe_artifact_bundle():
+def test_colab_persist_cell_downloads_eval_v38_shield_artifact_bundle():
     notebook = json.loads(Path("sncp_ppo_colab.ipynb").read_text(encoding="utf-8"))
     code_sources = [
         _source_text(cell)
@@ -76,6 +76,6 @@ def test_colab_persist_cell_downloads_eval_v37_probe_artifact_bundle():
     assert len(persist_cells) == 1
     persist_cell = persist_cells[0]
     assert "shutil.make_archive" in persist_cell
-    assert "'eval_v37_probe_artifacts'" in persist_cell
-    assert "'eval_v37_probe'" in persist_cell
+    assert "'eval_v38_shield_probe_artifacts'" in persist_cell
+    assert "'eval_v38_shield_probe'" in persist_cell
     assert "files.download(archive)" in persist_cell

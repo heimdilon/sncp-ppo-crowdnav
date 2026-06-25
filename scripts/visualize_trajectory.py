@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
 from crowd_sim.crowd_env import CrowdSimEnv
+from sncp_ppo.action_shield import ActionShieldConfig, shield_action
 from sncp_ppo.models import SNCPPolicy, build_policy_for_checkpoint
 from sncp_ppo.ppo import PPOAgent
 
@@ -25,7 +26,8 @@ def set_seed(seed):
 def run_and_visualize(model_path='checkpoints/sncp_ppo.pt', output_image='trajectory_plot.png',
                       num_humans=5, scenario='circle', seed=42,
                       robot_vpref=0.26, human_vpref_override=None, max_time=50.0,
-                      human_goal_noise=0.0):
+                      human_goal_noise=0.0, action_shield=False,
+                      shield_horizon_steps=6, shield_safety_margin=0.0):
     set_seed(seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device} | seed={seed} | num_humans={num_humans}")
@@ -48,6 +50,10 @@ def run_and_visualize(model_path='checkpoints/sncp_ppo.pt', output_image='trajec
         
     policy.train(False)  # inference mode
     agent = PPOAgent(policy=policy)
+    shield_cfg = ActionShieldConfig(
+        horizon_steps=shield_horizon_steps,
+        safety_margin=shield_safety_margin,
+    )
 
     max_search_episodes = 20
     success_found = False
@@ -71,6 +77,8 @@ def run_and_visualize(model_path='checkpoints/sncp_ppo.pt', output_image='trajec
                 human_headings[i].append(env.humans_theta[i])
                 
             action, _, _, h_states_next = agent.select_action(obs, h_states, device, deterministic=True)
+            if action_shield:
+                action = shield_action(env, action, shield_cfg)
             obs, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
             h_states = h_states_next
@@ -149,9 +157,16 @@ if __name__ == '__main__':
     parser.add_argument('--human_vpref_override', type=float, default=None)
     parser.add_argument('--human_goal_noise', type=float, default=0.0)
     parser.add_argument('--max_time', type=float, default=50.0)
+    parser.add_argument('--action_shield', action='store_true',
+                        help='Apply the v38 training-free action safety shield during rollout.')
+    parser.add_argument('--shield_horizon_steps', type=int, default=6)
+    parser.add_argument('--shield_safety_margin', type=float, default=0.0)
     args = parser.parse_args()
     run_and_visualize(args.checkpoint, args.output, args.num_humans, args.scenario, args.seed,
                       robot_vpref=args.robot_vpref,
                       human_vpref_override=args.human_vpref_override,
                       max_time=args.max_time,
-                      human_goal_noise=args.human_goal_noise)
+                      human_goal_noise=args.human_goal_noise,
+                      action_shield=args.action_shield,
+                      shield_horizon_steps=args.shield_horizon_steps,
+                      shield_safety_margin=args.shield_safety_margin)

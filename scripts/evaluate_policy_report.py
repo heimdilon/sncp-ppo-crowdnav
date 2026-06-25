@@ -31,6 +31,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=121.5,
         help="v14 straight-line beeline baseline used in the nav-time plot.",
     )
+    parser.add_argument("--action_shield", action="store_true",
+                        help="Apply the v38 training-free action safety shield during eval.")
+    parser.add_argument("--shield_horizon_steps", type=int, default=6)
+    parser.add_argument("--shield_safety_margin", type=float, default=0.0)
     return parser
 
 
@@ -45,6 +49,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         seed=args.seed,
         trajectory_densities=args.trajectory_densities,
         baseline_nav_steps=args.baseline_nav_steps,
+        action_shield=args.action_shield,
+        shield_horizon_steps=args.shield_horizon_steps,
+        shield_safety_margin=args.shield_safety_margin,
     )
 
     print("Wrote evaluation artifacts:")

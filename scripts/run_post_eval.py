@@ -50,6 +50,10 @@ def build_parser() -> argparse.ArgumentParser:
                              "(paper scenarios -> 12.5s, else 50.0). Match the regime.")
     parser.add_argument("--human_goal_noise", type=float, default=0.0,
                         help="Pedestrian goal noise; match the training regime (paper run uses ~2.0).")
+    parser.add_argument("--action_shield", action="store_true",
+                        help="Apply the v38 training-free action safety shield during eval.")
+    parser.add_argument("--shield_horizon_steps", type=int, default=6)
+    parser.add_argument("--shield_safety_margin", type=float, default=0.0)
     parser.add_argument("--baseline_nav_steps", type=float, default=121.5,
                         help="Beeline reference (successful nav steps) for the no-beeline gate. "
                              "121.5 fits the 0.26 m/s robot; the 1.0 m/s paper regime uses ~32 "
@@ -82,6 +86,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         human_vpref_override=args.human_vpref_override,
         max_time=args.max_time,
         human_goal_noise=args.human_goal_noise,
+        action_shield=args.action_shield,
+        shield_horizon_steps=args.shield_horizon_steps,
+        shield_safety_margin=args.shield_safety_margin,
         baseline_nav_steps=args.baseline_nav_steps,
         nav_margin_steps=args.nav_margin_steps,
         expected_replay_ratio=args.expected_replay_ratio,

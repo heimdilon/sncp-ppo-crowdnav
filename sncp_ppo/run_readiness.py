@@ -8,21 +8,25 @@ from pathlib import Path
 from typing import Sequence
 
 
-# v37 = probe-first experiment. The notebook must not launch the failed v36
-# combined-levers run; it should run the paired C0/C1 probe from the locked
-# v34-fixed-beta checkpoint and then analyze the GO/NO-GO gate.
+# v38 = training-free action-shield probe. The notebook must not launch any PPO
+# training; it evaluates the locked v34-fixed-beta checkpoint with and without
+# the runtime shield and then reads the generated GO/NO-GO report.
 TRAINING_TOKENS = (
     "BASE_CHECKPOINT = 'sncp_ppo_v34.pt'",
-    "OUTPUT_DIR = 'eval_v37_probe'",
-    "TOTAL_STEPS = 300_000",
-    "EVAL_EPISODES = 100",
-    "scripts/run_v37_probes.py",
-    "'--mode', 'run'",
-    "'--base_checkpoint', BASE_CHECKPOINT",
+    "OUTPUT_DIR = 'eval_v38_shield_probe'",
+    "DENSITIES = [15, 20]",
+    "EVAL_EPISODES = 50",
+    "SHIELD_HORIZON_STEPS = 6",
+    "SHIELD_SAFETY_MARGIN = 0.0",
+    "scripts/run_v38_shield_probe.py",
+    "'--checkpoint', BASE_CHECKPOINT",
     "'--output_dir', OUTPUT_DIR",
-    "'--python', sys.executable",
-    "'--eval_episodes', str(EVAL_EPISODES)",
-    "'--total_steps', str(TOTAL_STEPS)",
+    "'--densities', *[str(n) for n in DENSITIES]",
+    "'--n_episodes', str(EVAL_EPISODES)",
+    "'--robot_vpref', '1.0'",
+    "'--human_vpref_override', '1.0'",
+    "'--shield_horizon_steps', str(SHIELD_HORIZON_STEPS)",
+    "'--shield_safety_margin', str(SHIELD_SAFETY_MARGIN)",
     "if not os.path.exists(BASE_CHECKPOINT):",
     "raise FileNotFoundError(",
     "if p.returncode != 0:",
@@ -30,11 +34,9 @@ TRAINING_TOKENS = (
 )
 
 EVALUATION_TOKENS = (
-    "EVAL_OUT = 'eval_v37_probe'",
-    "scratch/_analyze_v37_probe.py",
-    "'--input_dir', EVAL_OUT",
+    "EVAL_OUT = 'eval_v38_shield_probe'",
     "report = os.path.join(EVAL_OUT, 'report.md')",
-    "verdict = os.path.join(EVAL_OUT, 'verdict.json')",
+    "summary = os.path.join(EVAL_OUT, 'summary.json')",
     "Verdict:",
 )
 
@@ -104,8 +106,8 @@ def verify_v16_run_ready(repo_root: str | Path = ".") -> V16RunReadinessSummary:
 
     required_files = (
         repo_root / "sncp_ppo_colab.ipynb",
-        repo_root / "scripts" / "run_v37_probes.py",
-        repo_root / "scratch" / "_analyze_v37_probe.py",
+        repo_root / "scripts" / "run_v38_shield_probe.py",
+        repo_root / "sncp_ppo" / "action_shield.py",
     )
     for path in required_files:
         if not path.exists():
@@ -116,20 +118,20 @@ def verify_v16_run_ready(repo_root: str | Path = ".") -> V16RunReadinessSummary:
         cells,
         "BASE_CHECKPOINT = 'sncp_ppo_v34.pt'",
         notes,
-        "v37 probe training",
+        "v38 shield probe",
     )
     evaluation_cell = _find_unique_cell(
         cells,
-        "scratch/_analyze_v37_probe.py",
+        "EVAL_OUT = 'eval_v38_shield_probe'",
         notes,
-        "v37 probe analysis",
+        "v38 shield analysis",
     )
-    _check_tokens(training_cell, TRAINING_TOKENS, notes, "v37 probe training")
-    _check_tokens(evaluation_cell, EVALUATION_TOKENS, notes, "v37 probe analysis")
+    _check_tokens(training_cell, TRAINING_TOKENS, notes, "v38 shield probe")
+    _check_tokens(evaluation_cell, EVALUATION_TOKENS, notes, "v38 shield analysis")
 
     densities = ()
     if not notes:
-        notes.append("PASS: v37 Colab paired-probe configuration is ready")
+        notes.append("PASS: v38 Colab action-shield probe configuration is ready")
 
     return V16RunReadinessSummary(
         status=_status(notes),

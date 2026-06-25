@@ -263,28 +263,29 @@ def test_versioned_post_eval_cli_derives_paths_from_version(tmp_path, monkeypatc
     assert "Overall status: pass" in capsys.readouterr().out
 
 
-def test_notebook_is_v37_paired_probe():
+def test_notebook_is_v38_action_shield_probe():
     code = _colab_code_sources()
-    train_cells = [s for s in code if "scripts/run_v37_probes.py" in s and "--mode" in s]
-    eval_cells = [s for s in code if "scratch/_analyze_v37_probe.py" in s]
+    train_cells = [s for s in code if "scripts/run_v38_shield_probe.py" in s and "--checkpoint" in s]
+    eval_cells = [s for s in code if "EVAL_OUT = 'eval_v38_shield_probe'" in s]
     assert len(train_cells) == 1 and len(eval_cells) == 1
     train, ev = train_cells[0], eval_cells[0]
     assert "BASE_CHECKPOINT = 'sncp_ppo_v34.pt'" in train
-    assert "OUTPUT_DIR = 'eval_v37_probe'" in train
-    assert "TOTAL_STEPS = 300_000" in train
-    assert "EVAL_EPISODES = 100" in train
-    assert "'--mode', 'run'" in train
-    assert "'--base_checkpoint', BASE_CHECKPOINT" in train
+    assert "OUTPUT_DIR = 'eval_v38_shield_probe'" in train
+    assert "DENSITIES = [15, 20]" in train
+    assert "EVAL_EPISODES = 50" in train
+    assert "SHIELD_HORIZON_STEPS = 6" in train
+    assert "SHIELD_SAFETY_MARGIN = 0.0" in train
+    assert "'--checkpoint', BASE_CHECKPOINT" in train
     assert "'--output_dir', OUTPUT_DIR" in train
-    assert "'--python', sys.executable" in train
-    assert "'--eval_episodes', str(EVAL_EPISODES)" in train
-    assert "'--total_steps', str(TOTAL_STEPS)" in train
+    assert "'--densities', *[str(n) for n in DENSITIES]" in train
+    assert "'--n_episodes', str(EVAL_EPISODES)" in train
+    assert "'--shield_horizon_steps', str(SHIELD_HORIZON_STEPS)" in train
+    assert "'--shield_safety_margin', str(SHIELD_SAFETY_MARGIN)" in train
     assert "checkpoints/sncp_ppo_v36.pt" not in train
     assert "run_post_eval.py" not in ev
-    assert "EVAL_OUT = 'eval_v37_probe'" in ev
-    assert "'--input_dir', EVAL_OUT" in ev
+    assert "EVAL_OUT = 'eval_v38_shield_probe'" in ev
     assert "report = os.path.join(EVAL_OUT, 'report.md')" in ev
-    assert "verdict = os.path.join(EVAL_OUT, 'verdict.json')" in ev
+    assert "summary = os.path.join(EVAL_OUT, 'summary.json')" in ev
 
 
 def test_post_eval_cli_threads_regime_scaled_beeline_gate(tmp_path, monkeypatch):

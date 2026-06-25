@@ -61,6 +61,9 @@ def run_v16_post_eval(
     human_vpref_override: float | None = None,
     max_time: float | None = None,
     human_goal_noise: float = 0.0,
+    action_shield: bool = False,
+    shield_horizon_steps: int = 6,
+    shield_safety_margin: float = 0.0,
     expected_replay_ratio: float = 0.20,
     replay_tolerance: float = 0.10,
     report_runner: ReportRunner = run_report,
@@ -85,6 +88,9 @@ def run_v16_post_eval(
         human_vpref_override=human_vpref_override,
         max_time=max_time,
         human_goal_noise=human_goal_noise,
+        action_shield=action_shield,
+        shield_horizon_steps=shield_horizon_steps,
+        shield_safety_margin=shield_safety_margin,
     )
 
     # Ensure the bundle carries a run-readiness report even if the operator
