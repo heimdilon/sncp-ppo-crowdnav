@@ -12,7 +12,7 @@ from sncp_ppo.train import _train_vectorized, evaluate_holdout, step_to_phase, S
 VECTOR_LOG_HEADER = [
     'episode', 'scenario', 'num_humans', 'human_vpref', 'is_replay_update',
     'steps', 'reward', 'success', 'collision', 'timeout', 'comfort',
-    'entropy', 'approx_kl', 'std_linear', 'std_angular', 'return_rms_std',
+    'entropy', 'approx_kl', 'std_linear', 'std_angular', 'return_rms_std', 'hh_gate',
     'is_best_checkpoint', 'best_reason',
     'holdout_easy_success', 'holdout_easy_collision', 'holdout_easy_timeout',
     'holdout_easy_reward', 'holdout_easy_avg_steps', 'holdout_easy_avg_I_sp',

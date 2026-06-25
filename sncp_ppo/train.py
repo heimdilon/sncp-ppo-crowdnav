@@ -197,6 +197,7 @@ UPDATE_DIAGNOSTIC_COLUMNS = [
     'std_linear',
     'std_angular',
     'return_rms_std',
+    'hh_gate',
 ]
 
 
@@ -210,15 +211,24 @@ def _policy_std_pair(policy):
     return float('nan'), float('nan')
 
 
+def _policy_hh_gate(policy):
+    if not getattr(policy, 'hh_intent_graph', False):
+        return None
+    return float(policy.hh_gate.detach().cpu().item())
+
+
 def update_diagnostic_row(policy, agent):
     """Return PPO stability diagnostics for CSV logging."""
     std0, std1 = _policy_std_pair(policy)
+    gate = _policy_hh_gate(policy)
+    hh_gate = "" if gate is None else f"{gate:.8f}"
     return [
         f"{float(agent.last_entropy):.6f}",
         f"{float(agent.last_approx_kl):.8f}",
         f"{std0:.6f}",
         f"{std1:.6f}",
         f"{float(agent.return_rms.std):.6f}",
+        hh_gate,
     ]
 
 
@@ -250,6 +260,90 @@ def make_env(num_humans, scenario, seed, comfort_coeff=None, max_time=None,
     return _thunk
 
 
+_V37_UPGRADE_EXACT_KEYS = {
+    '_hh_intent_graph',
+    '_hh_attn_heads',
+    '_cv_horizons',
+    '_cv_dt',
+    'hh_gate',
+}
+_V37_UPGRADE_PREFIXES = ('cv_encoder.', 'hh_norm.', 'hh_attn.')
+
+
+def _is_v37_upgrade_key(key):
+    return key in _V37_UPGRADE_EXACT_KEYS or key.startswith(_V37_UPGRADE_PREFIXES)
+
+
+def _assert_forward_equivalent(base, upgraded, device, atol=1e-6):
+    """Fail fast unless the zero-gated upgraded policy exactly matches base."""
+    base.eval()
+    upgraded.eval()
+    humans = 5
+    obs = {
+        'robot_node': torch.linspace(-1.0, 1.0, 14, device=device).reshape(2, 7),
+        'spatial_edges': torch.linspace(-1.5, 1.5, 60, device=device).reshape(2, humans, 6),
+        'temporal_edges': torch.linspace(-0.5, 0.5, 4, device=device).reshape(2, 2),
+    }
+    with torch.no_grad():
+        base_out = base(obs, base.init_hidden(2, humans, device))
+        upgraded_out = upgraded(obs, upgraded.init_hidden(2, humans, device))
+    pairs = list(zip(base_out[:3], upgraded_out[:3]))
+    for name in base_out[3]:
+        pairs.append((base_out[3][name], upgraded_out[3][name]))
+    if any(not torch.allclose(left, right, atol=atol, rtol=0.0) for left, right in pairs):
+        raise RuntimeError("unsafe checkpoint upgrade: zero-gate equivalence check failed")
+
+
+def build_upgraded_policy(state_dict, *, robot_vpref, robot_wmax, device,
+                          hh_attn_heads=4, cv_horizons=(1, 2, 3, 4), cv_dt=0.25):
+    """Add the zero-gated v37 HH+CV branch to a pre-v37 checkpoint safely."""
+    base = build_policy_for_checkpoint(
+        state_dict, robot_vpref=robot_vpref, robot_wmax=robot_wmax
+    ).to(device)
+    if getattr(base, 'hh_intent_graph', False):
+        raise RuntimeError("unsafe checkpoint upgrade: checkpoint is already v37")
+    base_missing, base_unexpected = base.load_state_dict(state_dict, strict=False)
+    if base_missing or base_unexpected:
+        raise RuntimeError(
+            "unsafe checkpoint upgrade: base checkpoint mismatch; "
+            f"missing={list(base_missing)}, unexpected={list(base_unexpected)}"
+        )
+
+    upgraded = SNCPPolicy(
+        robot_vpref=robot_vpref,
+        robot_wmax=robot_wmax,
+        pre_mlp=base.pre_mlp,
+        attn_count_scaling=base.attn_count_scaling,
+        meanmax_pool=base.meanmax_pool,
+        node_units=base.node_units,
+        node_output=base.node_output,
+        attn_heads=base.attn_heads,
+        action_dist=base.action_dist,
+        sense_range=base.sense_range,
+        hh_intent_graph=True,
+        hh_attn_heads=hh_attn_heads,
+        cv_horizons=cv_horizons,
+        cv_dt=cv_dt,
+    ).to(device)
+    missing, unexpected = upgraded.load_state_dict(state_dict, strict=False)
+    unsafe_missing = [key for key in missing if not _is_v37_upgrade_key(key)]
+    if unsafe_missing or unexpected:
+        raise RuntimeError(
+            "unsafe checkpoint upgrade: load mismatch; "
+            f"missing={list(missing)}, unexpected={list(unexpected)}"
+        )
+    _assert_forward_equivalent(base, upgraded, device)
+    upgraded.train(True)
+    return upgraded
+
+
+def _load_checkpoint(path, device):
+    try:
+        return torch.load(path, map_location=device, weights_only=True)
+    except TypeError:  # PyTorch <2.0 compatibility
+        return torch.load(path, map_location=device)
+
+
 def build_or_load_policy(args, env, device):
     """Build the SNCP policy, optionally initializing it from a checkpoint.
 
@@ -259,13 +353,32 @@ def build_or_load_policy(args, env, device):
     instead of from scratch. Without it, a fresh policy is built per --pre_mlp.
     """
     init_ckpt = getattr(args, 'init_checkpoint', None)
+    upgrade_ckpt = getattr(args, 'upgrade_checkpoint', None)
+    if init_ckpt and upgrade_ckpt:
+        raise ValueError("--init_checkpoint and --upgrade_checkpoint are mutually exclusive")
     if init_ckpt:
-        state = torch.load(init_ckpt, map_location=device)
+        state = _load_checkpoint(init_ckpt, device)
         policy = build_policy_for_checkpoint(
             state, robot_vpref=env.robot_vpref, robot_wmax=env.robot_wmax
         ).to(device)
         policy.load_state_dict(state)
         print(f"Initialized policy from {init_ckpt} (IL warm-start)")
+        return policy
+    if upgrade_ckpt:
+        state = _load_checkpoint(upgrade_ckpt, device)
+        policy = build_upgraded_policy(
+            state,
+            robot_vpref=env.robot_vpref,
+            robot_wmax=env.robot_wmax,
+            device=device,
+            hh_attn_heads=getattr(args, 'hh_attn_heads', 4),
+            cv_horizons=getattr(args, 'cv_horizons', (1, 2, 3, 4)),
+            cv_dt=getattr(args, 'cv_dt', 0.25),
+        )
+        print(
+            f"Upgraded policy from {upgrade_ckpt} with zero-gated HH intent graph "
+            f"(heads={policy.hh_attn_heads}, horizons={policy.cv_horizons}, dt={policy.cv_dt})"
+        )
         return policy
     return SNCPPolicy(
         robot_vpref=env.robot_vpref,
@@ -278,6 +391,10 @@ def build_or_load_policy(args, env, device):
         attn_heads=getattr(args, 'attn_heads', 1),
         action_dist=getattr(args, 'action_dist', 'gaussian'),
         sense_range=getattr(args, 'sense_range', 0.0),
+        hh_intent_graph=getattr(args, 'hh_intent_graph', False),
+        hh_attn_heads=getattr(args, 'hh_attn_heads', 4),
+        cv_horizons=getattr(args, 'cv_horizons', (1, 2, 3, 4)),
+        cv_dt=getattr(args, 'cv_dt', 0.25),
     ).to(device)
 
 
@@ -615,6 +732,9 @@ def train(args):
                      f" kl={agent.last_approx_kl:.5f}"
                      f" std=[{std0:.3f},{std1:.3f}]"
                      f" rms={agent.return_rms.std:.2f}")
+            gate = _policy_hh_gate(policy)
+            if gate is not None:
+                line += f" gate={gate:+.5f}"
             # Live progress: elapsed wall-clock + moving-average ETA + clock
             # time of the projected finish (uses the last <=50 episodes, so the
             # estimate tracks the current curriculum phase's pace).
@@ -1007,9 +1127,11 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
         if update_idx % 10 == 0:
             std0, std1 = _policy_std_pair(policy)
             replay_mark = "R" if is_replay_update else " "
+            gate = _policy_hh_gate(policy)
+            gate_text = "" if gate is None else f" gate={gate:+.5f}"
             print(f"Update {update_idx} | step {total_steps}/{args.total_steps} [{scenario} {H}h] | "
                   f"[{replay_mark}] ent={agent.last_entropy:+.3f} kl={agent.last_approx_kl:.5f} "
-                  f"std=[{std0:.3f},{std1:.3f}] rms={agent.return_rms.std:.2f}")
+                  f"std=[{std0:.3f},{std1:.3f}] rms={agent.return_rms.std:.2f}{gate_text}")
 
     envs.close()
     # I/O-robust final save: on Colab the save dir may sit behind a Drive FUSE
@@ -1121,6 +1243,21 @@ def build_parser():
                         help='Initialize the policy from this checkpoint instead of fresh weights '
                              '(v23 IL warm-start: PPO fine-tunes from the BC checkpoint). The '
                              'architecture is auto-detected from the saved keys.')
+    parser.add_argument('--upgrade_checkpoint', type=str, default=None,
+                        help='Safely upgrade a pre-v37 checkpoint with the zero-initialized '
+                             'human-human intention graph. Unlike --init_checkpoint, this permits '
+                             'only the new v37 branch keys to be missing and verifies gate=0 '
+                             'forward equivalence before training.')
+    parser.add_argument('--hh_intent_graph', action='store_true',
+                        help='Enable the v37 gated human-human self-attention branch with '
+                             'constant-velocity future geometry. --upgrade_checkpoint enables '
+                             'the branch automatically; this flag also supports fresh builds.')
+    parser.add_argument('--hh_attn_heads', type=int, default=4,
+                        help='Human-human self-attention head count for v37 (default 4; must divide 256).')
+    parser.add_argument('--cv_horizons', type=int, nargs='+', default=[1, 2, 3, 4],
+                        help='Positive constant-velocity prediction horizons in steps (v37).')
+    parser.add_argument('--cv_dt', type=float, default=0.25,
+                        help='Seconds per constant-velocity horizon step (v37; default 0.25).')
     parser.add_argument('--attn_count_scaling', action='store_true',
                         help='Scale attention scores by n/sqrt(d_k) (paper Eq 13, n=#humans) so the '
                              'pedestrian count enters the softmax temperature — high-N candidate. '

@@ -25,6 +25,7 @@ def _write_csv(path, rows):
         "std_linear",
         "std_angular",
         "return_rms_std",
+        "hh_gate",
         "is_best_checkpoint",
         "best_reason",
         "holdout_easy_success",
@@ -68,6 +69,7 @@ def test_analyze_training_log_detects_holdout_collapse_and_replay_fraction(tmp_p
                 "is_replay_update": 0,
                 "std_linear": 0.10,
                 "std_angular": 0.20,
+                "hh_gate": 0.0,
                 "holdout_easy_success": "nan",
                 "holdout_hard_success": "nan",
                 "holdout_circle_success": "nan",
@@ -80,6 +82,7 @@ def test_analyze_training_log_detects_holdout_collapse_and_replay_fraction(tmp_p
                 "is_replay_update": 0,
                 "std_linear": 0.11,
                 "std_angular": 0.21,
+                "hh_gate": -0.01,
                 "is_best_checkpoint": 1,
                 "best_reason": "best updated",
                 "holdout_easy_success": 0.40,
@@ -94,6 +97,7 @@ def test_analyze_training_log_detects_holdout_collapse_and_replay_fraction(tmp_p
                 "is_replay_update": 1,
                 "std_linear": 0.12,
                 "std_angular": 0.35,
+                "hh_gate": 0.03,
                 "is_best_checkpoint": 1,
                 "best_reason": "best updated",
                 "holdout_easy_success": 0.60,
@@ -126,6 +130,7 @@ def test_analyze_training_log_detects_holdout_collapse_and_replay_fraction(tmp_p
                 "is_replay_update": 0,
                 "std_linear": 0.16,
                 "std_angular": 0.50,
+                "hh_gate": -0.05,
                 "is_best_checkpoint": 0,
                 "holdout_easy_success": 0.10,
                 "holdout_easy_collision": 0.05,
@@ -173,6 +178,10 @@ def test_analyze_training_log_detects_holdout_collapse_and_replay_fraction(tmp_p
     assert summary.final_std_angular == 0.50
     assert summary.max_std_angular == 0.50
     assert summary.std_angular_delta == 0.30
+    assert summary.final_hh_gate == -0.05
+    assert summary.min_hh_gate == -0.05
+    assert summary.max_hh_gate == 0.03
+    assert summary.max_abs_hh_gate == 0.05
 
 
 def test_analyze_training_log_handles_old_logs_without_replay_column(tmp_path):
@@ -195,6 +204,7 @@ def test_analyze_training_log_handles_old_logs_without_replay_column(tmp_path):
     assert summary.observed_replay_ratio is None
     assert summary.final_std_linear is None
     assert summary.final_std_angular is None
+    assert summary.final_hh_gate is None
     assert summary.best_min_success == 0.4
     assert summary.final_min_success == 0.1
     assert summary.collapse_detected is True
@@ -213,6 +223,7 @@ def test_training_diagnostic_writers_include_best_final_and_collapse(tmp_path):
                 "is_replay_update": 1,
                 "std_linear": 0.10,
                 "std_angular": 0.20,
+                "hh_gate": 0.01,
                 "is_best_checkpoint": 1,
                 "best_reason": "best updated",
                 "holdout_easy_success": 0.50,
@@ -245,6 +256,7 @@ def test_training_diagnostic_writers_include_best_final_and_collapse(tmp_path):
                 "is_replay_update": 0,
                 "std_linear": 0.15,
                 "std_angular": 0.45,
+                "hh_gate": 0.04,
                 "is_best_checkpoint": 0,
                 "holdout_easy_success": 0.10,
                 "holdout_easy_collision": 0.05,
@@ -281,6 +293,8 @@ def test_training_diagnostic_writers_include_best_final_and_collapse(tmp_path):
     assert data["best_step"] == 100
     assert data["collapse_detected"] is True
     assert data["final_std_angular"] == 0.45
+    assert data["final_hh_gate"] == 0.04
+    assert data["max_abs_hh_gate"] == 0.04
     assert data["final_collision_by_scenario"]["circle"] == 0.90
     assert data["final_timeout_by_scenario"]["easy"] == 0.85
     assert data["final_avg_steps_by_scenario"]["easy"] == 199.0
@@ -291,6 +305,8 @@ def test_training_diagnostic_writers_include_best_final_and_collapse(tmp_path):
     assert "Best min success: 30.0%" in report
     assert "Final min success: 0.0%" in report
     assert "Final std angular: 0.450" in report
+    assert "Final HH gate: 0.04000" in report
+    assert "Max abs HH gate: 0.04000" in report
     assert "## Per-Scenario Failure Profile" in report
     assert "| circle | 0.0% | 90.0% | 10.0% | 65.0 | 0.050 | 0.350 |" in report
 

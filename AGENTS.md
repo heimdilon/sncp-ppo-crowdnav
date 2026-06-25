@@ -20,6 +20,22 @@
   PDF `s12369-026-01389-9.pdf` in repo root, **git-ignored**).
 - Stack: Python, PyTorch, Gymnasium, **`ncps`** (Liquid Time-Constant / Neural Circuit Policies), pytest.
 - Robot = **TurtleBot3 Waffle**, max linear speed **0.26 m/s** (real hardware), wmax 1.8, radius 0.3.
+- **v37 = CODE READY FOR PAIRED PROBE; full training is gated and has NOT started.** Persistent design, probe gates,
+  checkpoint-upgrade contract, and Colab runbook: `docs/superpowers/plans/2026-06-24-v37-gated-intention-graph.md`.
+  Core hypothesis = zero-init gated human-human self-attention + 1–4 step constant-velocity intent geometry;
+  Social-NCE is explicitly deferred to a contingent v38 probe. Implementation adds a safe v34→v37 upgrade
+  path (`--upgrade_checkpoint`), exact gate=0 equivalence, checkpoint auto-detection, HH-gate diagnostics,
+  and `scripts/run_v37_probes.py` for paired C0/C1 seeds 40/41/42 with shared episode banks. The notebook and
+  readiness markers remain v36 by design until the probe emits GO. Local real-v34 CLI smoke passed and the
+  full suite is green (**272 passed, 1 pre-existing warning**).
+- **v36 = COMPLETE, NEGATIVE/FLAT; v34-fixed-beta is locked as the v37 base.** The full 4M combined-levers
+  run was healthy and the best checkpoint retained genuine detours, but the honest 5-seed × 50-episode sweep
+  failed the preregistered gate. Success at N=5/10/15/20 was **97.6/88.4/82.0/73.2%**, collision
+  **2.4/11.6/15.6/23.2%**, timeout **0/0/2.4/3.6%**. There was no significant high-N gain vs v30 and
+  timeout was nonzero. More importantly, v36 regressed against corrected-Beta v34 at N=15/20 by
+  **−9.2/−12.8 pp success** and **+6.8/+10.0 pp collision**. The combined failed levers diluted v34's gain;
+  do not use v36 as a warm-start. Artifacts: `checkpoints/sncp_ppo_v36.pt`, `eval_v36/`,
+  `logs/training_20260624_060522.csv`, `v36_multiseed_result.json` (runtime artifacts are git-ignored).
 - **Current head state: v18 COMPLETE — the breakthrough run (new baseline).** v18 restored the goal
   reward `r_g` to the paper (approach `1→2·Δd`, removed the non-paper heading penalty) and is the
   **first run to PASS the full artifact gate** (`eval_v18/artifact_verification.md` = pass; comparison

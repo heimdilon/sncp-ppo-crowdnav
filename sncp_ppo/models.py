@@ -18,7 +18,9 @@ def _orthogonal_linear(layer, gain):
 class SNCPPolicy(nn.Module):
     def __init__(self, robot_vpref=0.26, robot_wmax=1.8, pre_mlp=False,
                  attn_count_scaling=False, meanmax_pool=False, node_units=128,
-                 node_output=48, attn_heads=1, action_dist='gaussian', sense_range=0.0):
+                 node_output=48, attn_heads=1, action_dist='gaussian', sense_range=0.0,
+                 hh_intent_graph=False, hh_attn_heads=4,
+                 cv_horizons=(1, 2, 3, 4), cv_dt=0.25):
         super(SNCPPolicy, self).__init__()
 
         self.robot_vpref = robot_vpref
@@ -50,6 +52,41 @@ class SNCPPolicy(nn.Module):
         self.sense_range = sense_range
         if sense_range > 0:
             self.register_buffer('_sense_range', torch.tensor(float(sense_range)))
+
+        # v37: gated human-human intention graph. This branch is conditional so
+        # every pre-v37/default checkpoint keeps exactly the same state-dict
+        # surface. Constant-velocity geometry is derived inside the policy from
+        # the existing [dx,dy,rel_vx,rel_vy] spatial edge fields; no observation
+        # or environment schema change is required. The scalar gate starts at
+        # zero, making an upgraded checkpoint behaviorally identical to its base.
+        self.hh_intent_graph = bool(hh_intent_graph)
+        self.hh_attn_heads = int(hh_attn_heads)
+        self.cv_horizons = tuple(float(h) for h in cv_horizons)
+        self.cv_dt = float(cv_dt)
+        if self.hh_intent_graph:
+            if not self.cv_horizons or any(h <= 0 for h in self.cv_horizons):
+                raise ValueError("cv_horizons must contain positive values")
+            if self.hh_attn_heads <= 0 or 256 % self.hh_attn_heads != 0:
+                raise ValueError("hh_attn_heads must be positive and divide 256")
+            self.register_buffer('_hh_intent_graph', torch.tensor(1.0))
+            self.register_buffer('_hh_attn_heads', torch.tensor(float(self.hh_attn_heads)))
+            self.register_buffer(
+                '_cv_horizons', torch.tensor(self.cv_horizons, dtype=torch.float32)
+            )
+            self.register_buffer('_cv_dt', torch.tensor(self.cv_dt, dtype=torch.float32))
+            self.cv_encoder = nn.Sequential(
+                nn.Linear(2 * len(self.cv_horizons), 128),
+                nn.ReLU(),
+                nn.Linear(128, 256),
+                nn.ReLU(),
+            )
+            self.hh_norm = nn.LayerNorm(256)
+            self.hh_attn = nn.MultiheadAttention(
+                embed_dim=256,
+                num_heads=self.hh_attn_heads,
+                batch_first=True,
+            )
+            self.hh_gate = nn.Parameter(torch.tensor(0.0))
 
         # 1. Robot Node Encoder (MLP)
         # Input robot_node: [dg_local_x, dg_local_y, v_linear, dist_to_goal, vpref, radius, w_angular] (dim 7)
@@ -191,6 +228,14 @@ class SNCPPolicy(nn.Module):
         _orthogonal_linear(self.node_proj, gain=sqrt2)
         if self.meanmax_pool:
             _orthogonal_linear(self.pool_merge, gain=sqrt2)
+        if self.hh_intent_graph:
+            for m in self.cv_encoder:
+                if isinstance(m, nn.Linear):
+                    _orthogonal_linear(m, gain=sqrt2)
+            nn.init.xavier_uniform_(self.hh_attn.in_proj_weight)
+            if self.hh_attn.in_proj_bias is not None:
+                nn.init.zeros_(self.hh_attn.in_proj_bias)
+            _orthogonal_linear(self.hh_attn.out_proj, gain=sqrt2)
         
         linears = [m for m in self.actor_mu if isinstance(m, nn.Linear)]
         for m in linears[:-1]:
@@ -226,6 +271,54 @@ class SNCPPolicy(nn.Module):
         masked = M_rh.masked_fill((~mask).unsqueeze(-1), float('-inf'))
         a_max = masked.max(dim=1).values
         return torch.where(none_visible.unsqueeze(-1), torch.zeros_like(a_max), a_max)
+
+    def _constant_velocity_features(self, spatial_edges):
+        """Future robot-relative human positions for each configured horizon.
+
+        spatial_edges[..., :2] is current relative position and [..., 2:4]
+        relative velocity. The returned shape is [B,H,2*len(cv_horizons)].
+        """
+        if not self.hh_intent_graph:
+            raise RuntimeError("constant-velocity features require hh_intent_graph=True")
+        rel_pos = spatial_edges[..., 0:2].unsqueeze(-2)
+        rel_vel = spatial_edges[..., 2:4].unsqueeze(-2)
+        times = (self._cv_horizons * self._cv_dt).to(
+            device=spatial_edges.device, dtype=spatial_edges.dtype
+        ).view(1, 1, -1, 1)
+        future = rel_pos + rel_vel * times
+        return future.flatten(start_dim=-2)
+
+    def _human_intent_graph(self, M_rh, spatial_edges, mask=None):
+        """Apply gated human-human self-attention over CV-enriched tokens.
+
+        mask uses the policy convention True=visible, while PyTorch MHA expects
+        True=hidden in key_padding_mask. Rows with no visible humans temporarily
+        expose one safe key to avoid all-masked softmax NaNs, then zero the whole
+        residual. Hidden query rows are also zeroed.
+        """
+        if not self.hh_intent_graph:
+            return M_rh
+        cv_embed = self.cv_encoder(self._constant_velocity_features(spatial_edges))
+        tokens = self.hh_norm(M_rh + cv_embed)
+        key_padding_mask = None
+        all_masked = None
+        safe_mask = mask
+        if mask is not None:
+            safe_mask = mask.clone()
+            all_masked = ~safe_mask.any(dim=1)
+            if bool(all_masked.any()):
+                safe_mask[all_masked, 0] = True
+            key_padding_mask = ~safe_mask
+        hh, _ = self.hh_attn(
+            tokens, tokens, tokens,
+            key_padding_mask=key_padding_mask,
+            need_weights=False,
+        )
+        if mask is not None:
+            hh = hh.masked_fill((~mask).unsqueeze(-1), 0.0)
+            if bool(all_masked.any()):
+                hh = torch.where(all_masked.view(-1, 1, 1), torch.zeros_like(hh), hh)
+        return M_rh + torch.tanh(self.hh_gate) * hh
 
     def _multihead_attention(self, M_rh, m_rr, mask=None):
         """Canonical multi-head cross-attention: robot m_rr is the single query
@@ -352,13 +445,15 @@ class SNCPPolicy(nn.Module):
         M_rh_seq, h_spat_new_flat = self.spatial_ltc(spatial_input, h_spat_flat)
         M_rh_proj = self.spatial_proj(M_rh_seq.squeeze(1))
         M_rh = M_rh_proj.reshape(batch_size, num_humans, 256)
-        
+
         # 4. Attention Pooling — optionally mask humans beyond the sensing radius
         # (paper's limited perception: only nearby humans influence the action).
         sense_mask = None
         if self.sense_range > 0:
             dist = torch.hypot(spatial_edges[:, :, 0], spatial_edges[:, :, 1])  # [B, N] m
             sense_mask = dist <= self.sense_range                                # [B, N] bool
+        if self.hh_intent_graph:
+            M_rh = self._human_intent_graph(M_rh, spatial_edges, sense_mask)
         u_att = self._attention_pool(M_rh, m_rr, num_humans, sense_mask)
         
         # 5. Node LTC Encoder
@@ -417,8 +512,17 @@ def build_policy_for_checkpoint(state_dict, robot_vpref=0.26, robot_wmax=1.8):
     action_dist = 'gaussian' if 'actor_logstd' in state_dict else 'beta'
     sr = state_dict.get('_sense_range')
     sense_range = float(sr.item()) if sr is not None else 0.0
+    hh_intent_graph = '_hh_intent_graph' in state_dict
+    hh = state_dict.get('_hh_attn_heads')
+    hh_attn_heads = int(hh.item()) if hh is not None else 4
+    cvh = state_dict.get('_cv_horizons')
+    cv_horizons = tuple(float(value) for value in cvh.tolist()) if cvh is not None else (1, 2, 3, 4)
+    cvdt = state_dict.get('_cv_dt')
+    cv_dt = float(cvdt.item()) if cvdt is not None else 0.25
     return SNCPPolicy(robot_vpref=robot_vpref, robot_wmax=robot_wmax,
                       pre_mlp=pre_mlp, attn_count_scaling=attn_count_scaling,
                       meanmax_pool=meanmax_pool, node_units=node_units,
                       node_output=node_output, attn_heads=attn_heads,
-                      action_dist=action_dist, sense_range=sense_range)
+                      action_dist=action_dist, sense_range=sense_range,
+                      hh_intent_graph=hh_intent_graph, hh_attn_heads=hh_attn_heads,
+                      cv_horizons=cv_horizons, cv_dt=cv_dt)

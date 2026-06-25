@@ -44,6 +44,10 @@ class TrainingLogSummary:
     max_std_angular: float | None
     std_linear_delta: float | None
     std_angular_delta: float | None
+    final_hh_gate: float | None
+    min_hh_gate: float | None
+    max_hh_gate: float | None
+    max_abs_hh_gate: float | None
 
 
 def _parse_float(value: str | None) -> float:
@@ -126,6 +130,17 @@ def _std_diagnostics(rows: Sequence[dict[str, str]]) -> tuple[float | None, ...]
     )
 
 
+def _hh_gate_diagnostics(rows: Sequence[dict[str, str]]) -> tuple[float | None, ...]:
+    values = []
+    for row in rows:
+        value = _parse_float(row.get("hh_gate"))
+        if not math.isnan(value):
+            values.append(value)
+    if not values:
+        return (None, None, None, None)
+    return values[-1], min(values), max(values), max(abs(value) for value in values)
+
+
 def analyze_training_log(
     csv_path: str | Path,
     *,
@@ -172,6 +187,7 @@ def analyze_training_log(
         std_linear_delta,
         std_angular_delta,
     ) = _std_diagnostics(rows)
+    final_hh_gate, min_hh_gate, max_hh_gate, max_abs_hh_gate = _hh_gate_diagnostics(rows)
 
     return TrainingLogSummary(
         csv_path=str(csv_path),
@@ -206,6 +222,10 @@ def analyze_training_log(
         max_std_angular=max_std_angular,
         std_linear_delta=std_linear_delta,
         std_angular_delta=std_angular_delta,
+        final_hh_gate=final_hh_gate,
+        min_hh_gate=min_hh_gate,
+        max_hh_gate=max_hh_gate,
+        max_abs_hh_gate=max_abs_hh_gate,
     )
 
 
@@ -225,6 +245,10 @@ def _format_optional_rate(value: float | None) -> str:
 
 def _format_optional_float(value: float | None) -> str:
     return "not logged" if value is None else f"{value:.3f}"
+
+
+def _format_optional_gate(value: float | None) -> str:
+    return "not logged" if value is None else f"{value:.5f}"
 
 
 def _format_table_float(value: float | None, digits: int = 3) -> str:
@@ -268,6 +292,10 @@ def write_training_diagnostic_report(summary: TrainingLogSummary, path: str | Pa
         f"Max std angular: {_format_optional_float(summary.max_std_angular)}",
         f"Std linear delta: {_format_optional_float(summary.std_linear_delta)}",
         f"Std angular delta: {_format_optional_float(summary.std_angular_delta)}",
+        f"Final HH gate: {_format_optional_gate(summary.final_hh_gate)}",
+        f"Min HH gate: {_format_optional_gate(summary.min_hh_gate)}",
+        f"Max HH gate: {_format_optional_gate(summary.max_hh_gate)}",
+        f"Max abs HH gate: {_format_optional_gate(summary.max_abs_hh_gate)}",
         "",
         "## Per-Scenario Success",
         "",
