@@ -9,44 +9,43 @@ def _source_text(cell):
     return "".join(source) if isinstance(source, list) else source
 
 
-def test_v36_run_readiness_passes_current_repo():
+def test_v37_probe_run_readiness_passes_current_repo():
     summary = verify_v16_run_ready(Path("."))
 
     assert summary.status == "pass"
     assert summary.training_cell_found is True
     assert summary.evaluation_cell_found is True
-    assert summary.baseline_densities == (1, 3, 5, 8, 10)
+    assert summary.baseline_densities == ()
 
 
-def test_v36_run_readiness_flags_stale_notebook(tmp_path):
-    # A pre-v36 notebook (v23..v34 markers) must be flagged: the v36 cells are absent.
+def test_v37_probe_run_readiness_flags_stale_notebook(tmp_path):
+    # A stale notebook that still launches a versioned full-run must be flagged:
+    # the current Colab entry point is the v37 paired probe.
     notebook = {
         "cells": [
             {
                 "cell_type": "code",
-                "source": "SAVE_PATH = 'checkpoints/sncp_ppo_v23.pt'\n",
+                "source": "SAVE_PATH = 'checkpoints/sncp_ppo_v36.pt'\n",
             },
             {
                 "cell_type": "code",
-                "source": "CHECKPOINT = 'checkpoints/sncp_ppo_v23.pt'\ncmd = ['python', 'evaluate_policy_report.py']\n",
+                "source": "CHECKPOINT = 'checkpoints/sncp_ppo_v36.pt'\ncmd = ['python', 'scripts/run_post_eval.py']\n",
             },
         ]
     }
     (tmp_path / "sncp_ppo_colab.ipynb").write_text(json.dumps(notebook), encoding="utf-8")
-    (tmp_path / "run_post_eval.py").write_text("stub\n", encoding="utf-8")
-    baseline_dir = tmp_path / "eval_v22"
-    baseline_dir.mkdir()
-    (baseline_dir / "density_sweep.json").write_text(
-        json.dumps({"density_sweep": [{"num_humans": 1, "episodes": 50}]}),
-        encoding="utf-8",
-    )
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    (scripts_dir / "run_v37_probes.py").write_text("stub\n", encoding="utf-8")
+    scratch_dir = tmp_path / "scratch"
+    scratch_dir.mkdir()
+    (scratch_dir / "_analyze_v37_probe.py").write_text("stub\n", encoding="utf-8")
 
     summary = verify_v16_run_ready(tmp_path)
 
     assert summary.status == "fail"
-    assert any("v36 training" in note for note in summary.notes)
-    assert any("v36 evaluation" in note for note in summary.notes)
-    assert any("baseline densities" in note for note in summary.notes)
+    assert any("v37 probe training" in note for note in summary.notes)
+    assert any("v37 probe analysis" in note for note in summary.notes)
 
 
 def test_write_readiness_report(tmp_path):
@@ -57,7 +56,7 @@ def test_write_readiness_report(tmp_path):
 
     report = output.read_text(encoding="utf-8")
     assert "Overall status: pass" in report
-    assert "Baseline densities: 1, 3, 5, 8, 10" in report
+    assert "Baseline densities: n/a" in report
 
 
 # v24+ deliberately dropped the separate preflight cell; the readiness report is now
@@ -65,7 +64,7 @@ def test_write_readiness_report(tmp_path):
 # the old "preflight cell before training" test no longer applies and was removed.
 
 
-def test_colab_persist_cell_downloads_eval_v36_artifact_bundle():
+def test_colab_persist_cell_downloads_eval_v37_probe_artifact_bundle():
     notebook = json.loads(Path("sncp_ppo_colab.ipynb").read_text(encoding="utf-8"))
     code_sources = [
         _source_text(cell)
@@ -77,6 +76,6 @@ def test_colab_persist_cell_downloads_eval_v36_artifact_bundle():
     assert len(persist_cells) == 1
     persist_cell = persist_cells[0]
     assert "shutil.make_archive" in persist_cell
-    assert "'eval_v36_artifacts'" in persist_cell
-    assert "'eval_v36'" in persist_cell
+    assert "'eval_v37_probe_artifacts'" in persist_cell
+    assert "'eval_v37_probe'" in persist_cell
     assert "files.download(archive)" in persist_cell

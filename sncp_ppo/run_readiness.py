@@ -8,62 +8,34 @@ from pathlib import Path
 from typing import Sequence
 
 
-# v36 = v30 base + ALL previously-tried levers combined (deliberately MULTI-variable):
-# v31 node capacity (--node_units 256 --node_output 96), v32 reach+budget
-# (--num_humans_range 10 25, --total_steps 4_000_000), v33 multi-head (--attn_heads 4),
-# v29 count-scaling (--attn_count_scaling), v34 Beta (--action_dist beta) with tuned
-# entropy (--ent_coef 0.001), and v35 sense-range (--sense_range 6.0).
+# v37 = probe-first experiment. The notebook must not launch the failed v36
+# combined-levers run; it should run the paired C0/C1 probe from the locked
+# v34-fixed-beta checkpoint and then analyze the GO/NO-GO gate.
 TRAINING_TOKENS = (
-    "NUM_ENVS = 16",
-    "HORIZON = 128",
-    "TOTAL_STEPS = 4_000_000",
-    "LR = 1e-4",
-    "SAVE_PATH = 'checkpoints/sncp_ppo_v36.pt'",
-    "'--num_envs', str(NUM_ENVS)",
-    "'--horizon', str(HORIZON)",
+    "BASE_CHECKPOINT = 'sncp_ppo_v34.pt'",
+    "OUTPUT_DIR = 'eval_v37_probe'",
+    "TOTAL_STEPS = 300_000",
+    "EVAL_EPISODES = 100",
+    "scripts/run_v37_probes.py",
+    "'--mode', 'run'",
+    "'--base_checkpoint', BASE_CHECKPOINT",
+    "'--output_dir', OUTPUT_DIR",
+    "'--python', sys.executable",
+    "'--eval_episodes', str(EVAL_EPISODES)",
     "'--total_steps', str(TOTAL_STEPS)",
-    "'--fixed_scenario', 'paper_challenging'",
-    "'--num_humans', '10'",
-    "'--bootstrap_easy_steps', '200000'",
-    "'--lr', str(LR)",
-    # robot_vpref 1.0 is load-bearing: at 0.26 m/s the 12.5s budget is infeasible.
-    "'--robot_vpref', '1.0'",
-    "'--holdout_scenarios', 'paper_standard', 'paper_challenging'",
-    "'--holdout_episodes', '50'",
-    "'--pre_mlp'",
-    "'--meanmax_pool'",
-    "'--num_humans_range', '10', '25'",
-    "'--node_units', '256'",
-    "'--node_output', '96'",
-    "'--attn_heads', '4'",
-    "'--attn_count_scaling'",
-    "'--action_dist', 'beta'",
-    "'--ent_coef', '0.001'",
-    "'--sense_range', '6.0'",
-    "'--save_path', SAVE_PATH",
+    "if not os.path.exists(BASE_CHECKPOINT):",
+    "raise FileNotFoundError(",
     "if p.returncode != 0:",
     "raise SystemExit(p.returncode)",
 )
 
 EVALUATION_TOKENS = (
-    "CHECKPOINT = 'checkpoints/sncp_ppo_v36.pt'",
-    "EVAL_OUT = 'eval_v36'",
-    "EVAL_SEED = 100",
-    "EVAL_EPISODES = 50",
-    "run_post_eval.py",
-    "'--version', '36'",
-    "'--densities', '5', '10', '15', '20'",
-    "'--scenario', 'paper_challenging'",
-    "'--n_episodes', str(EVAL_EPISODES)",
-    "'--trajectory_densities', '10', '20'",
-    "'--robot_vpref', '1.0'",
-    "'--human_vpref_override', '1.0'",
-    # No --max_time: the env resolves the paper budget itself. The comparison vs the
-    # antipodal v22 sweep is regime-invalid (the eval cell is resilient to its verdict);
-    # the beeline gate is scaled to the 8 m crossing at 1.0 m/s (32 steps).
-    "'--baseline_json', 'eval_v22/density_sweep.json'",
-    "'--baseline_nav_steps', '32'",
-    "'--nav_margin_steps', '8'",
+    "EVAL_OUT = 'eval_v37_probe'",
+    "scratch/_analyze_v37_probe.py",
+    "'--input_dir', EVAL_OUT",
+    "report = os.path.join(EVAL_OUT, 'report.md')",
+    "verdict = os.path.join(EVAL_OUT, 'verdict.json')",
+    "Verdict:",
 )
 
 
@@ -132,8 +104,8 @@ def verify_v16_run_ready(repo_root: str | Path = ".") -> V16RunReadinessSummary:
 
     required_files = (
         repo_root / "sncp_ppo_colab.ipynb",
-        repo_root / "scripts" / "run_post_eval.py",
-        repo_root / "eval_v22" / "density_sweep.json",
+        repo_root / "scripts" / "run_v37_probes.py",
+        repo_root / "scratch" / "_analyze_v37_probe.py",
     )
     for path in required_files:
         if not path.exists():
@@ -142,22 +114,22 @@ def verify_v16_run_ready(repo_root: str | Path = ".") -> V16RunReadinessSummary:
     cells = _load_notebook(repo_root / "sncp_ppo_colab.ipynb") or []
     training_cell = _find_unique_cell(
         cells,
-        "SAVE_PATH = 'checkpoints/sncp_ppo_v36.pt'",
+        "BASE_CHECKPOINT = 'sncp_ppo_v34.pt'",
         notes,
-        "v36 training",
+        "v37 probe training",
     )
     evaluation_cell = _find_unique_cell(
         cells,
-        "CHECKPOINT = 'checkpoints/sncp_ppo_v36.pt'",
+        "scratch/_analyze_v37_probe.py",
         notes,
-        "v36 evaluation",
+        "v37 probe analysis",
     )
-    _check_tokens(training_cell, TRAINING_TOKENS, notes, "v36 training")
-    _check_tokens(evaluation_cell, EVALUATION_TOKENS, notes, "v36 evaluation")
+    _check_tokens(training_cell, TRAINING_TOKENS, notes, "v37 probe training")
+    _check_tokens(evaluation_cell, EVALUATION_TOKENS, notes, "v37 probe analysis")
 
-    densities = _baseline_densities(repo_root / "eval_v22" / "density_sweep.json", notes)
+    densities = ()
     if not notes:
-        notes.append("PASS: v36 Colab training and evaluation configuration is ready")
+        notes.append("PASS: v37 Colab paired-probe configuration is ready")
 
     return V16RunReadinessSummary(
         status=_status(notes),

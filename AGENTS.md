@@ -26,8 +26,9 @@
   Social-NCE is explicitly deferred to a contingent v38 probe. Implementation adds a safe v34→v37 upgrade
   path (`--upgrade_checkpoint`), exact gate=0 equivalence, checkpoint auto-detection, HH-gate diagnostics,
   and `scripts/run_v37_probes.py` for paired C0/C1 seeds 40/41/42 with shared episode banks. The notebook and
-  readiness markers remain v36 by design until the probe emits GO. Local real-v34 CLI smoke passed and the
-  full suite is green (**272 passed, 1 pre-existing warning**).
+  readiness markers now launch the V37 paired probe (not the failed v36 full run); full v37 training still
+  requires a probe `GO`. Local real-v34 CLI smoke passed and the full suite is green (**272 passed,
+  1 pre-existing warning**) after the notebook-wire fix.
 - **v36 = COMPLETE, NEGATIVE/FLAT; v34-fixed-beta is locked as the v37 base.** The full 4M combined-levers
   run was healthy and the best checkpoint retained genuine detours, but the honest 5-seed × 50-episode sweep
   failed the preregistered gate. Success at N=5/10/15/20 was **97.6/88.4/82.0/73.2%**, collision

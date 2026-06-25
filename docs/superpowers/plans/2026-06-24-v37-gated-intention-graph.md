@@ -1,8 +1,9 @@
 # v37 Gated Intention Graph — Uygulama ve Deney Planı
 
 > **Durum (2026-06-24): KOD PROBE'A HAZIR; v36 DEĞERLENDİRMESİ TAMAMLANDI, FULL RUN BAŞLAMADI.**
-> v36 preregistered kapıyı geçmedi; v37 tabanı `v34-fixed-beta` olarak kilitlendi. Probe PASS olmadan
-> notebook/readiness marker'ları v37'ye çevrilmeyecek ve tam v37 eğitimi başlatılmayacak.
+> v36 preregistered kapıyı geçmedi; v37 tabanı `v34-fixed-beta` olarak kilitlendi. Notebook/readiness
+> marker'ları artık V37 paired-probe launcher'ını doğrular; probe `GO` olmadan tam v37 eğitimi
+> başlatılmayacak.
 
 **Amaç:** Yüksek yoğunlukta (N=15/20) kapanan geçitleri ve yaya-yaya etkileşimlerini açıkça modelleyerek başarıyı artırmak ve çarpışmayı azaltmak; mevcut en iyi politikanın düşük yoğunluk performansını korumak.
 
@@ -307,14 +308,14 @@ C:\ProgramData\miniconda3\python.exe -m pytest tests/test_v37_intention_graph.py
 - [ ] FAIL: notebook v37'ye çevrilmez; plan negatif sonuçla kapanır.
 - [ ] PASS: Task 7'ye geçilir.
 
-### Task 7 — Notebook/readiness v37
+### Task 7 — Notebook/readiness v37 probe
 
 **Modify:** `sncp_ppo_colab.ipynb`, `sncp_ppo/run_readiness.py`, `tests/test_v16_run_readiness.py`, `tests/test_post_run_pipeline.py`.
 
-- [ ] Yalnız probe PASS sonrasında v36 marker'ları v37'ye taşınır.
-- [ ] Training cell `--upgrade_checkpoint`, HH/CV flags ve 1.5M fine-tune reçetesini içerir.
-- [ ] Eval v37: densities 5/10/15/20; trajectories 10/20; seçilen base JSON karşılaştırması.
-- [ ] Persist/download `eval_v37_artifacts.zip`.
+- [x] Notebook full v36 koşusundan V37 C0/C1 paired-probe launcher'ına taşındı.
+- [x] Readiness/test marker'ları `sncp_ppo_v34.pt` tabanlı `eval_v37_probe/` akışını doğrular.
+- [x] Persist/download `eval_v37_probe_artifacts.zip`.
+- [ ] Probe `GO` verirse ayrı bir full-v37 notebook/readiness geçişi yapılır.
 
 ### Task 8 — Zorunlu doğrulama
 
@@ -394,5 +395,5 @@ Yeni bir agent bu dosyayı gördüğünde:
 2. Default ve kilitli model tabanı `v34-fixed-beta`; v36 warm-start olarak kullanılmamalı.
 3. v37 core tek mekanizmadır: **gated HH self-attention + model-içi 1–4 adım constant-velocity intent geometry**.
 4. Social-NCE v37'ye otomatik dahil değildir; v38 contingent probe'dur.
-5. Probe PASS olmadan notebook marker'ları v37'ye çevrilmez ve full A100 run yapılmaz.
+5. Notebook marker'ları V37 paired-probe launcher'ını doğrular; probe PASS/GO olmadan full A100 v37 run yapılmaz.
 6. Tüm testler yeşil olmadan commit/push yapılmaz.
