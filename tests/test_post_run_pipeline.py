@@ -263,32 +263,28 @@ def test_versioned_post_eval_cli_derives_paths_from_version(tmp_path, monkeypatc
     assert "Overall status: pass" in capsys.readouterr().out
 
 
-def test_notebook_is_v38_action_shield_probe():
+def test_notebook_is_v34_train_plus_v38_shield():
+    # The final notebook is one end-to-end pipeline: train v34 (Beta) from scratch, then
+    # an inline honest sweep that evaluates the raw policy (shield off) and the shielded
+    # system (shield on) on the SAME checkpoint.
     code = _colab_code_sources()
-    train_cells = [s for s in code if "scripts/run_v38_shield_probe.py" in s and "--checkpoint" in s]
-    eval_cells = [s for s in code if "CHECKPOINT = 'sncp_ppo_v34.pt'\n\nreport = os.path.join" in s]
-    assert len(train_cells) == 2 and len(eval_cells) == 1
-    quick = [s for s in train_cells if "OUTPUT_DIR = 'eval_v38_shield_probe'" in s][0]
-    wide = [s for s in train_cells if "OUTPUT_DIR = 'eval_v38_shield_full'" in s][0]
-    ev = eval_cells[0]
-    for train in (quick, wide):
-        assert "BASE_CHECKPOINT = 'sncp_ppo_v34.pt'" in train
-        assert "SHIELD_HORIZON_STEPS = 6" in train
-        assert "SHIELD_SAFETY_MARGIN = 0.0" in train
-        assert "'--checkpoint', BASE_CHECKPOINT" in train
-        assert "'--output_dir', OUTPUT_DIR" in train
-        assert "'--densities', *[str(n) for n in DENSITIES]" in train
-        assert "'--n_episodes', str(EVAL_EPISODES)" in train
-        assert "'--shield_horizon_steps', str(SHIELD_HORIZON_STEPS)" in train
-        assert "'--shield_safety_margin', str(SHIELD_SAFETY_MARGIN)" in train
-        assert "checkpoints/sncp_ppo_v36.pt" not in train
-    assert "DENSITIES = [15, 20]" in quick and "EVAL_EPISODES = 50" in quick
-    assert "DENSITIES = [5, 10, 15, 20]" in wide and "EVAL_EPISODES = 100" in wide
-    assert "run_post_eval.py" not in ev
-    assert "EVAL_OUT = 'eval_v38_shield_full' if os.path.exists" in ev
-    assert "CHECKPOINT = 'sncp_ppo_v34.pt'" in ev
-    assert "report = os.path.join(EVAL_OUT, 'report.md')" in ev
-    assert "summary = os.path.join(EVAL_OUT, 'summary.json')" in ev
+    train_cells = [s for s in code if "python -m sncp_ppo.train" in s]
+    sweep_cells = [s for s in code if "def honest_sweep(" in s]
+    assert len(train_cells) == 1 and len(sweep_cells) == 1
+    train, sweep = train_cells[0], sweep_cells[0]
+    # final policy = v34 Beta, full training run (not a probe)
+    assert "--action_dist beta" in train
+    assert "--ent_coef 0.001" in train
+    assert "--save_path checkpoints/sncp_ppo_v34.pt" in train
+    assert "--total_steps 2500000" in train
+    assert "checkpoints/sncp_ppo_v36.pt" not in train
+    assert "checkpoints/sncp_ppo_v37.pt" not in train
+    # honest sweep: raw (shield off) + shielded (shield on) -> two result files
+    assert "evaluate_density" in sweep
+    assert "honest_sweep(action_shield=False" in sweep
+    assert "honest_sweep(action_shield=True" in sweep
+    assert "v34_multiseed_result.json" in sweep
+    assert "v38_multiseed_result.json" in sweep
 
 
 def test_post_eval_cli_threads_regime_scaled_beeline_gate(tmp_path, monkeypatch):
