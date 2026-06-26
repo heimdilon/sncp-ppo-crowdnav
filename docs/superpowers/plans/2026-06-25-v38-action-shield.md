@@ -110,5 +110,18 @@ quick high-N success delta: +6.0 pp
 quick high-N collision delta: -6.0 pp
 quick high-N timeout delta: 0.0 pp
 quick verdict: GO
-wide eval: pending (required before final V38 decision)
+
+wide eval artifact: eval_v38_shield_full_artifacts.zip (runtime artifact, git-ignored)
+wide C0 N=5/10/15/20 success: 95.0 / 90.0 / 90.0 / 85.0%
+wide C1 N=5/10/15/20 success: 99.0 / 99.0 / 98.0 / 95.0%
+wide C0 N=5/10/15/20 collision: 4.0 / 10.0 / 9.0 / 14.0%
+wide C1 N=5/10/15/20 collision: 0.0 / 0.0 / 1.0 / 4.0%
+wide C0 N=5/10/15/20 timeout: 1.0 / 0.0 / 1.0 / 1.0%
+wide C1 N=5/10/15/20 timeout: 1.0 / 1.0 / 1.0 / 1.0%
+wide high-N success delta: +9.0 pp
+wide high-N collision delta: -9.0 pp
+wide high-N timeout delta: 0.0 pp
+wide low-N regression: false
+wide verdict: GO
+final V38 decision: POSITIVE; use shielded v34 runtime policy for candidate reporting
 ```
