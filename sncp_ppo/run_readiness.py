@@ -33,8 +33,31 @@ TRAINING_TOKENS = (
     "raise SystemExit(p.returncode)",
 )
 
+WIDE_EVALUATION_TOKENS = (
+    "BASE_CHECKPOINT = 'sncp_ppo_v34.pt'",
+    "OUTPUT_DIR = 'eval_v38_shield_full'",
+    "DENSITIES = [5, 10, 15, 20]",
+    "EVAL_EPISODES = 100",
+    "SHIELD_HORIZON_STEPS = 6",
+    "SHIELD_SAFETY_MARGIN = 0.0",
+    "scripts/run_v38_shield_probe.py",
+    "'--checkpoint', BASE_CHECKPOINT",
+    "'--output_dir', OUTPUT_DIR",
+    "'--densities', *[str(n) for n in DENSITIES]",
+    "'--n_episodes', str(EVAL_EPISODES)",
+    "'--robot_vpref', '1.0'",
+    "'--human_vpref_override', '1.0'",
+    "'--shield_horizon_steps', str(SHIELD_HORIZON_STEPS)",
+    "'--shield_safety_margin', str(SHIELD_SAFETY_MARGIN)",
+    "if not os.path.exists(BASE_CHECKPOINT):",
+    "raise FileNotFoundError(",
+    "if p.returncode != 0:",
+    "raise SystemExit(p.returncode)",
+)
+
 EVALUATION_TOKENS = (
-    "EVAL_OUT = 'eval_v38_shield_probe'",
+    "EVAL_OUT = 'eval_v38_shield_full' if os.path.exists('eval_v38_shield_full/summary.json') else 'eval_v38_shield_probe'",
+    "CHECKPOINT = 'sncp_ppo_v34.pt'",
     "report = os.path.join(EVAL_OUT, 'report.md')",
     "summary = os.path.join(EVAL_OUT, 'summary.json')",
     "Verdict:",
@@ -116,17 +139,24 @@ def verify_v16_run_ready(repo_root: str | Path = ".") -> V16RunReadinessSummary:
     cells = _load_notebook(repo_root / "sncp_ppo_colab.ipynb") or []
     training_cell = _find_unique_cell(
         cells,
-        "BASE_CHECKPOINT = 'sncp_ppo_v34.pt'",
+        "OUTPUT_DIR = 'eval_v38_shield_probe'",
         notes,
-        "v38 shield probe",
+        "v38 quick shield probe",
+    )
+    wide_cell = _find_unique_cell(
+        cells,
+        "OUTPUT_DIR = 'eval_v38_shield_full'",
+        notes,
+        "v38 wide shield eval",
     )
     evaluation_cell = _find_unique_cell(
         cells,
-        "EVAL_OUT = 'eval_v38_shield_probe'",
+        "CHECKPOINT = 'sncp_ppo_v34.pt'\n\nreport = os.path.join",
         notes,
         "v38 shield analysis",
     )
-    _check_tokens(training_cell, TRAINING_TOKENS, notes, "v38 shield probe")
+    _check_tokens(training_cell, TRAINING_TOKENS, notes, "v38 quick shield probe")
+    _check_tokens(wide_cell, WIDE_EVALUATION_TOKENS, notes, "v38 wide shield eval")
     _check_tokens(evaluation_cell, EVALUATION_TOKENS, notes, "v38 shield analysis")
 
     densities = ()
@@ -136,7 +166,7 @@ def verify_v16_run_ready(repo_root: str | Path = ".") -> V16RunReadinessSummary:
     return V16RunReadinessSummary(
         status=_status(notes),
         repo_root=str(repo_root),
-        training_cell_found=training_cell is not None,
+        training_cell_found=training_cell is not None and wide_cell is not None,
         evaluation_cell_found=evaluation_cell is not None,
         baseline_densities=densities,
         notes=tuple(notes),

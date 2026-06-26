@@ -44,7 +44,8 @@ def test_v38_shield_probe_run_readiness_flags_stale_notebook(tmp_path):
     summary = verify_v16_run_ready(tmp_path)
 
     assert summary.status == "fail"
-    assert any("v38 shield probe" in note for note in summary.notes)
+    assert any("v38 quick shield probe" in note for note in summary.notes)
+    assert any("v38 wide shield eval" in note for note in summary.notes)
     assert any("v38 shield analysis" in note for note in summary.notes)
 
 
@@ -76,6 +77,7 @@ def test_colab_persist_cell_downloads_eval_v38_shield_artifact_bundle():
     assert len(persist_cells) == 1
     persist_cell = persist_cells[0]
     assert "shutil.make_archive" in persist_cell
-    assert "'eval_v38_shield_probe_artifacts'" in persist_cell
+    assert "'eval_v38_shield_full'" in persist_cell
     assert "'eval_v38_shield_probe'" in persist_cell
+    assert "f'{bundle_dir}_artifacts'" in persist_cell
     assert "files.download(archive)" in persist_cell
