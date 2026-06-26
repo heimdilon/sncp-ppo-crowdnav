@@ -123,5 +123,15 @@ wide high-N collision delta: -9.0 pp
 wide high-N timeout delta: 0.0 pp
 wide low-N regression: false
 wide verdict: GO
+
+final report artifact: eval_v38_artifacts.zip (runtime artifact, git-ignored)
+final report output_dir: eval_v38
+final report checkpoint: sncp_ppo_v34.pt (shielded at runtime)
+final report trajectories: traj_paper_challenging_n10.png / traj_paper_challenging_n20.png
+final report N=5/10/15/20 success: 99.0 / 99.0 / 98.0 / 95.0%
+final report N=5/10/15/20 collision: 0.0 / 0.0 / 1.0 / 4.0%
+final report N=5/10/15/20 timeout: 1.0 / 1.0 / 1.0 / 1.0%
+final report N=5/10/15/20 avg_success_steps: 46.6 / 51.9 / 57.9 / 62.6
+final report N=5/10/15/20 avg_min_d_min: 0.872 / 0.678 / 0.577 / 0.538
 final V38 decision: POSITIVE; use shielded v34 runtime policy for candidate reporting
 ```
