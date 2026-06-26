@@ -266,6 +266,19 @@ def test_cli_main_passes_arguments_to_report_runner(tmp_path, monkeypatch, capsy
             "--trajectory_densities",
             "5",
             "10",
+            "--robot_vpref",
+            "1.0",
+            "--human_vpref_override",
+            "1.0",
+            "--max_time",
+            "12.5",
+            "--human_goal_noise",
+            "0.25",
+            "--action_shield",
+            "--shield_horizon_steps",
+            "6",
+            "--shield_safety_margin",
+            "0.0",
         ]
     )
 
@@ -277,6 +290,13 @@ def test_cli_main_passes_arguments_to_report_runner(tmp_path, monkeypatch, capsy
     assert captured["n_episodes"] == 50
     assert captured["seed"] == 100
     assert captured["trajectory_densities"] == [5, 10]
+    assert captured["robot_vpref"] == 1.0
+    assert captured["human_vpref_override"] == 1.0
+    assert captured["max_time"] == 12.5
+    assert captured["human_goal_noise"] == 0.25
+    assert captured["action_shield"] is True
+    assert captured["shield_horizon_steps"] == 6
+    assert captured["shield_safety_margin"] == 0.0
     assert "density_sweep.csv" in capsys.readouterr().out
 
 

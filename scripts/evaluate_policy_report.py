@@ -25,6 +25,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--n_episodes", type=int, default=50)
     parser.add_argument("--seed", type=int, default=100)
     parser.add_argument("--trajectory_densities", type=int, nargs="*", default=[5, 10])
+    parser.add_argument("--robot_vpref", type=float, default=0.26,
+                        help="Robot max speed; paper-regime eval uses 1.0.")
+    parser.add_argument("--human_vpref_override", type=float, default=None,
+                        help="If set, force a flat pedestrian speed such as 1.0.")
+    parser.add_argument("--max_time", type=float, default=None,
+                        help="Episode time cap; None lets the env resolve scenario defaults.")
+    parser.add_argument("--human_goal_noise", type=float, default=0.0,
+                        help="Pedestrian goal noise; match the evaluated regime.")
     parser.add_argument(
         "--baseline_nav_steps",
         type=float,
@@ -49,6 +57,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         seed=args.seed,
         trajectory_densities=args.trajectory_densities,
         baseline_nav_steps=args.baseline_nav_steps,
+        robot_vpref=args.robot_vpref,
+        human_vpref_override=args.human_vpref_override,
+        max_time=args.max_time,
+        human_goal_noise=args.human_goal_noise,
         action_shield=args.action_shield,
         shield_horizon_steps=args.shield_horizon_steps,
         shield_safety_margin=args.shield_safety_margin,
