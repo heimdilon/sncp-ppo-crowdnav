@@ -20,15 +20,15 @@
   PDF `s12369-026-01389-9.pdf` in repo root, **git-ignored**).
 - Stack: Python, PyTorch, Gymnasium, **`ncps`** (Liquid Time-Constant / Neural Circuit Policies), pytest.
 - Robot = **TurtleBot3 Waffle**, max linear speed **0.26 m/s** (real hardware), wmax 1.8, radius 0.3.
-- **v38 = CODE READY FOR TRAINING-FREE ACTION-SHIELD PROBE; no PPO training.** v34-fixed-beta remains
-  the locked champion/base. V38 adds `sncp_ppo/action_shield.py`, an eval-time post-processor that
-  only intervenes when a short constant-velocity rollout predicts collision. The Colab notebook and
-  readiness markers now run `scripts/run_v38_shield_probe.py`: C0 raw v34 vs C1 shielded v34, default
-  quick probe N=15/20 with 50 episodes per arm/density. Default `shield_safety_margin=0.0` is
-  intentionally conservative after a local smoke showed 0.10m buffer can cause unnecessary collisions.
-  Local smoke passed; a 10-episode local probe at margin 0.0 was neutral (0 delta), so the real decision
-  still requires the 50-episode quick probe artifact. Plan/runbook:
-  `docs/superpowers/plans/2026-06-25-v38-action-shield.md`.
+- **v38 = QUICK PROBE GO; WIDE EVAL PENDING.** v34-fixed-beta remains the locked champion/base for now.
+  V38 is training-free: `sncp_ppo/action_shield.py` post-processes the deterministic v34 action only
+  when a short constant-velocity rollout predicts collision. Colab quick probe (`eval_v38_shield_probe`,
+  N=15/20, 50 episodes per arm/density, seed 100) finished in minutes and passed the gate: C0?C1
+  success N15 **94?100%**, N20 **90?96%**; collision N15 **6?0%**, N20 **8?2%**; timeout unchanged
+  (**0/2%**). Verdict `GO`, high-N success delta **+6 pp**, collision delta **?6 pp**, timeout delta
+  **0 pp**. This is a quick-gate result, not final. Next required step: wide eval N=5/10/15/20 with
+  100 episodes per arm/density (`eval_v38_shield_full`) before declaring V38 a real candidate. Artifact
+  local/ignored: `eval_v38_shield_probe_artifacts.zip`.
 - **v37 = COMPLETE, NO-GO; full training is CANCELLED, v34-fixed-beta remains the champion/base.**
   The paired probe ran C0/C1 from the same locked `sncp_ppo_v34.pt` base across seeds 40/41/42 with
   shared episode banks. Verdict: **NO-GO**. C1 (zero-gated HH self-attention + 1?4 step CV intent

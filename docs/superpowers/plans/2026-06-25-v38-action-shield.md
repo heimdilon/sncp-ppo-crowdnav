@@ -99,5 +99,16 @@ default probe densities: 15 / 20
 default episodes: 50 per arm per density
 default horizon: 6 steps = 1.5s
 default safety margin: 0.0m (intervene only on predicted collision)
-verdict: TBD
+quick probe artifact: eval_v38_shield_probe_artifacts.zip (runtime artifact, git-ignored)
+quick C0 N=15/20 success: 94.0 / 90.0%
+quick C1 N=15/20 success: 100.0 / 96.0%
+quick C0 N=15/20 collision: 6.0 / 8.0%
+quick C1 N=15/20 collision: 0.0 / 2.0%
+quick C0 N=15/20 timeout: 0.0 / 2.0%
+quick C1 N=15/20 timeout: 0.0 / 2.0%
+quick high-N success delta: +6.0 pp
+quick high-N collision delta: -6.0 pp
+quick high-N timeout delta: 0.0 pp
+quick verdict: GO
+wide eval: pending (required before final V38 decision)
 ```
