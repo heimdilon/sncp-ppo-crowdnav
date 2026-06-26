@@ -30,6 +30,7 @@ aynı protokolü kullanır; yalnızca `CKPT`/`OUT` adları farklıdır.
 | `v35_multiseed_result.json` | v35 | ablasyon: 6 m havuz-seviyesi algı maskesi |
 | **`v34_multiseed_result.json`** | **v34** | **Beta eylem dağılımı (temiz, fb0bf07 sonrası)** |
 | `v30_standard_result.json` | v30 | makalenin `standard` senaryosu (5 yaya, 12.5 s bütçe) |
+| **`v38_multiseed_result.json`** | **v38** | **v34 + eğitimsiz eylem kalkanı (final sistem; en güçlü sonuç)** |
 
 > v26 (naif taban) ayrı JSON taşımaz; figürlerde hard-coded'dur.
 
@@ -42,8 +43,16 @@ aynı protokolü kullanır; yalnızca `CKPT`/`OUT` adları farklıdır.
   `--action_dist beta --ent_coef 0.001`, 2.5M adım, Colab A100.
 - ⚠️ Bug-öncesi v34 (`Normal(α,β)` olarak eğitilen) **geçersizdir** ve bu paket dışındadır.
 
+## v38 (eylem kalkanı) — eğitimsiz, final sistem
+- Kod: `sncp_ppo/action_shield.py` (kısa-horizon sabit-hız çarpışma filtresi). Yeni eğitim/checkpoint **yok**.
+- Politika: kilitli `sncp_ppo_v34.pt` (yukarıdaki SHA-256). v38 = bu checkpoint + `action_shield=True`
+  (horizon 6, safety\_margin 0.0); `evaluate_density` ile diğer sürümlerle **aynı** protokolde değerlendirilir.
+- `sweep_v38.py` üretir; `analyze_v38.py` kalkanı **izole** eder (v38 vs v34: aynı checkpoint/tohum/bölüm).
+- Sonuç: başarı 99.6/99.6/99.6/98.8, çarpışma 0.0/0.0/0.4/0.4; v34'e karşı N=10/15/20 Bonferroni-anlamlı.
+
 ## Tekrar üretim
 - İstatistik tablosu (checkpoint gerekmez): `cd paper_data && python analyze_v34.py`
+- v38 kalkan analizi (checkpoint gerekmez): `cd paper_data && python analyze_v38.py`
 - Şampiyon ayrıntılı metrik tablosu: `cd paper_data && python v30_detail_table.py`
 - Sıfırdan sweep (yerel checkpoint gerekir): repo kökünden `python paper_data/sweep_v34.py`
   (CKPT yolu repo köküne göredir; SHA-256 yukarıdaki ile eşleşmelidir).

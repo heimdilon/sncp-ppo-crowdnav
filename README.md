@@ -1,4 +1,4 @@
-# SNCP-PPO: Kalabalıkta İnsan-Merkezli Navigasyon (Reprodüksiyon Çalışması)
+# SNCP-PPO: Kalabalıkta İnsan-Merkezli Navigasyon — Reprodüksiyon, Ablasyonlar ve Eğitimsiz Güvenlik Kalkanı
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/heimdilon/sncp-ppo-crowdnav/blob/main/sncp_ppo_colab.ipynb)
 
@@ -22,7 +22,25 @@ buna karşın denenen altı model kaldıracı şampiyonu yüksek yoğunlukta **g
 dürüst bir çok-tohumlu protokolle yapılır (5 tohum × 50 bölüm = 250 bölüm/yoğunluk, Wilson %95 GA,
 iki-oranlı *z*, Bonferroni α=0.0125).
 
-**Şampiyon v30** — `paper_challenging`, robot 1.0 m/s, görünmez-robot ORCA kalabalık:
+### 🛡️ Final sistem: v38 eğitimsiz eylem kalkanı (en güçlü sonuç)
+
+Kilitli **v34 Beta** politikasının deterministik eylemini, yürütmeden önce kısa-horizon (6 adım, 1.5 s)
+sabit-hız öngörüsüyle kontrol eden **eğitimsiz** bir güvenlik filtresi (`sncp_ppo/action_shield.py`):
+çarpışma öngörülürse küçük bir aday-eylem kümesinden en güvenlisi seçilir. PPO'ya, checkpoint'e veya
+eğitime dokunmaz. Aynı dürüst 5-tohum protokolde (250 bölüm/yoğunluk):
+
+| N (yaya) | v34 (ham politika) | **v38 (+ kalkan)** | v38 çarpışma | Δ başarı vs v34 |
+|:--------:|:------------------:|:------------------:|:------------:|:---------------:|
+| 5  | 96.8% | **99.6%** | 0.0% | +2.8 pp |
+| 10 | 92.8% | **99.6%** | 0.0% | +6.8 pp ✓ |
+| 15 | 91.2% | **99.6%** | 0.4% | +8.4 pp ✓ |
+| 20 | 86.0% | **98.8%** | 0.4% | +12.8 pp ✓ |
+
+Kalkan, ham v34'e göre N=10/15/20'de hem başarıda hem çarpışmada **Bonferroni-anlamlı** iyileşme verir
+(N=20: +12.8 pp başarı / −12.8 pp çarpışma, *p* < 0.0001, Cohen *h* ≈ 0.55) ve çarpışmayı her yoğunlukta
+pratikte **sıfıra** indirir — sıfır ek eğitim maliyetiyle. (✓ = Bonferroni-anlamlı.)
+
+**Politika tarafı şampiyonu v30** — `paper_challenging`, robot 1.0 m/s, görünmez-robot ORCA kalabalık:
 
 | N (yaya) | Başarı | Çarpışma | Zaman aşımı |
 |:--------:|:------:|:--------:|:-----------:|
@@ -40,8 +58,9 @@ N~U(10,20) (v28) + mean+max dikkat havuzlaması (v30). N=10: %61.6 → %89.6.
 **Açığı kapatmayan kaldıraçlar:** node kapasite (v31), N→25 + 4M bütçe (v32), 4-başlı dikkat (v33),
 Beta aksiyon dağılımı (v34), sayı-ölçekleme (v29), 6 m algı-menzili maskesi (v35). **Kilit bulgu:**
 robotun algısını makalenin kendi 6 m bütçesine indirmek açığı *genişletir* → kalan açık "ne kadar
-görüyor" değil "gördüğüyle ne yapıyor" (temsil kullanımı). *(v36 = hepsini birleştiren koşu —
-değerlendirme bekliyor.)*
+görüyor" değil "gördüğüyle ne yapıyor" (temsil kullanımı). *(v36 = hepsini birleştiren koşu: **NEGATİF**;
+v37 niyet-grafiği probe'u: **NO-GO**. Kalan çarpışma açığı, yeni eğitim yerine yukarıdaki v38 eylem
+kalkanıyla kapatıldı.)*
 
 ## Mimari
 
@@ -73,7 +92,8 @@ challenging bütçe 50 s / standard 12.5 s (ortamdan türetilir). Ödül = makal
 │   ├── models.py              SNCPPolicy (ön-MLP + LTC + dikkat + mean+max + aktör/kritik)
 │   ├── ppo.py                 PPOAgent + GAE (gaussian & beta dalları)
 │   ├── train.py               Eğitim döngüsü: yoğunluk müfredatı + holdout-best
-│   ├── eval_report.py         Yoğunluk taraması / rapor / yörünge render
+│   ├── eval_report.py         Yoğunluk taraması / rapor / yörünge render (shield destekli)
+│   ├── action_shield.py       v38 eğitimsiz runtime güvenlik filtresi (kısa-horizon çarpışma kontrolü)
 │   └── run_readiness.py       Colab koşu-öncesi marker denetimi
 ├── tests/                     Pytest (250+ test); `--basetemp=./.pytmp` ŞART (ACL)
 ├── scripts/                   Eval/karşılaştırma/görselleştirme CLI'ları
@@ -112,6 +132,16 @@ python scripts/run_post_eval.py --version 30 \
     --densities 5 10 15 20 --scenario paper_challenging \
     --n_episodes 50 --robot_vpref 1.0 --human_vpref_override 1.0
 ```
+
+**v38 eylem kalkanı (eğitimsiz, eval-zamanı):**
+
+```bash
+python scripts/run_v38_shield_probe.py --checkpoint sncp_ppo_v34.pt \
+    --densities 15 20 --n_episodes 50 --robot_vpref 1.0 --human_vpref_override 1.0
+```
+
+Ham (C0) vs kalkanlı (C1) eşleştirilmiş kıyas. Dürüst 5-tohum havuz için `scratch/_sweep_v38.py`
+(`evaluate_density(..., action_shield=True)`), istatistik için `scratch/_analyze_v38.py`.
 
 ## Sınırlamalar (dürüst)
 

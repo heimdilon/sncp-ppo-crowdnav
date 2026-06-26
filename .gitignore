@@ -66,6 +66,7 @@ checkpoints/sncp_ppo_final.pt
 /*.zip
 /training_*.csv
 /*_multiseed_result.json
+/v30_standard_result.json
 /sncp_ppo_v*.pt
 checkpoints/*.pt
 /*.png

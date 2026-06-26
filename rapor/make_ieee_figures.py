@@ -48,6 +48,9 @@ v32c = np.array([2.8, 6.0, 13.2, 21.2])
 v33c = np.array([4.8, 15.6, 24.0, 29.2])
 v34c = np.array([2.8, 7.2, 8.8, 13.2])     # CLEAN Beta carpisma; eski buggy=[12.0,21.2,34.4,47.2]
 v35c = np.array([2.8, 10.0, 20.8, 30.4])
+# v38 = locked v34 Beta policy + training-free action shield (honest 5-seed pool; v38_multiseed_result.json)
+v38 = np.array([99.6, 99.6, 99.6, 98.8])
+v38c = np.array([0.0, 0.0, 0.4, 0.4])
 
 # ============ FIG: architecture ============
 fig, ax = plt.subplots(figsize=(9.6, 4.6)); ax.axis("off")
@@ -191,6 +194,27 @@ ax.set_ylabel("N=10 challenging başarı (%)")
 ax.set_title("Neden çok-tohum: 'best holdout' seçim-saplı", fontsize=11)
 ax.legend(loc="lower right", fontsize=8.0, framealpha=0.95)
 fig.savefig(OUT + "ieee_seedbias.png"); plt.close(fig)
+
+# ============ FIG: v38 action shield (v30 / v34 raw / v38 shield) ============
+def _se95(arr):
+    p = np.asarray(arr) / 100.0
+    return 1.96 * np.sqrt(p * (1.0 - p) / 250.0) * 100.0
+fig, (a1, a2) = plt.subplots(1, 2, figsize=(10.0, 4.1))
+a1.plot(N, v30, "-o", color=GRAY, lw=1.8, ms=6, label="v30 (taban politika)")
+a1.plot(N, v34, "--s", color=AMBER, lw=1.8, ms=6, label="v34 (Beta politika)")
+a1.errorbar(N, v38, yerr=_se95(v38), fmt="-D", color=GREEN, lw=2.6, ms=8, capsize=3, label="v38 (v34 + eylem kalkanı)")
+a1.axhline(PAPER_S, color="#888888", ls=":", lw=1.5, label="Makale ~%94")
+a1.set_title("Başarı: eğitimsiz eylem kalkanı yüksek-N'i kurtarır", fontsize=10.5)
+a1.set_xlabel("Yaya sayısı N"); a1.set_ylabel("Başarı (%)"); a1.set_xticks(N); a1.set_ylim(65, 101)
+a1.legend(loc="lower left", fontsize=8.5, framealpha=0.92)
+a2.plot(N, v30c, "-o", color=GRAY, lw=1.8, ms=6, label="v30")
+a2.plot(N, v34c, "--s", color=AMBER, lw=1.8, ms=6, label="v34")
+a2.errorbar(N, v38c, yerr=_se95(v38c), fmt="-D", color=GREEN, lw=2.6, ms=8, capsize=3, label="v38 (kalkan)")
+a2.set_title("Çarpışma: kalkan çarpışmayı ≈%0'a indirir", fontsize=10.5)
+a2.set_xlabel("Yaya sayısı N"); a2.set_ylabel("Çarpışma (%)"); a2.set_xticks(N); a2.set_ylim(-1, 32)
+a2.legend(loc="upper left", fontsize=8.5, framealpha=0.92)
+fig.tight_layout()
+fig.savefig(OUT + "ieee_v38.png"); plt.close(fig)
 
 print("IEEE figures written to", OUT)
 import os
