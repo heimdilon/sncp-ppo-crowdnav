@@ -71,6 +71,9 @@ checkpoints/sncp_ppo_final.pt
 checkpoints/*.pt
 /*.png
 /*.gif
+/rapor_v38_overleaf_clean/
+/teslim_v38_final_clean/
+/teslim_notu_v38_final.txt
 # rapor/ (paper): track .tex/.bib/figures + the compiled IEEE PDF; ignore LaTeX build cruft + bundles
 rapor/*.aux
 rapor/*.log

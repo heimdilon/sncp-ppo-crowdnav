@@ -1,460 +1,360 @@
 \documentclass[conference]{IEEEtran}
 \IEEEoverridecommandlockouts
 
-% ---- encoding & language ----
 \usepackage[T1]{fontenc}
 \usepackage[utf8]{inputenc}
 \usepackage[shorthands=off,turkish]{babel}
-
-% ---- math, tables, figures ----
-\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{amsmath,amssymb}
 \usepackage{graphicx}
 \usepackage{booktabs}
 \usepackage{array}
-\usepackage{xcolor}
-\usepackage{algorithm}
-\usepackage{algpseudocode}
+\usepackage{float}
 \usepackage{url}
 \usepackage[hidelinks]{hyperref}
 
+\graphicspath{{figures/}}
 \newcommand{\isp}{I_{\mathrm{sp}}}
-\newcommand{\dcol}{d_{\mathrm{col}}}
-\newcommand{\pp}{\mathrm{pp}}
 
 \begin{document}
 
-\title{Kalabalıkta İnsan-Merkezli Navigasyon için SNCP--PPO:\\
-Sadık Reprodüksiyon, Ablasyonlar ve Eğitimsiz Güvenlik Kalkanı}
+\title{Kalabalıkta İnsan-Merkezli Navigasyon için V38:\\
+SNCP--PPO Üzerinde Eğitimsiz Eylem Kalkanı}
 
 \author{\IEEEauthorblockN{Orkun Koray Güngör}
 \IEEEauthorblockA{\textit{Mekatronik Mühendisliği Bölümü}\\
 \textit{Bursa Teknik Üniversitesi}\\
 Bursa, Türkiye\\
 orkun9312@gmail.com}
-\thanks{Kaynak kodu, eğitim notebook'u ve makale kaynağı (\LaTeX):
+\thanks{Kaynak kodu, Colab notebook'u ve deney artefaktları:
 \url{https://github.com/heimdilon/sncp-ppo-crowdnav}}}
 
 \maketitle
 
 \begin{abstract}
-Bu çalışma, Ao vd.'nin kalabalıkta insan-merkezli hareket planlama için önerdiği
-SNCP--PPO yaklaşımını bağımsız bir kod tabanında yeniden üretir ve bildirilen yüksek başarı oranına
-hangi mühendislik kararlarının yaklaştırdığını sistematik olarak inceler. Referans makalenin kullandığı
-görünmez-robot/ORCA kalabalık rejimi, $15\times15$~m arena, 1.0~m/s robot hızı ve PPO eğitim hattı
-kurulduktan sonra, naif uygulama hâlâ challenging senaryoda düşük başarı verir. Bu farkı açıklamak için
-best-checkpoint yanlılığını dışarıda bırakan çok-tohumlu bir değerlendirme protokolü kullanılır
-(5 tohum $\times$ 50 bölüm, Wilson güven aralığı, iki-oranlı $z$ testi ve Bonferroni düzeltmesi).
-Sonuçlar, açığın büyük kısmının ham model kapasitesiyle değil, temsil sadakati ve eğitim dağılımıyla
-ilgili olduğunu gösterir: ön-MLP gömmesi, yoğunluk müfredatı ve mean+max dikkat havuzlaması N=10 başarıyı
-\%61.6'dan \%89.6'ya, N=20 başarıyı \%43.6'dan \%79.2'ye çıkarır. Buna karşılık daha büyük NCP düğümleri,
-çok-başlı dikkat, 6~m algı maskesi ve birleşik çoklu kaldıraç denemeleri yüksek yoğunlukta güvenilir
-ilerleme sağlamaz; Beta eylem dağılımı yön-doğru fakat istatistiksel olarak kesinleşmeyen bir iyileşme
-üretir. Son aşamada, öğrenilmiş politikayı değiştirmeden çalışan eğitimsiz bir kısa-horizon eylem kalkanı
-eklenir. Kilitli v34 Beta politikası üzerine uygulanan bu v38 katmanı, \emph{aynı} dürüst çok-tohumlu
-protokolde (5 tohum $\times$ 50 bölüm) N=5/10/15/20 için \%99.6/\%99.6/\%99.6/\%98.8 başarı ve
-\%0.0/\%0.0/\%0.4/\%0.4 çarpışma verir; ham v34'e göre yüksek-yoğunluk kazancı (N=20 başarı $+$12.8~pp,
-çarpışma $-$12.8~pp) dört yoğunlukta da Bonferroni-anlamlıdır. Böylece
-çalışma iki sonuç sunar: saf SNCP--PPO tarafında açığı kapatan ve kapatmayan tasarım kararları ayrıştırılır;
-sistem tarafında ise kalan çarpışma-kaynaklı hata küçük bir runtime güvenlik katmanıyla pratik olarak
-azaltılır.
+Kalabalıkta sosyal navigasyon, öğrenilmiş rota seçimi ile yürütme zamanı güvenliğini aynı anda gerektirir.
+Bu çalışma, SNCP--PPO tabanlı kalabalık navigasyon projesinin nihai V38 sistemini raporlar. Önceki sürümler,
+ön-MLP gömmesi, yoğunluk müfredatı, mean+max havuzlama ve Beta eylem dağılımı ile güçlü bir v34 tabanı üretmiş;
+ancak yüksek yoğunlukta kalan hata kipinin büyük ölçüde çarpışma olduğunu göstermiştir. V38 bu nedenle yeni
+bir PPO eğitimi yapmaz. Kilitli v34 Beta checkpoint'inin deterministik eylemi alınır; kısa-horizon sabit-hız
+öngörüsüyle çarpışma riski kontrol edilir; yalnızca riskli durumda daha düşük riskli bir alternatif eylem
+yürütülür.
+Bu eğitimsiz action-shield katmanı, aynı checkpoint, aynı değerlendirme tohumları ve aynı bölümler üzerinde
+ham v34 ile karşılaştırıldığında N=20 başarıyı \%86.0'dan \%98.8'e çıkarır ve çarpışmayı \%13.2'den \%0.4'e
+indirir. Dürüst 5-değerlendirme-tohumu havuzunda (250 bölüm/yoğunluk) final V38 başarıları N=5/10/15/20 için
+\%99.6/\%99.6/\%99.6/\%98.8, çarpışmalar ise \%0.0/\%0.0/\%0.4/\%0.4'tür. Böylece V38, yeni checkpoint
+eğitmeden, öğrenilmiş sosyal rotayı koruyup çarpışma sınırındaki eylemi düzelten pratik bir final sistem adayı
+sunar.
 \end{abstract}
 
 \begin{IEEEkeywords}
-kalabalıkta navigasyon, sosyal robotik, pekiştirmeli öğrenme, PPO, nöral devre politikaları,
-sıvı zaman-sabitli ağlar, güvenlik filtresi
+sosyal navigasyon, kalabalıkta robot hareketi, PPO, SNCP, action shield, çarpışma-risk filtresi
 \end{IEEEkeywords}
 
 % =====================================================================
 \section{Giriş}
 % =====================================================================
-Kalabalıkta mobil robot navigasyonu yalnızca en kısa yolu bulma problemi değildir. Robotun hedefe zamanında
-ulaşması, insanlarla çarpışmaması, kişisel alanı gereksiz yere ihlal etmemesi ve yoğun kalabalıkta ani
-geometrik değişimlere tepki verebilmesi gerekir. Bu nedenle problem, klasik yol planlamadan farklı olarak
-hem dinamik hem de sosyal kısıtlar taşır.
+Kalabalıkta mobil robot navigasyonu, yalnızca geometrik olarak kısa bir yol bulmak değildir. Robot hedefe
+ulaşırken yayaların hareketini hesaba katmalı, çarpışmadan kaçınmalı ve yoğunluk arttıkça güvenli geçiş
+fırsatlarını değerlendirmelidir. Referans aldığımız SNCP--PPO yaklaşımı, bu problemi robot ve yayalar
+arasındaki etkileşimi uzay-zamansal bir grafa dönüştürerek çözer; Liquid Time-Constant ve Neural Circuit
+Policy kodlayıcılarıyla etkileşimleri işler ve son eylemi PPO ile öğrenir~\cite{ao2026sncp,hasani2021ltc,lechner2020ncp,schulman2017ppo}.
+Yaya hareketi için CrowdNav çizgisindeki görünmez-robot varsayımı ve ORCA kalabalık dinamiği kullanılır
+~\cite{chen2019crowdnav,vandenberg2011orca}.
 
-Ao vd.~\cite{ao2026sncp}, bu problem için Structured Neural Circuit Policy (SNCP) adlı bir yaklaşım önerir.
-Politika, robot ve yayalar arasındaki etkileşimleri uzay-zamansal bir grafa dönüştürür; robot düğümü,
-yaya düğümleri ve insan--insan kenarları ayrı Liquid Time-Constant (LTC) / Neural Circuit Policy (NCP)
-kodlayıcılarından geçirilir; kalabalık özeti dikkat havuzlamasıyla elde edilir; son eylem PPO ile öğrenilir.
-Makale, challenging senaryoda yaklaşık \%94 başarı bildirir.
+Projedeki erken amaç, referans makaledeki yüksek başarı oranına saf öğrenilmiş politika ile yaklaşmaktı.
+Bu süreçte birçok mimari ve eğitim kararı test edildi. Sonuçta v34 Beta politikası güçlü ve dengeli bir taban
+oldu: sınırlı eylem uzayında Beta dağılımı, kırpılmış Gauss politikasına göre daha uygun bir yürütme davranışı
+sağladı~\cite{chou2017beta}. Buna rağmen yüksek yoğunlukta kalan başarısızlıkların çoğu zaman aşımı değil,
+çarpışmaydı. Bu gözlem, yeni bir büyük eğitim koşusu yerine yürütme zamanı çarpışma-risk filtresini daha
+savunulabilir son adım yaptı.
 
-Bu raporun çıkış noktası basittir: aynı fikri bağımsız bir uygulamada kurduğumuzda ilk sonuçlar bu seviyeye
-ulaşmadı. Farkın nedeni tek bir hata değildi. Makalede belirtilmeyen NCP kablolaması, eğitim yoğunluğu,
-algı menzili, yaya modeli ayrıntıları, eylem dağılımı ve checkpoint seçimi gibi çok sayıda karar sonucu
-etkiliyordu. Bu yüzden çalışmanın ana hedefi yalnızca ``en iyi sayıyı'' bulmak değil, açığı oluşturan
-bileşenleri ölçülebilir şekilde ayırmaktır.
-
-Çalışmanın katkıları şunlardır:
+Bu makalenin odağı bu son adımdır. V38, v34 checkpoint'ini değiştirmez; öğrenilmiş rotayı korur ve sadece
+kısa-horizon çarpışma riski olan eylemleri değiştirir. Katkılarımız:
 \begin{itemize}
-\item Referans makalenin değerlendirme rejimine yakın bir SNCP--PPO hattı kurulur: ORCA yayalar,
-görünmez robot, 1.0~m/s robot, paper-standard ve paper-challenging senaryoları.
-\item Eğitim-içi best checkpoint ölçütünün seçim yanlılığı gösterilir ve model kıyasları çok-tohumlu,
-istatistiksel olarak denetlenmiş bir protokole bağlanır.
-\item Temsil sadakati ve eğitim dağılımı düzeltmelerinin açığın büyük kısmını kapattığı; ham kapasite,
-çok-başlı dikkat, sayısal dikkat ölçekleme ve 6~m algı maskesinin ise yüksek yoğunlukta beklenen ilerlemeyi
-sağlamadığı gösterilir.
-\item Son sistem adımı olarak eğitimsiz bir runtime eylem kalkanı eklenir. Bu kalkan yeni bir PPO eğitimi
-değil, öğrenilmiş deterministik eylem üzerinde kısa-horizon çarpışma filtresidir ve aynı çok-tohumlu
-protokolde challenging N=20 başarısını v30'un \%79.2'sinden \%98.8'e çıkarır (çarpışmayı pratikte ortadan kaldırır).
+\item Kilitli v34 Beta politikasının üzerine eğitimsiz, kısa-horizon action-shield katmanı ekliyoruz.
+\item Kalkan etkisini aynı checkpoint, aynı değerlendirme tohumları ve aynı bölüm bankası üzerinde ham v34'e
+karşı izole ediyoruz.
+\item Dürüst 5-değerlendirme-tohumu havuzunda final V38 sisteminin N=20 challenging başarısını \%98.8'e
+çıkardığını ve
+çarpışmayı \%0.4'e indirdiğini gösteriyoruz.
+\item Raporu eski ablation figürlerine dayandırmadan, V38 final sistemine özel yeni tablolar ve görsellerle
+sunuyoruz.
 \end{itemize}
 
-% =====================================================================
-\section{İlgili Çalışmalar}
-% =====================================================================
-\textbf{Kalabalıkta robot navigasyonu.} CrowdNav çizgisindeki çalışmalar, robotun yayalar tarafından
-görülmediği ve yayaların yalnızca birbirlerinden kaçındığı bir simülasyon rejimi kullanır~\cite{chen2019crowdnav}.
-Bu rejim, robotun kendi güvenliğini tek başına sağlamasını gerektirdiği için zorludur. Referans SNCP
-çalışması da aynı temel fikri kullanır~\cite{ao2026sncp}. Bizim uygulamamızda da robot yayalar için görünmezdir;
-yayalar ORCA ile birbirlerinden kaçınır, robot ise PPO politikasıyla hareket eder.
-
-\textbf{Nöral devre politikaları.} LTC ağları, girdiye bağlı zaman sabitleriyle sürekli-zamanlı dinamikler
-öğrenir~\cite{hasani2021ltc}. NCP'ler bu hücreleri seyrek ve yorumlanabilir bağlantı şemalarıyla birleştirir
-~\cite{lechner2020ncp}. SNCP mimarisinin çekiciliği, kalabalık etkileşimini doğrudan büyük bir MLP'ye vermek
-yerine robot, yaya ve insan--insan ilişkilerini ayrı devrelerle işlemesidir.
-
-\textbf{Dikkat ve küme havuzlama.} Dikkat mekanizması değişken sayıdaki ajanı ağırlıklı ortalamayla özetler
-~\cite{vaswani2017attention}. Ancak yüksek yoğunlukta yalnızca ortalama almak, en kritik yayayı seyreltebilir.
-DeepSets~\cite{zaheer2017deepsets} ve PointNet~\cite{qi2017pointnet}, küme fonksiyonlarında maksimum
-havuzlamanın önemli bir bilgi yolu olduğunu gösterir. Bu gözlem, mean+max havuzlama denemesinin temelini
-oluşturur.
-
-\textbf{Sınırlı eylem uzayı.} PPO çoğunlukla Gauss politika dağılımıyla uygulanır~\cite{schulman2017ppo};
-fakat robot hızları fiziksel sınırlarla kısıtlandığında Gauss örneğini kırpmak log-olasılık ve yürütülen eylem
-arasında uyumsuzluk yaratabilir. Beta dağılımı sınırlı aralığı doğal olarak modellediği için sürekli kontrol
-problemlerinde önerilmiştir~\cite{chou2017beta}. Bu nedenle Beta eylem dağılımı ayrıca test edilir.
-
-% =====================================================================
-\section{Problem Tanımı ve Deney Ortamı}
-% =====================================================================
-Robot, unicycle kinematiğine sahip TurtleBot3 Waffle benzeri bir ajandır. Eylem
-$a_t=(v_t,\omega_t)$ doğrusal ve açısal hızdan oluşur. Robotun amacı, dairesel yerleşimdeki başlangıç
-noktasından karşı hedefe ulaşmaktır. Başarılı bölüm, hedefe çarpışmadan ulaşmakla; başarısız bölüm ise
-çarpışma veya zaman aşımıyla tanımlanır.
-
-Ana değerlendirme senaryosu \texttt{paper\_challenging}'dir: $15\times15$~m arena, 1.0~m/s robot hızı,
-ORCA yayalar ve görünmez robot varsayımı. Yoğunluklar $N=\{5,10,15,20\}$ olarak değerlendirilir.
-\texttt{paper\_standard} senaryosu ayrıca 5 yaya ve daha dar zaman bütçesiyle kontrol edilir.
-
-\begin{table}[t]
-\centering
-\caption{Deney rejiminin ana bileşenleri. Amaç, referans makalenin değerlendirme koşullarına yakın ama
-kodda açıkça denetlenebilir bir kurulum oluşturmaktır.}
-\label{tab:setup}
-\small
-\begin{tabular}{@{}ll@{}}
-\toprule
-\textbf{Bileşen} & \textbf{Kullanılan ayar} \\
-\midrule
-Robot modeli & Unicycle, $v_{\max}=1.0$~m/s \\
-Yaya modeli & ORCA, robot yayalar için görünmez \\
-Ana senaryo & \texttt{paper\_challenging}, $15\times15$~m \\
-Yoğunluklar & $N=5,10,15,20$ \\
-Başarı ölçütü & Hedefe çarpışmadan ulaşma \\
-Hata tipleri & Çarpışma, zaman aşımı \\
-Ana checkpoint & v34 Beta politika; v38'de runtime kalkan \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-Ödül fonksiyonu hedefe yaklaşmayı, hedefe ulaşmayı, çarpışmadan kaçınmayı ve sosyal baskıyı birleştirir.
-Sosyal baskı $\isp$, robotun yayalara olan yakınlığından türetilir. Ancak bu çalışmada asıl vurgu yeni bir
-ödül tasarlamak değildir; ödül hattı sabit tutulurken mimari, eğitim dağılımı ve güvenlik katmanı etkileri
-ölçülür.
+Bu yaklaşım, öğrenen ajanın eylemini izleyip yalnızca güvenlik ihlali öngörüldüğünde düzelten
+``shielded reinforcement learning'' fikrine yakındır~\cite{alshiekh2018shielding}. Bununla birlikte V38,
+zamansal mantıkla sentezlenmiş biçimsel bir kalkan veya ileri-değişmezlik garantisi veren bir
+control-barrier-function denetleyicisi değildir~\cite{ames2017cbf}. Buradaki amaç, kilitli v34 politikasının
+iyi sosyal rota kararını korurken, kısa ufukta açıkça riskli görünen sürekli eylemi pratik bir aday eylem
+aramasıyla değiştirmektir.
 
 % =====================================================================
 \section{Yöntem}
 % =====================================================================
-\subsection{SNCP--PPO politikası}
-Politika üç bilgi kanalını işler. Birincisi robotun kendi durumu ve hedef yönüdür. İkincisi robot--yaya
-kenarlarıdır: her yaya için göreli konum, göreli hız ve ilgili geometrik bilgiler kodlanır. Üçüncüsü
-insan--insan ilişkileridir: yayaların birbirlerine göre hareketleri kalabalık yapısını temsil eder.
-
-Bu kanallar NCP/LTC tabanlı kodlayıcılarla zamansal olarak işlenir. Değişken sayıdaki yaya için elde edilen
-özellikler önce dikkat havuzlamasına, daha sonra mean+max havuzlamaya verilir. Mean dalı kalabalığın genel
-eğilimini, max dalı ise en kritik yerel tehdidi taşır. Şekil~\ref{fig:arch} mimari akışı özetler.
-
-\begin{figure}[t]
+\begin{figure}[H]
 \centering
-\includegraphics[width=\columnwidth]{figures/ieee_arch.png}
-\caption{SNCP--PPO mimari özeti. Robot, robot--yaya ve insan--insan bilgileri ayrı kodlanır; değişken
-sayıdaki yaya dikkat ve mean+max havuzlama ile sabit boyutlu eylem temsiline dönüştürülür.}
-\label{fig:arch}
+\includegraphics[width=\columnwidth]{fig_v38_pipeline.png}
+\caption{V38 yürütme hattı. Kilitli v34 Beta politikası sosyal rota üretir; V38 kalkanı yalnızca kısa-horizon
+çarpışma riski görüldüğünde eylemi değiştirir. Checkpoint ağırlıkları değişmez.}
+\label{fig:pipeline}
 \end{figure}
 
-\subsection{Eğitim ve checkpoint seçimi}
-PPO eğitimi vektörize ortamda yapılır. Başlıca hiperparametreler sabit tutulur; versiyonlar arasındaki
-farklar mümkün olduğunca tek bir mühendislik kararına indirgenir. Erken sürümlerde eğitim-içi holdout
-sonucuna göre en iyi checkpoint seçmek kullanışlı görünse de bu ölçüt yanlıdır: çok sayıda gürültülü
-değerlendirmenin maksimumu gerçek ortalamayı olduğundan yüksek gösterir. Bu nedenle nihai kıyaslarda
-checkpoint'in eğitim-içi en iyi skoru değil, bağımsız çok-tohumlu değerlendirme sonucu raporlanır.
+\subsection{Kilitli v34 Beta politikası}
+Taban politika, SNCP--PPO mimarisinin v34 Beta checkpoint'idir. Bu checkpoint, robotun kalabalıkta doğrudan
+beeline yerine kavisli ve sosyal açıdan makul rotalar üretmesini sağlar. V34'ün bu çalışmadaki rolü sabittir:
+ağırlıkları değiştirilmez, yeniden eğitim yapılmaz ve V38'in öğrenilmiş bileşeni olarak korunur. Böylece
+V38'in etkisi, politika mimarisindeki yeni bir öğrenmeden değil, yalnız yürütme zamanı çarpışma-risk
+filtresinden gelir.
 
-\subsection{V38 eylem kalkanı}
-v38, yeni bir öğrenilmiş politika değildir. Kilitli v34 Beta politikasının deterministik eylemi alınır ve
-kısa bir sabit-hız öngörüsüyle robot--yaya mesafeleri tahmin edilir. Eğer seçilen eylem öngörü ufku içinde
-çarpışma riski yaratmıyorsa aynen yürütülür. Risk varsa, sınırlı bir aday eylem kümesi taranır ve hedefe
-ilerleme ile minimum güvenli mesafe arasında daha güvenli olan aday seçilir. Bu işlem yalnızca yürütme
-zamanında uygulanır; checkpoint ağırlıkları değişmez.
+\subsection{V38 action shield}
+V38, deterministik politika eylemini bir çarpışma-risk filtresinden geçirir. İş akışı Şekil~\ref{fig:pipeline}'da
+özetlenmiştir. Politika önce $(v,\omega)$ eylemini önerir. Kalkan, robot ve yayalar için 6 adımlık sabit-hız
+öngörüsü yapar. Öngörü ufku içinde robot--yaya mesafesi çarpışma sınırını ihlal etmiyorsa eylem aynen
+yürütülür. Risk varsa, sınırlı bir aday eylem kümesi taranır ve çarpışma riskini azaltırken hedefe ilerlemeyi
+mümkün olduğunca koruyan alternatif seçilir.
 
-Bu tasarımın amacı PPO politikasını baştan eğitmek değil, teşhis edilen hata kipini doğrudan hedeflemektir:
-yüksek yoğunlukta başarısızlıkların büyük kısmı zaman aşımı değil çarpışmadır. Dolayısıyla kalkan,
-``öğrenilmiş sosyal rota''yı koruyup yalnızca çarpışma sınırındaki eylemi düzeltir.
+Kalkanın kritik özelliği seçici olmasıdır: her adımda politika çıktısını yeniden planlamaz, yalnızca kısa
+ufukta risk görüldüğünde devreye girer. Bir politika eylemi $a_\pi=(v_\pi,\omega_\pi)$ için önce robotun
+mevcut pozu, yayaların mevcut konumları ve yayaların anlık hızları alınır. Robotun $a_\pi$ ile, yayaların ise
+sabit hızla ilerlediği varsayılarak $H=6$ adımlık bir mikro-rollout yapılır. Bu rollout'taki en küçük
+robot--yaya mesafesi $d_{\min}$ ise kalkan açıklığı
+\begin{equation}
+\rho(a_\pi)=d_{\min}-d_{\mathrm{coll}}
+\end{equation}
+olarak hesaplanır. Burada $d_{\mathrm{coll}}$ ortamın robot--yaya çarpışma eşiğidir. Eğer
+$\rho(a_\pi)\geq m$ ise, yani öngörülen açıklık risk marjı $m$'den büyükse, $a_\pi$ değiştirilmez.
+
+Riskli durumda kalkan küçük bir eylem kafesi dener. Doğrusal hız kafesi durma, çeyrek/yarım/üç-çeyrek/tam
+hız ve politika hızının yarım/üç-çeyrek/tam değerlerini içerir. Açısal hız kafesi ise maksimum sağ/sol dönüş,
+yarım maksimum sağ/sol dönüş, düz gitme ve politikanın önerdiği dönüşten oluşur. Her aday aynı mikro-rollout
+ile değerlendirilir ve aşağıdaki maliyetin en küçüğünü veren eylem seçilir:
+\begin{equation}
+\begin{split}
+J(a) ={}& \lambda_c \mathbf{1}[\rho(a)<0]
++ \lambda_s \max(0,m-\rho(a))^2
+- \lambda_p \Delta d_g(a) \\
+&+ \lambda_d \|a-a_\pi\|_{\mathrm{norm}}
++ \lambda_v \left(1-\frac{v}{v_{\max}}\right).
+\end{split}
+\end{equation}
+Bu maliyet çarpışmayı baskın şekilde cezalandırır, öngörülen açıklık azaldığında ek ceza verir, hedefe
+ilerlemeyi ödüllendirir ve v34 politikasının önerdiği eylemden gereksiz sapmayı sınırlar. Bu nedenle V38,
+tam bir yörünge planlayıcı veya yeni bir öğrenilmiş politika değildir; v34'ün sosyal rota kararını koruyan,
+yalnızca çarpışma sınırındaki eylemleri düzelten yürütme zamanı risk filtresidir.
+
+Bu çalışmada kullanılan sayısal değerler $H=6$, $m=0.0$, $\lambda_c=1000.0$, $\lambda_s=20.0$,
+$\lambda_p=1.0$, $\lambda_d=0.05$ ve $\lambda_v=0.02$'dir. Katsayılar ayrı bir öğrenme veya geniş ızgara
+aramasıyla ayarlanmamıştır; çarpışmayı baskın öncelik yapan, sonra açıklık, hedef ilerlemesi,
+politika eyleminden sapma ve gereksiz yavaşlama arasında sezgisel bir sıralama kuran sabit mühendislik
+parametreleri olarak seçilmiştir.
+
+Bu tasarım bilinçli olarak küçüktür. Eğitim gerektirmez, v34'ün başarılı sosyal rota davranışını bozmaz ve
+yalnızca teşhis edilen hata kipine, yani çarpışma sınırındaki yanlış eylemlere müdahale eder.
 
 % =====================================================================
-\section{Değerlendirme Protokolü}
+\section{Deney Protokolü}
 % =====================================================================
-Ana ablasyon protokolünde her yoğunluk için 5 bağımsız değerlendirme tohumu ve tohum başına 50 bölüm
-kullanılır; toplam 250 bölüm/yoğunluk elde edilir. Başarı ve çarpışma oranları Wilson güven aralığıyla
-raporlanır; sürüm farkları iki-oranlı $z$ testiyle kontrol edilir; dört yoğunluk için Bonferroni eşiği
-$\alpha=0.0125$ olarak alınır. Bu tercih, derin pekiştirmeli öğrenmede tek-tohum ve küçük örneklem
-sonuçlarının kırılganlığına ilişkin uyarılarla uyumludur~\cite{henderson2018matters,agarwal2021precipice}.
+Ana değerlendirme \texttt{paper\_challenging} senaryosunda yapılır: $15\times15$~m arena, ORCA yayalar,
+görünmez robot ve 1.0~m/s robot/yaya hız rejimi. Yoğunluklar $N=\{5,10,15,20\}$ olarak seçilir.
 
-V38 da \emph{aynı} çok-tohumlu protokolde (5 tohum $\times$ 50 bölüm $=250$/yoğunluk) değerlendirilir; böylece
-önceki ablasyonlarla doğrudan kıyaslanabilir. Ek olarak, ham v34 politikası (C0) ve kalkanlı politika (C1)
-aynı checkpoint, aynı tohumlar ve aynı bölümler üzerinde karşılaştırılır; bu eşleşme kalkanın etkisini izole
-eder: model ve eğitim-tohumu sabit, tek değişen yürütme-zamanı kalkanıdır.
-
-\begin{figure}[t]
+\begin{table}[H]
 \centering
-\includegraphics[width=0.92\columnwidth]{figures/ieee_seedbias.png}
-\caption{Checkpoint seçimi yanlılığı. Tek tek değerlendirme blokları arasında yüksek varyans vardır; yalnızca
-en iyi bloğa bakmak gerçek ortalamayı yukarı çeker. Bu nedenle sürüm kararları çok-tohumlu havuzlanmış
-sonuçlarla verilir.}
-\label{fig:seedbias}
-\end{figure}
+\caption{V38 final deney kurulumu.}
+\label{tab:setup}
+\small
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.30\columnwidth}>{\raggedright\arraybackslash}p{0.64\columnwidth}@{}}
+\toprule
+\textbf{Bileşen} & \textbf{Ayar} \\
+\midrule
+Senaryo & \texttt{paper\_challenging} \\
+Yoğunluklar & 5, 10, 15, 20 yaya \\
+Değerlendirme & 5 eval tohumu $\times$ 50 bölüm = 250 bölüm/yoğunluk \\
+Taban politika & v34 Beta checkpoint \\
+Karşılaştırma & Ham v34 vs v38 shield \\
+Robot/yaya hızı & 1.0~m/s \\
+Kalkan ufku & 6 adım sabit-hız öngörüsü \\
+Kalkan marjı & 0.0 \\
+İstatistik & Wilson GA; havuzlanmış $z$ + Bonferroni $\alpha=0.0125$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Kalkan etkisini izole etmek için ham v34 ve V38 aynı checkpoint, aynı değerlendirme tohumları ve aynı bölüm
+bankası üzerinde
+karşılaştırılır. Bu düzende tek fark, yürütme zamanı action shield katmanıdır. Başarı, çarpışma ve zaman aşımı
+bölüm yüzdesi olarak raporlanır; başarılı bölümlerin ortalama adım sayısı, sosyal rotanın korunup korunmadığını
+yorumlamak için ayrıca verilir. Buradaki beş tohum, yeni PPO eğitim tohumları değil, kilitli tek v34 checkpoint
+üzerinde kullanılan değerlendirme tohumlarıdır. Ana tablolardaki 250 bölüm/yoğunluk sonuçları
+\texttt{paper\_data/v34\_multiseed\_result.json} ve \texttt{paper\_data/v38\_multiseed\_result.json}
+dosyalarından gelir; \texttt{eval\_v38} artefaktları ise ek rapor ve yörünge görselleri için korunur.
+
+Kalkan maliyeti ayrıca yerel CPU üzerinde, yalnız \texttt{shield\_action} çekirdeğini kapsayan 1000 çağrılık bir
+ön mikro-ölçümle kontrol edildi. Aynı $H=6$ ayarıyla medyan süre N=5/10/15/20 için yaklaşık
+0.108/0.108/0.113/0.123~ms, 95. yüzdelik süre ise 5.6/5.8/5.9/6.6~ms ölçüldü. Bu ön ölçüm, kalkan çekirdeğinin
+10~Hz kontrol döngüsündeki 100~ms karar bütçesinin altında kalabileceğini gösterir; ancak politika çıkarımı,
+algılama, ROS iletişimi ve gerçek robot entegrasyonu bu süreye dahil değildir.
+
+RL sonuçlarının tohum ve bölüm seçimine duyarlı olabildiği bilindiğinden~\cite{henderson2018matters,agarwal2021precipice},
+p-değerleri Wilson güven aralıklarıyla birlikte ve destekleyici karar ölçütü olarak yorumlanır. Aynı bölüm
+bankası kullanıldığı için ideal ek analiz, bölüm-düzeyi eşleşmiş sonuçlardan McNemar testi veya paired bootstrap
+güven aralığı üretmektir; mevcut artefaktlarda karar, havuzlanmış iki-oranlı $z$ testi ve Bonferroni düzeltmesi
+ile raporlanmıştır.
 
 % =====================================================================
 \section{Sonuçlar}
 % =====================================================================
-\subsection{Açığı kapatan üç karar: ön-MLP, yoğunluk müfredatı ve mean+max}
-Naif paper-rejim tabanı v26, zaman aşımını büyük ölçüde çözer; fakat başarısızlık çarpışmaya dönüşür ve
-özellikle yüksek yoğunlukta başarı düşük kalır. Üç karar bu tabloyu belirgin biçimde iyileştirir
-(Tablo~\ref{tab:fidelity}, Şekil~\ref{fig:fidelity}). Ön-MLP gömmesi ham kenar özelliklerini NCP'ye daha
-kullanılabilir bir temsille verir. Yoğunluk müfredatı testte görülen $N=15$ ve $N=20$ durumlarını eğitim
-dağılımına dahil eder. Mean+max havuzlama ise kalabalığın ortalama eğilimi ile en tehlikeli ajan bilgisini
-ayrı yollarla taşır.
+\subsection{Kalkan etkisi: ham v34'ten V38'e}
+Tablo~\ref{tab:shield_success}, Tablo~\ref{tab:shield_collision} ve Şekil~\ref{fig:effect}, V38 kalkanının
+doğrudan etkisini gösterir. Havuzlanmış iki-oranlı $z$ testine göre kalkan N=10, N=15 ve N=20'de başarıyı
+Bonferroni eşiğinde artırır; çarpışmayı dört yoğunlukta da aynı eşikte azaltır.
+N=20'de başarı \%86.0'dan \%98.8'e çıkar, çarpışma \%13.2'den \%0.4'e iner. Zaman aşımı \%0.8 ve altında
+kaldığı için iyileşme robotu durdurarak değil, çarpışma sınırındaki eylemleri düzelterek gelir.
 
-\begin{table}[t]
+\begin{table}[H]
 \centering
-\caption{Temel ilerleme çizgisi: başarı / çarpışma (\%), 250 bölüm/yoğunluk. v30, öğrenilmiş politika
-tarafındaki ana şampiyon yapılandırmadır.}
-\label{tab:fidelity}
+\caption{V38 action shield başarı etkisi. Değerler yüzde; kalın p-değerleri havuzlanmış $z$ testinde
+Bonferroni eşiğini geçer ($p<0.0125$).}
+\label{tab:shield_success}
 \small
-\begin{tabular}{@{}lcccc@{}}
+\begin{tabular}{@{}lrrrr@{}}
 \toprule
-\textbf{N} & \textbf{v26} & \textbf{v27} & \textbf{v28} & \textbf{v30} \\
+\textbf{N} & \textbf{v34} & \textbf{V38} & \textbf{$\Delta$} & \textbf{p} \\
 \midrule
-5  & 74.8 / 25.2 & 93.6 / 6.8  & 94.4 / 5.6  & \textbf{97.2 / 2.8} \\
-10 & 61.6 / 38.4 & 80.0 / 20.0 & 87.6 / 12.4 & \textbf{89.6 / 10.4} \\
-15 & 53.2 / 46.8 & 70.8 / 29.6 & 79.2 / 20.8 & \textbf{85.6 / 14.4} \\
-20 & 43.6 / 56.4 & 59.6 / 40.4 & 73.2 / 27.2 & \textbf{79.2 / 20.8} \\
+5  & 96.8 & 99.6 & +2.8  & 0.019 \\
+10 & 92.8 & 99.6 & +6.8  & \textbf{$<10^{-3}$} \\
+15 & 91.2 & 99.6 & +8.4  & \textbf{$<10^{-3}$} \\
+20 & 86.0 & 98.8 & +12.8 & \textbf{$<10^{-3}$} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\begin{figure*}[t]
+\begin{table}[H]
 \centering
-\includegraphics[width=0.92\textwidth]{figures/ieee_fidelity.png}
-\caption{v26'dan v30'a ilerleme. Ön-MLP, yoğunluk müfredatı ve mean+max havuzlama birlikte başarıyı artırır,
-çarpışmayı azaltır ve makale hedefiyle aradaki farkı büyük ölçüde kapatır.}
-\label{fig:fidelity}
-\end{figure*}
-
-v30'un ayrıntılı metrikleri Tablo~\ref{tab:champ}'te verilmiştir. Zaman aşımı tüm yoğunluklarda \%0'dır;
-bu önemli bir ayrımdır. Başarısızlık artık hedefe yetişememekten değil, yüksek yoğunlukta çarpışmadan
-kaynaklanır. Başarılı bölüm süresi yoğunlukla artar; bu da politikanın düz çizgiyle gitmediğini, kalabalığa
-göre rota değiştirdiğini gösterir.
-
-\begin{table}[t]
-\centering
-\caption{v30 ayrıntılı metrikleri. Başarı Wilson \%95 güven aralığıyla, nav süresi başarılı bölüm adımı
-$\times 0.25$~s olarak raporlanır.}
-\label{tab:champ}
+\caption{V38 action shield çarpışma ve zaman aşımı etkisi. Çarpışma için negatif $\Delta$ daha iyidir; kalın
+p-değerleri havuzlanmış $z$ testinde Bonferroni eşiğini geçer ($p<0.0125$).}
+\label{tab:shield_collision}
 \small
-\begin{tabular}{@{}cccccc@{}}
+\begin{tabular}{@{}lrrrrr@{}}
 \toprule
-\textbf{N} & \textbf{Başarı [\%95 GA]} & \textbf{Çarp.} & \textbf{Z.aş.} & \textbf{Nav (s)} & \textbf{$\isp\!\times\!10^{-3}$} \\
+\textbf{N} & \textbf{v34 ç.} & \textbf{V38 ç.} & \textbf{$\Delta$ ç.} & \textbf{p} & \textbf{V38 z.aş.} \\
 \midrule
-5  & 97.2 [94.3, 98.6] & 2.8  & 0.0 & 10.25 & 10.8 \\
-10 & 89.6 [85.2, 92.8] & 10.4 & 0.0 & 11.20 & 10.0 \\
-15 & 85.6 [80.7, 89.4] & 14.4 & 0.0 & 11.81 & 8.2 \\
-20 & 79.2 [73.7, 83.8] & 20.8 & 0.0 & 12.68 & 7.5 \\
+5  & 2.8  & 0.0 & -2.8  & \textbf{0.008}       & 0.4 \\
+10 & 7.2  & 0.0 & -7.2  & \textbf{$<10^{-3}$} & 0.4 \\
+15 & 8.8  & 0.4 & -8.4  & \textbf{$<10^{-3}$} & 0.0 \\
+20 & 13.2 & 0.4 & -12.8 & \textbf{$<10^{-3}$} & 0.8 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\begin{figure*}[t]
+\begin{figure}[H]
 \centering
-\includegraphics[width=0.86\textwidth]{figures/ieee_traj.png}
-\caption{v30 yörüngeleri. Robot yoğunluk arttıkça daha uzun ve kavisli rotalar üretir; bu, kalabalığın içinden
-düz çizgiyle geçme davranışı değil, gerçek kaçınma davranışıdır.}
+\includegraphics[width=\columnwidth]{fig_v38_shield_effect.png}
+\caption{V38 kalkanının izole etkisi. Sol: ham v34'e göre başarı artışı. Sağ: çarpışma azalması. Etki yüksek
+yoğunlukta daha belirgindir.}
+\label{fig:effect}
+\end{figure}
+
+\subsection{Final V38 sistem metrikleri}
+Final V38 sisteminin ana metrikleri Tablo~\ref{tab:final} ve Şekil~\ref{fig:sweep}'te verilmiştir. Başarı
+N=5/10/15/20 için \%99.6/\%99.6/\%99.6/\%98.8'dir. N=20'de bu değer, bu çalışmadaki
+\texttt{paper\_challenging} yeniden-uygulamasında referans makaledeki yaklaşık \%94 challenging düzeyiyle aynı
+bandın üst tarafına gelir. Çarpışma oranı tüm yoğunluklarda \%0.4 veya altındadır. Başarılı bölüm adımı
+47.2'den 60.1'e doğru yoğunlukla artar; bu, robotun kalabalığa göre rotasını hâlâ uzattığını ve kalkanın
+sistemi düz-çizgi ya da durma davranışına zorlamadığını gösterir.
+
+\begin{table}[H]
+\centering
+\caption{Final V38 kalkanlı sistem metrikleri. 5 tohum $\times$ 50 bölüm = 250 bölüm/yoğunluk.}
+\label{tab:final}
+\scriptsize
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+\textbf{N} & \textbf{Başarı [\%95 GA]} & \textbf{Çarpışma} & \textbf{Z.aşımı} &
+\textbf{Ort. başarı adımı} & \textbf{Ort. $\mathbf{\isp}$} \\
+\midrule
+5  & 99.6 [97.8, 99.9] & 0.0 & 0.4 & 47.2 & 0.0074 \\
+10 & 99.6 [97.8, 99.9] & 0.0 & 0.4 & 52.1 & 0.0059 \\
+15 & 99.6 [97.8, 99.9] & 0.4 & 0.0 & 57.6 & 0.0047 \\
+20 & 98.8 [96.5, 99.6] & 0.4 & 0.8 & 60.1 & 0.0038 \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+\subsection{Bağlam: v30, v34 ve V38}
+Şekil~\ref{fig:context}, V38'i önceki iki önemli noktayla karşılaştırır. v30, öğrenilmiş politika hattındaki
+ana ara şampiyondu; v34, aynı hattın Beta eylem dağılımlı güçlü checkpoint'idir. V38 bu iki checkpoint'ten
+farklı olarak yeni öğrenilmiş ağırlıklar değil, v34 üzerinde çalışan runtime filtredir. Bu nedenle V38'in
+yüksek-N kazancı, daha büyük modelden değil, hata kipine doğrudan müdahaleden gelir.
+
+N=20 başarı \%86.0'dan \%98.8'e çıkar, çarpışma \%13.2'den \%0.4'e iner. Final değerlendirme havuzunda V38
+tüm yoğunluklarda \%98.8 ve üzeri başarı verir. Sonuç olarak V38, yeni eğitim gerektirmeyen güçlü ve pratik
+bir final sistem adayıdır.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\columnwidth]{fig_v38_context.png}
+\caption{Bağlam karşılaştırması. V30 ve v34 saf öğrenilmiş politikalardır; V38, v34 üzerine eklenen
+çarpışma-risk filtresidir. Runtime kalkan bu değerlendirmede yüksek yoğunlukta çarpışma kipini güçlü biçimde
+azaltır.}
+\label{fig:context}
+\end{figure}
+
+\subsection{Yörünge örnekleri}
+Şekil~\ref{fig:traj}, N=10 ve N=20 için V38 kalkanlı yörüngeleri gösterir. Robot kalabalığın içinden düz bir
+çizgiyle geçmek yerine, yoğunluk arttıkça daha uzun ve kavisli rotalar üretir. Bu niteliksel sonuç,
+Tablo~\ref{tab:final}'deki ortalama başarılı adım sayısıyla uyumludur.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\columnwidth]{fig_v38_trajectories.png}
+\caption{V38 kalkanlı yörünge örnekleri. Kalkan, sosyal rotayı korur; yalnızca çarpışma sınırındaki eylemleri
+değiştirir.}
 \label{fig:traj}
-\end{figure*}
-
-\subsection{Kapatmayan kararlar: kapasite, çok-başlı dikkat ve algı maskesi}
-v30'dan sonra altı kaldıraç test edilir. Daha büyük NCP düğümü, daha geniş çıktı temsili, çok-başlı dikkat,
-daha geniş yoğunluk müfredatı, dikkat sayı-ölçeklemesi, Beta eylem dağılımı ve 6~m algı maskesi ayrı ayrı
-incelenir. Özet sonuç şudur: ham kapasite eklemek veya algıyı makalenin 6~m bütçesine indirmek kalan açığı
-kapatmaz. Beta dağılımı doğru yönde görünür; fakat tek eğitim tohumu ve Bonferroni düzeltmesi altında kesin
-geçiş sağlamaz.
-
-\begin{table*}[t]
-\centering
-\caption{v30 sonrası kaldıraçlar: başarı / çarpışma (\%), 250 bölüm/yoğunluk. \emph{v34 Beta} yön-doğru
-sonuç üretir; diğerleri yüksek yoğunlukta v30'u güvenilir biçimde geçemez.}
-\label{tab:ablations}
-\small
-\begin{tabular}{@{}lcccccc@{}}
-\toprule
-\textbf{N} & \textbf{v30} & \textbf{v31 kapasite} & \textbf{v32 $N{\to}25$} & \textbf{v33 MHA} & \textbf{v34 Beta} & \textbf{v35 6m} \\
-\midrule
-5  & \textbf{97.2 / 2.8}  & 92.8 / 7.2  & 97.6 / 2.8  & 95.6 / 4.8  & \emph{96.8 / 2.8}  & 96.8 / 2.8 \\
-10 & \textbf{89.6 / 10.4} & 84.0 / 16.0 & 94.0 / 6.0  & 84.4 / 15.6 & \emph{92.8 / 7.2}  & 89.6 / 10.0 \\
-15 & \textbf{85.6 / 14.4} & 78.8 / 21.2 & 87.6 / 13.2 & 76.0 / 24.0 & \emph{91.2 / 8.8}  & 79.2 / 20.8 \\
-20 & \textbf{79.2 / 20.8} & 72.8 / 27.6 & 78.8 / 21.2 & 70.8 / 29.2 & \emph{86.0 / 13.2} & 69.6 / 30.4 \\
-\bottomrule
-\end{tabular}
-\end{table*}
-
-\begin{figure*}[t]
-\centering
-\includegraphics[width=0.92\textwidth]{figures/ieee_ablations.png}
-\caption{v30 sonrası kaldıraçların yüksek yoğunluk farkları. Beta doğru yöndedir; kapasite, çok-başlı dikkat
-ve 6~m maskeleme yüksek yoğunlukta beklenen kazanımı vermez.}
-\label{fig:ablations}
-\end{figure*}
-
-Özellikle 6~m algı maskesi önemlidir. Referans makale challenging senaryoda 6~m algı bütçesi bildirir; bu
-nedenle uzak yayaları maskelemek ilk bakışta sadakat düzeltmesi gibi görünür. Ancak sonuç ters yöndedir:
-N=20 başarı \%79.2'den \%69.6'ya düşer, çarpışma \%20.8'den \%30.4'e çıkar. Bu, kalan farkın ``robot çok
-fazla görüyor'' olmasından değil, gördüğü bilgiyi nasıl kullandığından kaynaklandığını düşündürür.
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=\columnwidth]{figures/ieee_sense.png}
-\caption{Algı maskesi sonucu. 6~m havuz maskesi yüksek yoğunlukta başarıyı düşürür ve çarpışmayı artırır;
-uzak yayalar gürültü değil, erken kaçınma için yararlı sinyaldir.}
-\label{fig:sense}
 \end{figure}
 
-\subsection{V36 ve V37: birleşik ve dikkat-temelli denemelerin olumsuz sonucu}
-v36, önceki tek tek denenen kaldıraçların çoğunu aynı koşuda birleştirir: geniş NCP, çok-başlı dikkat,
-dikkat sayı-ölçeklemesi, $N=10$--25 müfredatı, Beta dağılımı ve 6~m algı maskesi. Bu bilinçli olarak
-çok-değişkenli bir denemedir. Sonuç negatiftir: birleşik sistem v34'ün yüksek yoğunluk kazanımını koruyamaz;
-N=15 ve N=20'de başarı düşer, çarpışma artar. Yorum açıktır: tek başına umut veren bazı kararları birleştirmek
-otomatik olarak daha iyi politika üretmez; özellikle 6~m maske ve aşırı kapasite, Beta'nın faydasını
-seyreltmiştir.
-
-v37 ise v34 checkpoint'i üzerinde insan--insan niyet geometrisi ve gated attention fikrini hızlı paired probe
-ile dener. Kapı etkinleşmez ve C1, C0'ı geçemez; düşük yoğunlukta gerileme ve yüksek yoğunlukta çarpışma artışı
-görülür. Bu nedenle v37 full training'e taşınmaz. Bu iki olumsuz sonuç, v38'e geçişin gerekçesidir: yeni bir
-temsil eklemek yerine, doğrudan kalan çarpışma kipine müdahale etmek daha düşük risklidir.
-
-\subsection{V38: runtime eylem kalkanı}
-V38, ham v34 deterministik politikasıyla \emph{aynı} dürüst protokolde karşılaştırılır: aynı checkpoint,
-aynı 5 tohum ve aynı bölümler; tek fark yürütme-zamanı kalkanıdır (Tablo~\ref{tab:v38}). Bu eşleşme, gözlenen
-farkı doğrudan kalkana atfetmeyi sağlar. Kalkan N=10/15/20'de hem başarıyı yükseltir hem çarpışmayı düşürür
-ve bu kazanç çarpışmada dört yoğunlukta da Bonferroni-anlamlıdır; yüksek yoğunlukta etki büyüktür
-(N=20 başarı $+$12.8~pp, çarpışma $-$12.8~pp, Cohen $h\approx0.55$). Zaman aşımı \%0.8 ve altında kaldığı için
-iyileşme robotu durdurmaktan değil, çarpışma sınırındaki eylemi düzeltmekten gelir.
-
-\begin{table*}[t]
+\begin{figure}[H]
 \centering
-\caption{v38 eylem kalkanı, ham v34 politikasına karşı (kalkan izolasyonu: aynı checkpoint/tohum/bölüm).
-Dürüst çok-tohumlu protokol, 250 bölüm/yoğunluk; başarı Wilson \%95 GA ile. $\Delta$ sütunlarında iki-oranlı
-$z$ testi $p$-değeri; Bonferroni-anlamlı ($p<0.0125$) değerler \textbf{kalın}.}
-\label{tab:v38}
-\small
-\begin{tabular}{@{}lccccccc@{}}
-\toprule
-\textbf{N} & \textbf{v34 baş.} & \textbf{v38 başarı [\%95 GA]} & \textbf{$\Delta$ baş. ($p$)} &
-\textbf{v34 çarp.} & \textbf{v38 çarp.} & \textbf{$\Delta$ çarp. ($p$)} & \textbf{v38 z.aş.} \\
-\midrule
-5  & 96.8 & 99.6 [97.8, 99.9] & $+$2.8 ($0.019$)             & 2.8  & 0.0 & \textbf{$-$2.8 ($0.008$)}     & 0.4 \\
-10 & 92.8 & 99.6 [97.8, 99.9] & \textbf{$+$6.8 ($10^{-4}$)}  & 7.2  & 0.0 & \textbf{$-$7.2 ($<10^{-4}$)}  & 0.4 \\
-15 & 91.2 & 99.6 [97.8, 99.9] & \textbf{$+$8.4 ($<10^{-4}$)} & 8.8  & 0.4 & \textbf{$-$8.4 ($<10^{-4}$)}  & 0.0 \\
-20 & 86.0 & 98.8 [96.5, 99.6] & \textbf{$+$12.8 ($<10^{-4}$)} & 13.2 & 0.4 & \textbf{$-$12.8 ($<10^{-4}$)} & 0.8 \\
-\bottomrule
-\end{tabular}
-\end{table*}
-
-Aynı kalkan, önceki şampiyon v30'a göre daha da büyük bir etki verir (N=20 başarı \%79.2$\to$\%98.8,
-$+$19.6~pp; çarpışma \%20.8$\to$\%0.4, $-$20.4~pp). Final sistemde başarı N=5/10/15/20 için
-\%99.6/\%99.6/\%99.6/\%98.8, çarpışma \%0.0/\%0.0/\%0.4/\%0.4, zaman aşımı \%0.8 ve altıdır. Başarılı bölüm
-uzunluğu yoğunlukla artar (47.2/52.1/57.6/60.1 adım); yani kalkan sosyal rotayı bozmadan yalnızca çarpışma
-sınırındaki eylemi düzeltir.
-
-\begin{figure*}[t]
-\centering
-\includegraphics[width=0.66\textwidth]{figures/ieee_v38.png}
-\caption{v38 eylem kalkanı (dürüst 5-tohum havuz, 250 bölüm/yoğunluk). Sol: başarı; sağ: çarpışma. Kalkan,
-v34 ve v30 politikalarının yüksek-yoğunluk çarpışmasını pratikte sıfıra indirirken başarıyı yükseltir;
-hata çubukları $\pm$1.96\,SE.}
-\label{fig:v38}
-\end{figure*}
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=0.49\columnwidth]{figures/v38_traj_n10.png}\hfill
-\includegraphics[width=0.49\columnwidth]{figures/v38_traj_n20.png}
-\caption{v38 kalkanlı yörüngeler (N=10 ve N=20, \texttt{paper\_challenging}). Kalkan sosyal rotayı korur,
-yalnızca çarpışma sınırındaki eylemleri düzeltir.}
-\label{fig:v38traj}
+\includegraphics[width=\columnwidth]{fig_v38_final_sweep.png}
+\caption{Final V38 yoğunluk sweep'i. Başarı yüksek kalır, çarpışma ve zaman aşımı düşük kalır. Başarılı yol
+uzunluğu yoğunlukla arttığı için sosyal rota davranışı korunur.}
+\label{fig:sweep}
 \end{figure}
-
-\subsection{Standard senaryo}
-Challenging rejimde ana hata çarpışmayken, standard senaryoda hata karakteri farklıdır. v30 standard
-senaryoda \%85.6 başarı, \%3.6 çarpışma ve \%10.8 zaman aşımı verir. Bu, standard senaryodaki açığın daha çok
-zaman bütçesi ve checkpoint seçimiyle ilişkili olduğunu gösterir. Dolayısıyla tek bir çözüm tüm senaryoları
-aynı biçimde düzeltmez: challenging için güvenlik filtresi etkiliyken, standard için zaman-bütçesi duyarlı
-seçim veya ince ayar gerekir.
 
 % =====================================================================
 \section{Tartışma}
 % =====================================================================
-Sonuçlar üç ders verir. Birincisi, reprodüksiyon problemi tek bir hiperparametre hatası değildir. Makalede
-belirtilmeyen küçük tasarım kararları, özellikle temsilin NCP'ye nasıl verildiği ve eğitim yoğunluğunun hangi
-aralığı kapsadığı, sonucu büyük ölçüde değiştirir.
+V38 sonucunun doğru okunması gerekir. Bu sistem yeni bir PPO checkpoint'i değildir. Öğrenilmiş bileşen v34
+Beta politikasıdır; V38 bu politikanın yürütme zamanı eylemini çarpışma riski açısından denetler. Bu nedenle sonuç,
+``daha iyi eğitilmiş saf SNCP'' değil, ``öğrenilmiş sosyal rota + analitik risk filtresi'' olarak
+değerlendirilmelidir.
 
-İkincisi, daha büyük model her zaman daha iyi değildir. v31 ve v33 kapasiteyi artırır; fakat yüksek yoğunlukta
-v30'u geçemez. Bu, sorunun parametre sayısından çok temsilin doğru özetlenmesiyle ilgili olduğunu gösterir.
-Mean+max havuzlama küçük ama etkili bir değişikliktir; çünkü yalnızca ortalamayı değil, en riskli yerel
-durumu da taşır.
+Bu ayrım pratik açıdan avantajdır. Yeni bir tam PPO eğitimi saatler sürebilir ve daha önce öğrenilmiş güçlü
+davranışı bozabilir. V38 ise mevcut checkpoint'i korur ve yalnızca riskli eylem sınırında müdahale eder.
+Eşleştirilmiş sonuçlarda düşük yoğunlukta anlamlı gerileme olmaması, yüksek yoğunlukta ise çarpışmanın
+neredeyse sıfırlanması bu tasarım tercihini destekler.
 
-Üçüncüsü, v38 saf öğrenilmiş politika tartışmasını sistem güvenliği tartışmasından ayırır. Saf SNCP--PPO
-politikası hâlâ yoğun kalabalıkta çarpışma sınırında hata yapabilir. Fakat bu hata, kısa-horizon analitik bir
-kontrol filtresiyle büyük ölçüde düzeltilebilir. Bu sonuç pratik robotik açısından önemlidir: güvenlik
-katmanı, eğitilmiş politikanın yerine geçmez; onu daha güvenli bir yürütme sistemine dönüştürür.
-
-Bu ayrım raporun ana yorumudur. Eğer amaç makaledeki mimariyi saf biçimde yeniden üretmekse, v30/v34 çizgisi
-ve olumsuz ablasyonlar önemlidir. Eğer amaç çalışan bir sistem çıkarmaksa, v38 kalkanı daha doğrudan ve daha
-güvenilir bir mühendislik çözümüdür.
-
-% =====================================================================
-\section{Sınırlamalar}
-% =====================================================================
-Bu çalışmanın bazı sınırları vardır. İlk olarak, eğitimler çoğunlukla tek eğitim tohumu ile yapılmıştır;
-değerlendirme çok-tohumlu olsa da eğitim varyansı tam ölçülmemiştir. İkinci olarak, v38 eylem kalkanı
-yayaların kısa-horizon sabit-hız hareketini varsayar ve değerlendirmede ortamın gerçek yaya konum/hızlarını
-kullanır; gerçek bir robotta bu bilgiler algılama gürültüsüyle gelir. Üçüncü olarak, v38 yeni bir checkpoint değildir; dolayısıyla saf SNCP mimarisinin öğrenme
-başarısı olarak değil, runtime güvenlik katmanı olarak raporlanır. Dördüncü olarak, ORCA parametreleri ve
-makaledeki bazı eğitim ayrıntıları tam verilmediği için reprodüksiyon açığının bir kısmı kaçınılmazdır.
-Son olarak, standard senaryodaki zaman aşımı açığı v38 ile doğrudan hedeflenmemiştir.
+V38'in sınırlamaları da açıktır. Kalkan kısa-horizon sabit-hız öngörüsüne dayanır; gerçek robotta bu öngörü
+algılama gürültüsü ve gecikmeden etkilenebilir. ORCA yayaları bir sonraki adımda yön veya hız değiştirebildiği
+için sabit-hız varsayımı bazen yanlış pozitif uyarı üretebilir ve gereksiz küçük rota düzeltmelerine neden
+olabilir; daha nadir olarak ani yaya manevrası yanlış negatif risk de oluşturabilir. Kısa ufuk bu etkiyi
+sınırlar, fakat gerçek zamanlı robot uygulamasında bu varsayım ayrıca test edilmelidir. Ayrıca V38 özellikle
+challenging rejimdeki çarpışma kipini hedefler; standard senaryoda görülen zaman bütçesi kaynaklı hatalar ayrı
+seçim veya ince ayar gerektirebilir. Sonuçlar tek kilitli v34 eğitim checkpoint'i üzerinde ve beş değerlendirme
+tohumunda gösterilmiştir; farklı PPO eğitim tohumlarına genelleme ayrıca test edilmemiştir. Aynı bölüm bankası
+üzerindeki eşleştirme için McNemar veya paired bootstrap gibi bölüm-düzeyi analizler gelecek çalışmada daha
+uygun bir tamamlayıcı istatistik sağlayabilir. Gelecek iş olarak kalkan davranışı politikaya distile edilebilir
+veya PPO eğitimi sırasında risk filtresi ile birlikte öğrenme denenebilir.
 
 % =====================================================================
 \section{Sonuç}
 % =====================================================================
-Bu rapor, SNCP--PPO tabanlı kalabalık navigasyon problemini baştan sona deneysel olarak ayrıştırır. Önce
-referans makalenin rejimine yakın bir uygulama kurulur; sonra best-checkpoint yanlılığı dışarıda bırakılarak
-çok-tohumlu kıyas protokolü uygulanır. Sonuçlar, açığı kapatan kararların ön-MLP, yoğunluk müfredatı ve
-mean+max havuzlama gibi temsil/eğitim dağılımı kararları olduğunu; ham kapasite, çok-başlı dikkat ve 6~m
-algı maskesinin yüksek yoğunlukta beklenen faydayı sağlamadığını gösterir. Beta eylem dağılımı umut verici
-ama tek-tohumda kesinleşmeyen bir iyileşmedir. Son sistem adımı olan v38 eylem kalkanı ise öğrenilmiş
-politikayı değiştirmeden çarpışma-kaynaklı kalan hatayı büyük ölçüde azaltır ve aynı çok-tohumlu protokolde
-N=20 challenging başarısını v30'un \%79.2'sinden \%98.8'e çıkarır (çarpışma \%20.8$\to$\%0.4, Bonferroni-anlamlı).
-Böylece çalışma hem reprodüksiyon açısından hangi kararların
-kritik olduğunu, hem de pratik sistem açısından küçük bir güvenlik filtresinin neden etkili olduğunu gösterir.
+Bu makale, SNCP--PPO projesinin mevcut nihai durumunu V38 final sistemi olarak yeniden çerçeveler. Kilitli
+v34 Beta politikası sosyal rota üreticisi olarak korunur; V38 action shield ise kısa-horizon çarpışma riskini
+yürütme zamanında azaltır. Bu sonuç, öğrenilmiş sosyal rota üretimi ile analitik risk filtresinin birlikte
+kullanılmasının, ek PPO eğitimi gerektirmeden pratik bir final sistem adayı verebildiğini gösterir.
 
-% =====================================================================
 \bibliographystyle{IEEEtran}
 \bibliography{refs}
 
