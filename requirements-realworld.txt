@@ -1,0 +1,6 @@
+# Optional dependencies for the Raspberry Pi camera perception prototype.
+# Install Picamera2/OpenCV from apt on Raspberry Pi OS:
+#   sudo apt install python3-picamera2 python3-opencv
+
+ultralytics
+supervision
