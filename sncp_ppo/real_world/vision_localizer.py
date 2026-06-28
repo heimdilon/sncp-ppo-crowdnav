@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterable, Sequence
 
@@ -219,6 +219,69 @@ class VisionLocalizer:
             velocity = self.velocity_alpha * raw_velocity + (1.0 - self.velocity_alpha) * prev_vel
         self._previous[track_id] = (timestamp_s, position.astype(float), velocity.astype(float))
         return velocity
+
+
+class ImageSpaceTracker:
+    """Tiny nearest-neighbour tracker for dependency-light prototypes.
+
+    This is not a replacement for ByteTrack. It only keeps IDs stable enough for
+    one- or two-person tape-measure tests when the detector backend does not
+    provide track IDs.
+    """
+
+    def __init__(self, *, max_distance_px: float = 80.0, max_missed: int = 5) -> None:
+        if max_distance_px <= 0.0:
+            raise ValueError("max_distance_px must be positive")
+        if max_missed < 0:
+            raise ValueError("max_missed must be non-negative")
+        self.max_distance_px = float(max_distance_px)
+        self.max_missed = int(max_missed)
+        self._next_id = 1
+        self._tracks: dict[int, tuple[np.ndarray, int]] = {}
+
+    def update(self, detections: Iterable[Detection2D]) -> list[Detection2D]:
+        detections = list(detections)
+        centers = [np.asarray(bbox_bottom_center(det.xyxy), dtype=float) for det in detections]
+        unmatched_tracks = set(self._tracks)
+        assignments: dict[int, int] = {}
+
+        for det_idx in sorted(range(len(detections)), key=lambda i: detections[i].confidence, reverse=True):
+            det = detections[det_idx]
+            if det.track_id is not None:
+                assignments[det_idx] = int(det.track_id)
+                unmatched_tracks.discard(int(det.track_id))
+                continue
+
+            best_id = None
+            best_dist = self.max_distance_px
+            for track_id in unmatched_tracks:
+                prev_center, _ = self._tracks[track_id]
+                dist = float(np.linalg.norm(centers[det_idx] - prev_center))
+                if dist <= best_dist:
+                    best_id = track_id
+                    best_dist = dist
+            if best_id is not None:
+                assignments[det_idx] = best_id
+                unmatched_tracks.remove(best_id)
+
+        updated_tracks: dict[int, tuple[np.ndarray, int]] = {}
+        tracked_detections: list[Detection2D] = []
+        for det_idx, det in enumerate(detections):
+            track_id = assignments.get(det_idx)
+            if track_id is None:
+                track_id = self._next_id
+                self._next_id += 1
+            updated_tracks[track_id] = (centers[det_idx], 0)
+            tracked_detections.append(replace(det, track_id=track_id))
+
+        for track_id in unmatched_tracks:
+            center, missed = self._tracks[track_id]
+            missed += 1
+            if missed <= self.max_missed:
+                updated_tracks[track_id] = (center, missed)
+
+        self._tracks = updated_tracks
+        return tracked_detections
 
 
 def bbox_bottom_center(xyxy: Sequence[float]) -> tuple[float, float]:

@@ -56,7 +56,7 @@ python3 -m venv --system-site-packages .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements-realworld.txt
-python scripts/run_picam2_human_localizer.py --calibration camera_plane.json --model yolo11n.pt
+python scripts/run_picam2_human_localizer.py --backend hog --calibration camera_plane.json
 ```
 
 Use `--system-site-packages` deliberately: Raspberry Pi OS installs Picamera2
@@ -66,6 +66,12 @@ Python environment.
 
 The script prints robot-local tracks. Use `--csv-out tracks.csv` during testing
 so static and walking trials can be measured.
+
+The default `hog` backend uses OpenCV's built-in people detector. It is weaker
+than YOLO, but it avoids PyTorch and is enough to validate camera calibration,
+ground-plane projection, tracking IDs, and velocity estimates. Use
+`--backend ultralytics --model yolo11n.pt` only on a Python/OS setup where
+`torch`, `ultralytics`, and `supervision` are already installable.
 
 ## Validation Gate
 

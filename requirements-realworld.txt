@@ -1,6 +1,7 @@
-# Optional dependencies for the Raspberry Pi camera perception prototype.
+# Optional Python dependencies for the Raspberry Pi camera perception prototype.
 # Install Picamera2/OpenCV from apt on Raspberry Pi OS:
-#   sudo apt install python3-picamera2 python3-opencv
-
-ultralytics
-supervision
+#   sudo apt install python3-picamera2 python3-opencv python3-venv
+#
+# The default detector backend is OpenCV HOG and needs no PyPI package.
+# Do not list ultralytics here: it requires torch, and torch wheels are often
+# unavailable on Raspberry Pi Python/OS combinations.

@@ -3,6 +3,7 @@
 from sncp_ppo.real_world.vision_localizer import (
     Detection2D,
     HumanTrack,
+    ImageSpaceTracker,
     PlanarCalibration,
     VisionLocalizer,
 )
@@ -10,6 +11,7 @@ from sncp_ppo.real_world.vision_localizer import (
 __all__ = [
     "Detection2D",
     "HumanTrack",
+    "ImageSpaceTracker",
     "PlanarCalibration",
     "VisionLocalizer",
 ]

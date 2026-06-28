@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from sncp_ppo.real_world import Detection2D, PlanarCalibration, VisionLocalizer
+from sncp_ppo.real_world import Detection2D, ImageSpaceTracker, PlanarCalibration, VisionLocalizer
 from sncp_ppo.real_world.vision_localizer import bbox_bottom_center
 
 
@@ -72,3 +72,21 @@ def test_vision_localizer_filters_low_confidence_and_sorts_by_distance():
 def test_invalid_detection_box_is_rejected():
     with pytest.raises(ValueError, match="x2 > x1"):
         bbox_bottom_center((10, 20, 10, 30))
+
+
+def test_image_space_tracker_keeps_nearby_detection_id_stable():
+    tracker = ImageSpaceTracker(max_distance_px=30)
+
+    first = tracker.update([Detection2D((10, 10, 30, 50), 1.0)])
+    second = tracker.update([Detection2D((12, 10, 32, 50), 1.0)])
+
+    assert first[0].track_id == second[0].track_id
+
+
+def test_image_space_tracker_assigns_new_id_for_far_detection():
+    tracker = ImageSpaceTracker(max_distance_px=10)
+
+    first = tracker.update([Detection2D((10, 10, 30, 50), 1.0)])
+    second = tracker.update([Detection2D((200, 10, 220, 50), 1.0)])
+
+    assert first[0].track_id != second[0].track_id
