@@ -51,10 +51,18 @@ On the Raspberry Pi:
 ```bash
 git clone https://github.com/heimdilon/sncp-ppo-crowdnav.git
 cd sncp-ppo-crowdnav
-sudo apt install python3-picamera2 python3-opencv
-pip install -r requirements-realworld.txt
+sudo apt install python3-picamera2 python3-opencv python3-venv
+python3 -m venv --system-site-packages .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements-realworld.txt
 python scripts/run_picam2_human_localizer.py --calibration camera_plane.json --model yolo11n.pt
 ```
+
+Use `--system-site-packages` deliberately: Raspberry Pi OS installs Picamera2
+and OpenCV through apt, and a plain virtual environment would not see those
+packages. Avoid `pip --break-system-packages`; it can damage the OS-managed
+Python environment.
 
 The script prints robot-local tracks. Use `--csv-out tracks.csv` during testing
 so static and walking trials can be measured.
