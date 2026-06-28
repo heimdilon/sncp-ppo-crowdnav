@@ -5,3 +5,5 @@
 # The default detector backend is OpenCV HOG and needs no PyPI package.
 # Do not list ultralytics here: it requires torch, and torch wheels are often
 # unavailable on Raspberry Pi Python/OS combinations.
+
+pyserial
