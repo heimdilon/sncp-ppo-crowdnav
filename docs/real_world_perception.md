@@ -67,11 +67,31 @@ Python environment.
 The script prints robot-local tracks. Use `--csv-out tracks.csv` during testing
 so static and walking trials can be measured.
 
-The default `hog` backend uses OpenCV's built-in people detector. It is weaker
-than YOLO, but it avoids PyTorch and is enough to validate camera calibration,
-ground-plane projection, tracking IDs, and velocity estimates. Use
-`--backend ultralytics --model yolo11n.pt` only on a Python/OS setup where
-`torch`, `ultralytics`, and `supervision` are already installable.
+The default `hog` backend uses OpenCV's built-in people detector. It is weak,
+but it avoids PyTorch and is enough to validate camera calibration,
+ground-plane projection, tracking IDs, and velocity estimates.
+
+For a better zero-hardware-cost detector, use OpenCV DNN with MobileNet-SSD.
+This still uses only CPU + apt OpenCV:
+
+```bash
+mkdir -p models
+wget -O models/MobileNetSSD_deploy.prototxt \
+  https://raw.githubusercontent.com/chuanqi305/MobileNet-SSD/master/deploy.prototxt
+wget -O models/MobileNetSSD_deploy.caffemodel \
+  https://raw.githubusercontent.com/chuanqi305/MobileNet-SSD/master/mobilenet_iter_73000.caffemodel
+
+python scripts/run_picam2_human_localizer.py \
+  --backend opencv-ssd \
+  --dnn-prototxt models/MobileNetSSD_deploy.prototxt \
+  --dnn-model models/MobileNetSSD_deploy.caffemodel \
+  --calibration camera_plane.json \
+  --stream-port 8080
+```
+
+Use `--backend ultralytics --model yolo11n.pt` only on a Python/OS setup where
+`torch`, `ultralytics`, and `supervision` are already installable. On the
+current Raspberry Pi setup, avoid that path.
 
 For first debugging runs, save annotated frames and print image-space boxes:
 

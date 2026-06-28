@@ -69,6 +69,17 @@ def _create_hog_detector():
     return detector
 
 
+def _create_opencv_ssd_detector(args):
+    import cv2
+
+    if not args.dnn_prototxt or not args.dnn_model:
+        raise ValueError("--backend opencv-ssd requires --dnn-prototxt and --dnn-model")
+    net = cv2.dnn.readNetFromCaffe(args.dnn_prototxt, args.dnn_model)
+    net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+    net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+    return net
+
+
 def _detections_from_hog(frame, detector, hit_threshold: float) -> list[Detection2D]:
     rects, weights = detector.detectMultiScale(
         frame,
@@ -83,6 +94,38 @@ def _detections_from_hog(frame, detector, hit_threshold: float) -> list[Detectio
         weight = 1.0 if len(weights) <= i else float(weights[i])
         confidence = min(max(weight, 0.0), 1.0)
         detections.append(Detection2D((x, y, x + w, y + h), confidence=max(confidence, 0.01)))
+    return detections
+
+
+def _detections_from_opencv_ssd(frame, net, args) -> list[Detection2D]:
+    import cv2
+
+    height, width = frame.shape[:2]
+    size = (args.dnn_input_size, args.dnn_input_size)
+    blob = cv2.dnn.blobFromImage(
+        frame,
+        scalefactor=args.dnn_scale,
+        size=size,
+        mean=(args.dnn_mean, args.dnn_mean, args.dnn_mean),
+        swapRB=False,
+        crop=False,
+    )
+    net.setInput(blob)
+    output = net.forward()
+    detections: list[Detection2D] = []
+    for i in range(output.shape[2]):
+        confidence = float(output[0, 0, i, 2])
+        class_id = int(output[0, 0, i, 1])
+        if confidence < args.confidence or class_id != args.dnn_person_class:
+            continue
+        box = output[0, 0, i, 3:7] * [width, height, width, height]
+        x1, y1, x2, y2 = map(float, box)
+        x1 = max(0.0, min(x1, float(width - 1)))
+        y1 = max(0.0, min(y1, float(height - 1)))
+        x2 = max(0.0, min(x2, float(width - 1)))
+        y2 = max(0.0, min(y2, float(height - 1)))
+        if x2 > x1 and y2 > y1:
+            detections.append(Detection2D((x1, y1, x2, y2), confidence=confidence))
     return detections
 
 
@@ -235,9 +278,9 @@ def main() -> None:
     parser.add_argument("--calibration", required=True, help="Calibration JSON from calibrate_camera_plane.py")
     parser.add_argument(
         "--backend",
-        choices=["hog", "ultralytics"],
+        choices=["hog", "opencv-ssd", "ultralytics"],
         default="hog",
-        help="Detector backend. 'hog' uses only apt OpenCV; 'ultralytics' requires torch.",
+        help="Detector backend. 'hog' and 'opencv-ssd' use apt OpenCV; 'ultralytics' requires torch.",
     )
     parser.add_argument("--model", default="yolo11n.pt", help="Ultralytics model path/name")
     parser.add_argument("--source", choices=["picam2", "webcam", "video"], default="picam2")
@@ -249,6 +292,12 @@ def main() -> None:
     parser.add_argument("--confidence", type=float, default=0.35)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--hog-hit-threshold", type=float, default=0.0)
+    parser.add_argument("--dnn-prototxt", help="OpenCV SSD Caffe prototxt path")
+    parser.add_argument("--dnn-model", help="OpenCV SSD Caffe model path")
+    parser.add_argument("--dnn-person-class", type=int, default=15, help="VOC MobileNet-SSD person class id")
+    parser.add_argument("--dnn-input-size", type=int, default=300)
+    parser.add_argument("--dnn-scale", type=float, default=0.007843)
+    parser.add_argument("--dnn-mean", type=float, default=127.5)
     parser.add_argument("--min-box-height", type=float, default=80.0)
     parser.add_argument("--min-box-width", type=float, default=30.0)
     parser.add_argument("--min-ground-x", type=float, default=0.0)
@@ -269,6 +318,10 @@ def main() -> None:
     if args.backend == "ultralytics":
         model, tracker = _load_ultralytics_backend(args.model)
         image_tracker = None
+    elif args.backend == "opencv-ssd":
+        model = _create_opencv_ssd_detector(args)
+        tracker = None
+        image_tracker = ImageSpaceTracker()
     else:
         model = _create_hog_detector()
         tracker = None
@@ -308,6 +361,14 @@ def main() -> None:
                     verbose=False,
                 )[0]
                 detections = _detections_from_ultralytics(result, tracker, args.confidence)
+            elif args.backend == "opencv-ssd":
+                detections = _detections_from_opencv_ssd(frame, model, args)
+                detections = _filter_detections_by_box(
+                    detections,
+                    min_box_height=args.min_box_height,
+                    min_box_width=args.min_box_width,
+                )
+                detections = image_tracker.update(detections)
             else:
                 detections = _detections_from_hog(frame, model, args.hog_hit_threshold)
                 detections = _filter_detections_by_box(
