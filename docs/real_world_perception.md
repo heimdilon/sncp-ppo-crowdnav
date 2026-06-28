@@ -73,6 +73,35 @@ ground-plane projection, tracking IDs, and velocity estimates. Use
 `--backend ultralytics --model yolo11n.pt` only on a Python/OS setup where
 `torch`, `ultralytics`, and `supervision` are already installable.
 
+For first debugging runs, save annotated frames and print image-space boxes:
+
+```bash
+python scripts/run_picam2_human_localizer.py \
+  --backend hog \
+  --calibration camera_plane.json \
+  --csv-out tracks.csv \
+  --annotate-dir debug_frames \
+  --annotate-every 10 \
+  --print-pixels
+```
+
+If the detector repeatedly locks onto the robot body, floor texture, or a nearby
+object, tighten the filters, for example:
+
+```bash
+python scripts/run_picam2_human_localizer.py \
+  --backend hog \
+  --calibration camera_plane.json \
+  --min-ground-x 0.8 \
+  --max-ground-x 3.5 \
+  --max-abs-ground-y 1.8 \
+  --min-box-height 120
+```
+
+Do not judge the `x,y` values from `docs/camera_points.example.json`; that file
+is only a format example. Measure real floor marker coordinates and make a
+project-specific `camera_points.json`.
+
 ## Validation Gate
 
 Before connecting this to `/cmd_vel`, run a tape-measure validation:

@@ -84,6 +84,52 @@ def _detections_from_hog(frame, detector, hit_threshold: float) -> list[Detectio
     return detections
 
 
+def _filter_detections_by_box(
+    detections: list[Detection2D],
+    *,
+    min_box_height: float,
+    min_box_width: float,
+) -> list[Detection2D]:
+    filtered: list[Detection2D] = []
+    for det in detections:
+        x1, y1, x2, y2 = det.xyxy
+        if (y2 - y1) < min_box_height:
+            continue
+        if (x2 - x1) < min_box_width:
+            continue
+        filtered.append(det)
+    return filtered
+
+
+def _filter_tracks_by_ground(tracks, args):
+    filtered = []
+    for track in tracks:
+        if track.x < args.min_ground_x:
+            continue
+        if track.x > args.max_ground_x:
+            continue
+        if abs(track.y) > args.max_abs_ground_y:
+            continue
+        filtered.append(track)
+    return filtered
+
+
+def _save_annotation(frame, detections: list[Detection2D], tracks, annotate_dir: Path, frame_index: int) -> None:
+    import cv2
+
+    annotated = frame.copy()
+    for det in detections:
+        x1, y1, x2, y2 = map(int, det.xyxy)
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 200, 255), 2)
+        label = f"id={det.track_id if det.track_id is not None else '?'} conf={det.confidence:.2f}"
+        cv2.putText(annotated, label, (x1, max(15, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 200, 255), 1)
+    for track in tracks:
+        text = f"id={track.track_id} x={track.x:+.2f} y={track.y:+.2f}"
+        cv2.putText(annotated, text, (12, 24 + 18 * int(track.track_id % 20)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (80, 255, 80), 1)
+    annotate_dir.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(annotate_dir / f"frame_{frame_index:06d}.jpg"), annotated)
+
+
 def _load_ultralytics_backend(model_path: str):
     try:
         from ultralytics import YOLO
@@ -116,6 +162,15 @@ def main() -> None:
     parser.add_argument("--confidence", type=float, default=0.35)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--hog-hit-threshold", type=float, default=0.0)
+    parser.add_argument("--min-box-height", type=float, default=80.0)
+    parser.add_argument("--min-box-width", type=float, default=30.0)
+    parser.add_argument("--min-ground-x", type=float, default=0.0)
+    parser.add_argument("--max-ground-x", type=float, default=4.0)
+    parser.add_argument("--max-abs-ground-y", type=float, default=2.5)
+    parser.add_argument("--max-frames", type=int, default=0, help="Stop after N frames; 0 means run forever")
+    parser.add_argument("--annotate-dir", help="Optional directory for annotated debug frames")
+    parser.add_argument("--annotate-every", type=int, default=20)
+    parser.add_argument("--print-pixels", action="store_true", help="Also print image-space boxes for detector debugging")
     parser.add_argument("--csv-out", help="Optional CSV log path")
     args = parser.parse_args()
 
@@ -141,10 +196,12 @@ def main() -> None:
         writer.writeheader()
 
     try:
+        frame_index = 0
         while True:
             frame = read_frame()
             if frame is None:
                 break
+            frame_index += 1
             timestamp = time.monotonic()
             if args.backend == "ultralytics":
                 result = model.predict(
@@ -158,13 +215,29 @@ def main() -> None:
                 detections = _detections_from_ultralytics(result, tracker, args.confidence)
             else:
                 detections = _detections_from_hog(frame, model, args.hog_hit_threshold)
+                detections = _filter_detections_by_box(
+                    detections,
+                    min_box_height=args.min_box_height,
+                    min_box_width=args.min_box_width,
+                )
                 detections = image_tracker.update(detections)
             tracks = localizer.update(detections, timestamp)
+            tracks = _filter_tracks_by_ground(tracks, args)
             line = " | ".join(
                 f"id={t.track_id} x={t.x:+.2f} y={t.y:+.2f} vx={t.vx:+.2f} vy={t.vy:+.2f}"
                 for t in tracks
             )
             print(line or "no humans")
+            if args.print_pixels and detections:
+                print(
+                    "pixels "
+                    + " | ".join(
+                        f"id={d.track_id} xyxy=({d.xyxy[0]:.0f},{d.xyxy[1]:.0f},{d.xyxy[2]:.0f},{d.xyxy[3]:.0f})"
+                        for d in detections
+                    )
+                )
+            if args.annotate_dir and args.annotate_every > 0 and frame_index % args.annotate_every == 0:
+                _save_annotation(frame, detections, tracks, Path(args.annotate_dir), frame_index)
             if writer is not None:
                 for t in tracks:
                     writer.writerow(
@@ -179,6 +252,10 @@ def main() -> None:
                         }
                     )
                 csv_file.flush()
+            if args.max_frames > 0 and frame_index >= args.max_frames:
+                break
+    except KeyboardInterrupt:
+        print("\nStopped.")
     finally:
         if csv_file is not None:
             csv_file.close()
