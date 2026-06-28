@@ -85,6 +85,29 @@ python scripts/run_picam2_human_localizer.py \
   --print-pixels
 ```
 
+For live viewing on the Raspberry Pi desktop or VNC:
+
+```bash
+python scripts/run_picam2_human_localizer.py \
+  --backend hog \
+  --calibration camera_plane.json \
+  --show
+```
+
+Press `q` or `Esc` in the preview window to stop.
+
+For SSH/headless use, stream the annotated view to a browser:
+
+```bash
+python scripts/run_picam2_human_localizer.py \
+  --backend hog \
+  --calibration camera_plane.json \
+  --stream-port 8080
+```
+
+Then open `http://<raspberry-pi-ip>:8080/` from another device on the same
+network.
+
 If the detector repeatedly locks onto the robot body, floor texture, or a nearby
 object, tighten the filters, for example:
 

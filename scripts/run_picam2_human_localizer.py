@@ -10,7 +10,9 @@ from __future__ import annotations
 import argparse
 import csv
 import sys
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -114,7 +116,7 @@ def _filter_tracks_by_ground(tracks, args):
     return filtered
 
 
-def _save_annotation(frame, detections: list[Detection2D], tracks, annotate_dir: Path, frame_index: int) -> None:
+def _annotate_frame(frame, detections: list[Detection2D], tracks):
     import cv2
 
     annotated = frame.copy()
@@ -126,8 +128,93 @@ def _save_annotation(frame, detections: list[Detection2D], tracks, annotate_dir:
     for track in tracks:
         text = f"id={track.track_id} x={track.x:+.2f} y={track.y:+.2f}"
         cv2.putText(annotated, text, (12, 24 + 18 * int(track.track_id % 20)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (80, 255, 80), 1)
+    if not tracks:
+        cv2.putText(annotated, "no humans", (12, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (80, 80, 255), 2)
+    return annotated
+
+
+def _save_annotation(frame, detections: list[Detection2D], tracks, annotate_dir: Path, frame_index: int) -> None:
+    import cv2
+
+    annotated = _annotate_frame(frame, detections, tracks)
     annotate_dir.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(annotate_dir / f"frame_{frame_index:06d}.jpg"), annotated)
+
+
+class LiveMJPEGServer:
+    """Tiny annotated-frame MJPEG server for SSH/headless Raspberry Pi use."""
+
+    def __init__(self, *, host: str, port: int, jpeg_quality: int = 80) -> None:
+        self.host = host
+        self.port = int(port)
+        self.jpeg_quality = int(jpeg_quality)
+        self._lock = threading.Lock()
+        self._frame: bytes | None = None
+
+        owner = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler API
+                if self.path not in ("/", "/stream.mjpg"):
+                    self.send_error(404)
+                    return
+                if self.path == "/":
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(
+                        b"<html><body style='margin:0;background:#111;'>"
+                        b"<img src='/stream.mjpg' style='width:100%;height:auto;'/>"
+                        b"</body></html>"
+                    )
+                    return
+
+                self.send_response(200)
+                self.send_header("Age", "0")
+                self.send_header("Cache-Control", "no-cache, private")
+                self.send_header("Pragma", "no-cache")
+                self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+                self.end_headers()
+                try:
+                    while True:
+                        frame = owner.latest_frame()
+                        if frame is None:
+                            time.sleep(0.05)
+                            continue
+                        self.wfile.write(b"--frame\r\n")
+                        self.wfile.write(b"Content-Type: image/jpeg\r\n")
+                        self.wfile.write(f"Content-Length: {len(frame)}\r\n\r\n".encode("ascii"))
+                        self.wfile.write(frame)
+                        self.wfile.write(b"\r\n")
+                        time.sleep(0.05)
+                except (BrokenPipeError, ConnectionResetError):
+                    return
+
+            def log_message(self, format, *args):  # noqa: A002 - inherited name
+                return
+
+        self._server = ThreadingHTTPServer((self.host, self.port), Handler)
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+
+    def update(self, frame) -> None:
+        import cv2
+
+        ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality])
+        if not ok:
+            return
+        with self._lock:
+            self._frame = encoded.tobytes()
+
+    def latest_frame(self) -> bytes | None:
+        with self._lock:
+            return self._frame
 
 
 def _load_ultralytics_backend(model_path: str):
@@ -170,6 +257,9 @@ def main() -> None:
     parser.add_argument("--max-frames", type=int, default=0, help="Stop after N frames; 0 means run forever")
     parser.add_argument("--annotate-dir", help="Optional directory for annotated debug frames")
     parser.add_argument("--annotate-every", type=int, default=20)
+    parser.add_argument("--show", action="store_true", help="Show a live annotated OpenCV window")
+    parser.add_argument("--stream-host", default="0.0.0.0")
+    parser.add_argument("--stream-port", type=int, default=0, help="Serve live annotated MJPEG on this port; 0 disables")
     parser.add_argument("--print-pixels", action="store_true", help="Also print image-space boxes for detector debugging")
     parser.add_argument("--csv-out", help="Optional CSV log path")
     args = parser.parse_args()
@@ -184,6 +274,11 @@ def main() -> None:
         tracker = None
         image_tracker = ImageSpaceTracker()
     source, read_frame = _open_frame_source(args)
+    streamer = None
+    if args.stream_port > 0:
+        streamer = LiveMJPEGServer(host=args.stream_host, port=args.stream_port)
+        streamer.start()
+        print(f"Live stream: http://{args.stream_host}:{args.stream_port}/")
 
     csv_file = None
     writer = None
@@ -236,8 +331,18 @@ def main() -> None:
                         for d in detections
                     )
                 )
+            needs_annotation = bool(args.show or streamer or args.annotate_dir)
+            annotated = _annotate_frame(frame, detections, tracks) if needs_annotation else None
             if args.annotate_dir and args.annotate_every > 0 and frame_index % args.annotate_every == 0:
                 _save_annotation(frame, detections, tracks, Path(args.annotate_dir), frame_index)
+            if streamer is not None and annotated is not None:
+                streamer.update(annotated)
+            if args.show and annotated is not None:
+                import cv2
+
+                cv2.imshow("SNCP human localizer", annotated)
+                if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
+                    break
             if writer is not None:
                 for t in tracks:
                     writer.writerow(
@@ -263,6 +368,12 @@ def main() -> None:
             source.stop()
         else:
             source.release()
+        if streamer is not None:
+            streamer.stop()
+        if args.show:
+            import cv2
+
+            cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
