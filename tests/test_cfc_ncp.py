@@ -202,6 +202,17 @@ def test_init_checkpoint_rejects_explicit_cell_mismatch(tmp_path):
         build_or_load_policy(args, env, torch.device("cpu"))
 
 
+def test_init_checkpoint_rejects_cfc_file_when_cli_defaults_to_ltc(tmp_path):
+    checkpoint = tmp_path / "cfc.pt"
+    torch.save(SNCPPolicy(robot_vpref=1.0, robot_wmax=1.8, cell_type="cfc").state_dict(),
+               checkpoint)
+    args = build_parser().parse_args(["--init_checkpoint", str(checkpoint)])
+    assert args.temporal_cell == "ltc"
+    env = SimpleNamespace(robot_vpref=1.0, robot_wmax=1.8)
+    with pytest.raises(ValueError, match="CfC"):
+        build_or_load_policy(args, env, torch.device("cpu"))
+
+
 def test_init_checkpoint_autodetects_cfc(tmp_path):
     src = SNCPPolicy(robot_vpref=1.0, robot_wmax=1.8, cell_type="cfc", risk_head=True)
     checkpoint = tmp_path / "cfc.pt"

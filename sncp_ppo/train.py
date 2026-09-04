@@ -16,6 +16,7 @@ from sncp_ppo.models import (
     build_policy_for_checkpoint,
     checkpoint_has_risk_head,
     detect_cell_type,
+    load_policy_state_dict,
     _is_risk_head_key,
 )
 from sncp_ppo.ppo import PPOAgent
@@ -412,7 +413,7 @@ def build_or_load_policy(args, env, device):
                 )
             print(f"Initialized policy from {init_ckpt} and attached a fresh v39 risk head")
         else:
-            policy.load_state_dict(state)
+            load_policy_state_dict(policy, state)
             print(f"Initialized policy from {init_ckpt} (IL warm-start)")
         return policy
     if upgrade_ckpt:
@@ -519,6 +520,7 @@ def train(args):
         lagrange_lambda_init=getattr(args, 'lagrange_lambda_init', 0.0),
         lagrange_lambda_max=getattr(args, 'lagrange_lambda_max', 10.0),
     )
+    print(f"NCP cell_type={getattr(policy, 'cell_type', 'ltc')} (ltc=ODE default, cfc=closed-form side branch)")
     if getattr(policy, 'risk_head', False):
         print(
             f"v39 risk head ON (not a runtime shield) | lagrange={bool(getattr(args, 'lagrange_ppo', False))} "

@@ -46,10 +46,12 @@ transplant LTC weights into CfC cells (or the reverse). Helpers:
 - `detect_cell_type(state_dict) -> 'ltc'|'cfc'`
 - `assert_cell_type_compatible(policy, state_dict)`
 - `load_policy_state_dict(policy, state_dict)` — compatibility check, then load
-- `build_policy_for_checkpoint` auto-detects `cell_type` (eval / viz / waffle)
+- `build_policy_for_checkpoint` **auto-detects** `cell_type` (eval / viz / waffle)
 
-`--init_checkpoint` with an explicit `--temporal_cell` that does not match the
-file is a hard error.
+`--init_checkpoint` does **not** override `--temporal_cell`. The CLI default is
+`ltc`, so a CfC file plus a bare `--init_checkpoint` is a hard error — pass
+`--temporal_cell cfc` to fine-tune a CfC checkpoint. Eval scripts that call
+`build_policy_for_checkpoint` still auto-detect and need no flag.
 
 ## 3. How to train
 
