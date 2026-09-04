@@ -96,6 +96,7 @@ class SNCPPolicy(nn.Module):
         self.risk_head = bool(risk_head)
         self.last_p_coll = None
         self.last_min_clearance = None
+        self.last_cost_value = None
         if self.risk_head:
             self.register_buffer('_risk_head', torch.tensor(1.0))
             self.risk_mlp = nn.Sequential(
@@ -103,6 +104,9 @@ class SNCPPolicy(nn.Module):
                 nn.ReLU(),
                 nn.Linear(32, 2),
             )
+            # Discounted cost-to-go critic. Separate from p_coll (short-horizon
+            # collision classifier used only in L_risk BCE).
+            self.cost_critic = nn.Linear(256, 1)
 
         # 1. Robot Node Encoder (MLP)
         # Input robot_node: [dg_local_x, dg_local_y, v_linear, dist_to_goal, vpref, radius, w_angular] (dim 7)
@@ -275,6 +279,7 @@ class SNCPPolicy(nn.Module):
             for m in risk_linears[:-1]:
                 _orthogonal_linear(m, gain=sqrt2)
             _orthogonal_linear(risk_linears[-1], gain=1.0)
+            _orthogonal_linear(self.cost_critic, gain=1.0)
 
     def init_hidden(self, batch_size, num_humans, device):
         h_temp = torch.zeros(batch_size, self.temporal_wiring.units, device=device)
@@ -508,9 +513,11 @@ class SNCPPolicy(nn.Module):
             risk_raw = self.risk_mlp(sf)
             self.last_p_coll = torch.sigmoid(risk_raw[:, 0:1])
             self.last_min_clearance = F.softplus(risk_raw[:, 1:2])
+            self.last_cost_value = self.cost_critic(sf)
         else:
             self.last_p_coll = None
             self.last_min_clearance = None
+            self.last_cost_value = None
         
         if h_spat.dim() == 3:
             h_spat_new = h_spat_new_flat.reshape(batch_size, num_humans, -1)
@@ -533,7 +540,11 @@ def checkpoint_has_risk_head(state_dict):
 
 
 def _is_risk_head_key(key):
-    return key == '_risk_head' or key.startswith('risk_mlp.')
+    return (
+        key == '_risk_head'
+        or key.startswith('risk_mlp.')
+        or key.startswith('cost_critic.')
+    )
 
 
 def build_policy_for_checkpoint(state_dict, robot_vpref=0.26, robot_wmax=1.8,

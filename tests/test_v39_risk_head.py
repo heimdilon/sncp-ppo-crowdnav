@@ -53,6 +53,7 @@ def test_default_policy_has_no_risk_head_surface():
     assert policy.risk_head is False
     assert not any(key.startswith("risk_mlp.") for key in keys)
     assert "_risk_head" not in keys
+    assert not any(key.startswith("cost_critic.") for key in keys)
 
 
 def test_risk_head_shapes_and_bounds():
@@ -65,10 +66,11 @@ def test_risk_head_shapes_and_bounds():
     assert value.shape == (3, 1)
     assert policy.last_p_coll.shape == (3, 1)
     assert policy.last_min_clearance.shape == (3, 1)
+    assert policy.last_cost_value.shape == (3, 1)
     assert torch.all((policy.last_p_coll >= 0.0) & (policy.last_p_coll <= 1.0))
     assert torch.all(policy.last_min_clearance >= 0.0)
     for tensor in (out1, out2, value, policy.last_p_coll, policy.last_min_clearance,
-                   *new_hidden.values()):
+                   policy.last_cost_value, *new_hidden.values()):
         assert torch.isfinite(tensor).all()
 
 
@@ -289,7 +291,7 @@ def test_update_vectorized_with_risk_and_lagrange_runs():
             dones=torch.zeros(N), masks=torch.ones(N),
             coll_labels=torch.tensor([1.0, 0.0]),
             clearance_labels=torch.tensor([0.0, 1.5]),
-            cost_values=policy.last_p_coll.squeeze(-1).detach(),
+            cost_values=policy.last_cost_value.squeeze(-1).detach(),
         )
         hidden = new_h
     buf.finish(last_values=torch.zeros(N), last_dones=torch.zeros(N),
@@ -300,3 +302,113 @@ def test_update_vectorized_with_risk_and_lagrange_runs():
     assert any(not torch.equal(b, a) for b, a in zip(before, after))
     assert agent.lagrange_lambda >= 0.0
     assert isinstance(agent.last_risk_bce, float)
+
+
+def test_cost_critic_is_independent_of_p_coll():
+    torch.manual_seed(0)
+    policy = SNCPPolicy(risk_head=True)
+    with torch.no_grad():
+        policy.cost_critic.bias.fill_(2.5)
+        policy.risk_mlp[-1].bias[0] = -8.0
+    hidden = policy.init_hidden(2, 3, torch.device("cpu"))
+    policy(_obs(2, 3), hidden)
+    assert policy.last_cost_value.shape == (2, 1)
+    assert not torch.allclose(policy.last_cost_value, policy.last_p_coll)
+
+
+def test_overlay_truncation_obs_prefers_final_observation():
+    from sncp_ppo.train import overlay_truncation_obs
+
+    next_obs = {
+        "robot_node": np.zeros((2, 7), dtype=np.float32),
+        "spatial_edges": np.zeros((2, 3, 6), dtype=np.float32),
+        "temporal_edges": np.zeros((2, 2), dtype=np.float32),
+    }
+    final = {
+        "robot_node": np.ones(7, dtype=np.float32),
+        "spatial_edges": np.ones((3, 6), dtype=np.float32),
+        "temporal_edges": np.ones(2, dtype=np.float32),
+    }
+    info = {"final_observation": [final, None]}
+    out = overlay_truncation_obs(next_obs, info, [0])
+    assert np.allclose(out["robot_node"][0], 1.0)
+    assert np.allclose(out["robot_node"][1], 0.0)
+    # NEXT_STEP autoreset: no final_observation, next_obs already is s_final.
+    copied = overlay_truncation_obs(next_obs, {}, [0])
+    assert np.allclose(copied["robot_node"], next_obs["robot_node"])
+
+
+def test_upgrade_checkpoint_with_lagrange_attaches_risk_and_cost_heads(tmp_path):
+    checkpoint = tmp_path / "v34.pt"
+    base = SNCPPolicy(robot_vpref=1.0, robot_wmax=1.8, action_dist="beta",
+                      pre_mlp=True, meanmax_pool=True)
+    torch.save(base.state_dict(), checkpoint)
+    args = build_parser().parse_args([
+        "--upgrade_checkpoint", str(checkpoint), "--lagrange_ppo",
+    ])
+    env = SimpleNamespace(robot_vpref=1.0, robot_wmax=1.8)
+    policy = build_or_load_policy(args, env, torch.device("cpu"))
+    assert policy.hh_intent_graph is True
+    assert policy.risk_head is True
+    hidden = policy.init_hidden(1, 4, torch.device("cpu"))
+    policy(_obs(1, 4), hidden)
+    assert policy.last_p_coll.shape == (1, 1)
+    assert policy.last_cost_value.shape == (1, 1)
+
+
+def test_update_vectorized_trains_cost_critic_not_as_p_coll():
+    torch.manual_seed(1)
+    N, T, H = 2, 8, 3
+    policy = SNCPPolicy(risk_head=True)
+    agent = PPOAgent(
+        policy, epochs=1, batch_size=4, seq_len=T,
+        normalize_returns=False, use_lagrange=True,
+        lagrange_lambda_init=0.1, lagrange_cost_limit=0.0,
+    )
+    buf = VectorizedRolloutBuffer(num_envs=N, horizon=T)
+    hidden = policy.init_hidden(N, H, torch.device("cpu"))
+    for _ in range(T):
+        obs = {
+            "robot_node": torch.randn(N, 7),
+            "spatial_edges": torch.randn(N, H, 6),
+            "temporal_edges": torch.randn(N, 2),
+        }
+        with torch.no_grad():
+            mu, std, value, new_h = policy(obs, hidden)
+            dist = policy.make_action_dist(mu, std)
+            action = dist.sample()
+            log_prob = dist.log_prob(action).sum(-1)
+        buf.store(
+            obs=obs, hidden=hidden, actions=action, log_probs=log_prob,
+            rewards=torch.randn(N) * 0.1, values=value.squeeze(-1),
+            dones=torch.zeros(N), masks=torch.ones(N),
+            coll_labels=torch.tensor([1.0, 0.0]),
+            clearance_labels=torch.tensor([0.0, 1.5]),
+            cost_values=policy.last_cost_value.squeeze(-1).detach(),
+        )
+        hidden = new_h
+    buf.finish(last_values=torch.zeros(N), last_dones=torch.zeros(N),
+               last_cost_values=torch.zeros(N))
+    before = [p.clone() for p in policy.cost_critic.parameters()]
+    agent.update_vectorized(buf, torch.device("cpu"))
+    after = list(policy.cost_critic.parameters())
+    assert any(not torch.equal(b, a) for b, a in zip(before, after))
+
+
+def test_diagnostic_row_includes_lagrange_and_risk_fields():
+    from sncp_ppo.train import update_diagnostic_row
+
+    class _Rms:
+        std = 1.0
+
+    class _Agent:
+        last_entropy = 0.1
+        last_approx_kl = 0.01
+        return_rms = _Rms()
+        lagrange_lambda = 0.25
+        last_risk_bce = 0.4
+        last_risk_huber = 0.05
+        last_mean_cost = 0.12
+
+    row = update_diagnostic_row(SNCPPolicy(), _Agent())
+    assert row[-4:] == ["0.250000", "0.400000", "0.050000", "0.120000"]

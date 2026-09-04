@@ -26,15 +26,16 @@ obs (sim şeması değişmez)
    SNCP fusion sf [B,256]
         │
         ├─ actor / critic  (mevcut)
-        └─ risk_mlp 256→32→2     # yalnızca risk_head=True
-              p_coll = sigmoid
-              min_clearance = softplus
+        ├─ risk_mlp 256→32→2     # yalnızca risk_head=True; L_risk
+        │     p_coll = sigmoid
+        │     min_clearance = softplus
+        └─ cost_critic 256→1     # V_cost; Lagrangian GAE / clipped value loss
 ```
 
-- Risk kafası ~8k parametre. Eski checkpoint'ler `_risk_head` / `risk_mlp.*`
+- Risk kafası ~8k parametre + 257'lik cost critic. Eski checkpoint'ler `_risk_head` / `risk_mlp.*`
   anahtarı olmadığı için `build_policy_for_checkpoint` ile byte-uyumlu yüklenir.
 - Forward hâlâ 4-tuple `(out1, out2, value, hidden)` döner (waffle_ros / eval
-  kırılmaz). Risk çıktıları `policy.last_p_coll` / `last_min_clearance` üzerindedir.
+  kırılmaz). Yan çıktılar `last_p_coll` / `last_min_clearance` / `last_cost_value`.
 - **Non-goal:** inference'da `shield_action`, aday lattice, çok-adımlı CV döngüsü
   yok. `models.py` `action_shield` import etmez.
 
@@ -54,18 +55,27 @@ yolu onu çağırmaz.
 ## 4. Kayıplar
 
 ```
-L = L_PPO(A_r − λ A_c) + c1 L_V + c2 H
+L = L_PPO(A_r − λ A_c) + c1 (L_V + L_{V_cost}) + c2 H
   + risk_bce_coef · BCE(p_coll, collision)
   + risk_clearance_coef · Huber(min_clearance, clearance)
 
 λ ← clip(λ + α (E[collision] − d), 0, λ_max)
 ```
 
-- `A_c`: ayrıcalıklı collision maliyeti üzerinde GAE; `p_coll` rollout değeri
-  cost-critic bootstrap olarak kullanılır.
+- `p_coll` / `min_clearance` are **only** supervised (`L_risk`). They are not
+  used as TD bootstraps.
+- `V_cost` is a separate linear critic on fusion (`cost_critic`: 256→1),
+  trained with the same clipped value loss as the reward critic. Cost GAE
+  uses `V_cost(s_t)` and `V_cost(s_final)` on timeouts.
+- Vectorized timeouts store per-step `V(s_final)` / `V_cost(s_final)` from
+  Gymnasium `final_observation` when present (SAME_STEP), otherwise from
+  `next_obs` (NEXT_STEP, Gymnasium 1.0 default). Mid-horizon truncations no
+  longer get an implicit next-value of 0.
 - `d = --lagrange_cost_limit` (varsayılan 0.05).
 - `λ_init = 0`: ilk güncellemeler vanilla PPO + `L_risk`; çarpışma limiti
   aşılırsa dual yükselir.
+
+CSV diagnostics (v39): `lagrange_lambda`, `risk_bce`, `risk_huber`, `mean_cost`.
 
 ## 5. CLI (varsayılanlar kapalı — v34 eğitimi değişmez)
 
@@ -79,8 +89,9 @@ python -m sncp_ppo.train \
   --action_dist beta --save_path checkpoints/sncp_ppo_v39.pt
 ```
 
-`--lagrange_ppo` risk kafasını otomatik açar. `--init_checkpoint` eski bir
-v34 ağırlığıysa taze risk kafası eklenir (`strict=False`, yalnızca `risk_mlp`
+`--lagrange_ppo` risk kafasını otomatik açar. `--init_checkpoint` **veya**
+`--upgrade_checkpoint` eski bir v34 ağırlığıysa taze risk kafası + cost
+critic eklenir (`strict=False`, yalnızca `risk_mlp.*` / `cost_critic.*`
 anahtarları eksik olabilir).
 
 Smoke (kısa, GPU şart değil):

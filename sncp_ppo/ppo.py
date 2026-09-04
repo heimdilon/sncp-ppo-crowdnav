@@ -279,20 +279,27 @@ class PPOAgent:
     def _normalize_advantages(self, advantages):
         return (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
-    def _cost_advantages(self, costs, cost_values, masks_or_dones, bootstrap, *, vectorized=False):
-        if not self.use_lagrange:
-            return torch.zeros_like(costs)
+    def _clipped_value_loss(self, pred, old, target, valid):
+        clipped = old + torch.clamp(pred - old, -self.clip_eps, self.clip_eps)
+        unclipped = (pred - target).pow(2)
+        clipped_l = (clipped - target).pow(2)
+        return (torch.max(unclipped, clipped_l) * valid).sum() / valid.sum()
+
+    def _cost_gae(self, costs, cost_values, masks_or_dones, bootstrap, *, vectorized=False):
+        if not self._risk_enabled():
+            zeros = torch.zeros_like(costs)
+            return zeros, zeros
         if vectorized:
-            cost_adv, _ = compute_gae_vectorized(
+            cost_adv, cost_ret = compute_gae_vectorized(
                 costs, cost_values, masks_or_dones, bootstrap,
                 self.gamma, self.gae_lambda,
             )
         else:
-            cost_adv, _ = self.compute_gae(
+            cost_adv, cost_ret = self.compute_gae(
                 costs, cost_values, masks_or_dones,
                 self.memory.episode_lengths, bootstrap,
             )
-        return self._normalize_advantages(cost_adv)
+        return cost_adv, cost_ret
 
     def _risk_aux_loss(self, p_coll_steps, clearance_steps, coll_labels, clearance_labels, valid):
         if not self._risk_enabled() or not p_coll_steps:
@@ -349,7 +356,8 @@ class PPOAgent:
         return advantages, returns
 
     def _extract_subsequences(self, obs, h_states, actions, old_log_probs, advantages, returns, values, device,
-                              coll_labels=None, clearance_labels=None, cost_advantages=None):
+                              coll_labels=None, clearance_labels=None, cost_advantages=None,
+                              cost_returns=None, old_cost_values=None):
         """
         Extract contiguous subsequences from episodes for BPTT.
         Each subsequence uses the hidden state from the START of the subsequence
@@ -373,6 +381,8 @@ class PPOAgent:
         seq_coll = []
         seq_clearance = []
         seq_cost_adv = []
+        seq_cost_ret = []
+        seq_old_cost = []
         
         offset = 0
         for ep_len in self.memory.episode_lengths:
@@ -399,6 +409,8 @@ class PPOAgent:
                 coll = coll_labels[start:end] if coll_labels is not None else torch.zeros(actual_len, device=device)
                 clr = clearance_labels[start:end] if clearance_labels is not None else torch.zeros(actual_len, device=device)
                 cadv = cost_advantages[start:end] if cost_advantages is not None else torch.zeros(actual_len, device=device)
+                cret = cost_returns[start:end] if cost_returns is not None else torch.zeros(actual_len, device=device)
+                ocv = old_cost_values[start:end] if old_cost_values is not None else torch.zeros(actual_len, device=device)
 
                 if actual_len < self.seq_len:
                     pad_len = self.seq_len - actual_len
@@ -413,6 +425,8 @@ class PPOAgent:
                     coll = F.pad(coll, (0, pad_len))
                     clr = F.pad(clr, (0, pad_len))
                     cadv = F.pad(cadv, (0, pad_len))
+                    cret = F.pad(cret, (0, pad_len))
+                    ocv = F.pad(ocv, (0, pad_len))
 
                 seq_obs_rn.append(rn)
                 seq_obs_se.append(se)
@@ -431,6 +445,8 @@ class PPOAgent:
                 seq_coll.append(coll)
                 seq_clearance.append(clr)
                 seq_cost_adv.append(cadv)
+                seq_cost_ret.append(cret)
+                seq_old_cost.append(ocv)
             
             offset = ep_end
         
@@ -452,6 +468,8 @@ class PPOAgent:
             'coll_labels': torch.stack(seq_coll),
             'clearance_labels': torch.stack(seq_clearance),
             'cost_advantages': torch.stack(seq_cost_adv),
+            'cost_returns': torch.stack(seq_cost_ret),
+            'old_cost_values': torch.stack(seq_old_cost),
             'seq_lengths': [],                         # actual lengths before padding
         }
         
@@ -494,8 +512,12 @@ class PPOAgent:
 
         # Normalize advantages
         advantages = self._normalize_advantages(advantages)
-        cost_adv = self._cost_advantages(
+        cost_adv_raw, cost_returns = self._cost_gae(
             coll_labels, cost_values, masks, self.memory.episode_bootstrap_costs,
+        )
+        cost_adv = (
+            self._normalize_advantages(cost_adv_raw)
+            if self.use_lagrange else torch.zeros_like(cost_adv_raw)
         )
 
         # 2. Extract subsequences for BPTT (values plumbed for clipped value loss)
@@ -503,7 +525,9 @@ class PPOAgent:
                                           advantages, returns, values, device,
                                           coll_labels=coll_labels,
                                           clearance_labels=clearance_labels,
-                                          cost_advantages=cost_adv)
+                                          cost_advantages=cost_adv,
+                                          cost_returns=cost_returns,
+                                          old_cost_values=cost_values)
 
         if seqs is None:
             self.memory.clear()
@@ -560,6 +584,7 @@ class PPOAgent:
                 all_values = []
                 all_pcoll = []
                 all_clr_pred = []
+                all_cost_v = []
                 
                 h_temp = b_h_temp.clone()
                 h_node = b_h_node.clone()
@@ -590,6 +615,7 @@ class PPOAgent:
                     if self._risk_enabled():
                         all_pcoll.append(self.policy.last_p_coll)
                         all_clr_pred.append(self.policy.last_min_clearance)
+                        all_cost_v.append(self.policy.last_cost_value)
                     
                     # Update hidden states for next step (BPTT: keep graph!)
                     h_temp = new_h['temporal_edge']
@@ -643,16 +669,17 @@ class PPOAgent:
                 # critic from moving more than clip_eps per step away from the
                 # behavior critic. Bounds value-target shock during curriculum
                 # shifts and stops MSE from exploding on outlier returns.
-                v_clipped = b_old_v + torch.clamp(all_values - b_old_v,
-                                                  -self.clip_eps, self.clip_eps)
-                vloss_unclipped = (all_values - b_ret).pow(2)
-                vloss_clipped   = (v_clipped  - b_ret).pow(2)
-                vloss_per_step  = torch.max(vloss_unclipped, vloss_clipped)
-                critic_loss = (vloss_per_step * valid_mask).sum() / valid_mask.sum()
+                critic_loss = self._clipped_value_loss(all_values, b_old_v, b_ret, valid_mask)
 
                 entropy_loss = -(entropy * valid_mask).sum() / valid_mask.sum()
                 
                 loss = actor_loss + self.c1 * critic_loss + self.c2 * entropy_loss
+                if self._risk_enabled() and all_cost_v:
+                    pred_cv = torch.stack(all_cost_v, dim=1).squeeze(-1)
+                    loss = loss + self.c1 * self._clipped_value_loss(
+                        pred_cv, seqs['old_cost_values'][batch_idx],
+                        seqs['cost_returns'][batch_idx], valid_mask,
+                    )
                 risk_loss, bce_val, huber_val = self._risk_aux_loss(
                     all_pcoll, all_clr_pred, b_coll, b_clr, valid_mask,
                 )
@@ -717,9 +744,13 @@ class PPOAgent:
             values = values / ret_std
 
         advantages = self._normalize_advantages(advantages)
-        cost_adv = self._cost_advantages(
+        cost_adv_raw, cost_returns = self._cost_gae(
             data['coll_labels'], data['cost_values'], data['dones'],
             data['bootstrap_costs'], vectorized=True,
+        )
+        cost_adv = (
+            self._normalize_advantages(cost_adv_raw)
+            if self.use_lagrange else torch.zeros_like(cost_adv_raw)
         )
 
         windows = []  # (n, start, length) -- never spans an env or episode boundary
@@ -769,6 +800,8 @@ class PPOAgent:
         coll = torch.zeros(num_win, S, device=device)
         clr = torch.zeros(num_win, S, device=device)
         cadv = torch.zeros(num_win, S, device=device)
+        cret = torch.zeros(num_win, S, device=device)
+        ocv = torch.zeros(num_win, S, device=device)
         h_te = torch.zeros(num_win, data['h_temporal'].shape[-1], device=device)
         h_no = torch.zeros(num_win, data['h_node'].shape[-1], device=device)
         h_sp = torch.zeros(num_win, num_humans, data['h_spatial'].shape[-1] // num_humans, device=device)
@@ -785,6 +818,8 @@ class PPOAgent:
             coll[i, :L] = data['coll_labels'][n, st:st + L]
             clr[i, :L] = data['clearance_labels'][n, st:st + L]
             cadv[i, :L] = cost_adv[n, st:st + L]
+            cret[i, :L] = cost_returns[n, st:st + L]
+            ocv[i, :L] = data['cost_values'][n, st:st + L]
             h_te[i] = data['h_temporal'][n, st]
             h_no[i] = data['h_node'][n, st]
             h_sp[i] = data['h_spatial'][n, st].reshape(num_humans, -1)
@@ -813,7 +848,7 @@ class PPOAgent:
                 h_spat = h_sp[bi].reshape(B * num_humans, -1).clone()
 
                 mus, stds, vals = [], [], []
-                risk_p, risk_c = [], []
+                risk_p, risk_c, cost_vs = [], [], []
                 for t in range(S):
                     step_obs = {'robot_node': b_rn[:, t],
                                 'spatial_edges': b_se[:, t],
@@ -826,6 +861,7 @@ class PPOAgent:
                     if self._risk_enabled():
                         risk_p.append(self.policy.last_p_coll)
                         risk_c.append(self.policy.last_min_clearance)
+                        cost_vs.append(self.policy.last_cost_value)
                     h_temp = nh['temporal_edge']
                     h_node = nh['node']
                     hs = nh['spatial_edge']
@@ -859,13 +895,15 @@ class PPOAgent:
                     batch_ents.append(ent_mean.item())
                     batch_clips.append(clip_frac.item())
 
-                v_clipped = b_ov + torch.clamp(all_val - b_ov, -self.clip_eps, self.clip_eps)
-                vl_u = (all_val - b_ret).pow(2)
-                vl_c = (v_clipped - b_ret).pow(2)
-                critic_loss = (torch.max(vl_u, vl_c) * valid).sum() / valid.sum()
+                critic_loss = self._clipped_value_loss(all_val, b_ov, b_ret, valid)
 
                 entropy_loss = -(entropy * valid).sum() / valid.sum()
                 loss = actor_loss + self.c1 * critic_loss + self.c2 * entropy_loss
+                if self._risk_enabled() and cost_vs:
+                    pred_cv = torch.stack(cost_vs, dim=1).squeeze(-1)
+                    loss = loss + self.c1 * self._clipped_value_loss(
+                        pred_cv, ocv[bi], cret[bi], valid,
+                    )
                 risk_loss, bce_val, huber_val = self._risk_aux_loss(
                     risk_p, risk_c, b_coll, b_clr, valid,
                 )

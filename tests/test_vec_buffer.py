@@ -87,6 +87,73 @@ def test_finish_bootstrap_on_last_values_device():
     assert torch.allclose(buf.bootstrap_values[:, T - 1], last_v)
 
 
+def test_finish_keeps_mid_rollout_truncation_bootstraps():
+    """Timeouts inside the horizon must keep V(s_final) / V_cost(s_final)."""
+    N, T, H = 2, 4, 3
+    buf = VectorizedRolloutBuffer(num_envs=N, horizon=T)
+    for t in range(T):
+        dones = torch.zeros(N)
+        boot = torch.zeros(N)
+        cost_boot = torch.zeros(N)
+        if t == 1:
+            dones[0] = 1.0
+            boot[0] = 4.2
+            cost_boot[0] = 0.35
+        buf.store(
+            obs={'robot_node': torch.zeros(N, 7),
+                 'spatial_edges': torch.zeros(N, H, 6),
+                 'temporal_edges': torch.zeros(N, 2)},
+            hidden={'temporal_edge': torch.zeros(N, 32),
+                    'spatial_edge': torch.zeros(N * H, 32),
+                    'node': torch.zeros(N, 32)},
+            actions=torch.zeros(N, 2), log_probs=torch.zeros(N),
+            rewards=torch.zeros(N), values=torch.zeros(N),
+            dones=dones, masks=1.0 - dones,
+            bootstrap=boot, cost_bootstrap=cost_boot,
+        )
+    buf.finish(
+        last_values=torch.tensor([9.0, 7.0]),
+        last_dones=torch.zeros(N),
+        last_cost_values=torch.tensor([0.11, 0.22]),
+    )
+    data = buf.get_tensors(torch.device('cpu'))
+    assert torch.allclose(data['bootstrap_values'][0, 1], torch.tensor(4.2))
+    assert torch.allclose(data['bootstrap_costs'][0, 1], torch.tensor(0.35))
+    assert torch.allclose(data['bootstrap_values'][1, T - 1], torch.tensor(7.0))
+    assert torch.allclose(data['bootstrap_costs'][1, T - 1], torch.tensor(0.22))
+    assert torch.allclose(data['bootstrap_values'][0, T - 1], torch.tensor(9.0))
+
+
+def test_horizon_end_truncation_keeps_stored_bootstrap_not_autoreset_value():
+    """If the last stored step is a timeout, GAE must use V(s_final), not V(s0)."""
+    N, T, H = 1, 3, 2
+    buf = VectorizedRolloutBuffer(num_envs=N, horizon=T)
+    for t in range(T):
+        is_last = t == T - 1
+        buf.store(
+            obs={'robot_node': torch.zeros(N, 7),
+                 'spatial_edges': torch.zeros(N, H, 6),
+                 'temporal_edges': torch.zeros(N, 2)},
+            hidden={'temporal_edge': torch.zeros(N, 32),
+                    'spatial_edge': torch.zeros(N * H, 32),
+                    'node': torch.zeros(N, 32)},
+            actions=torch.zeros(N, 2), log_probs=torch.zeros(N),
+            rewards=torch.zeros(N), values=torch.zeros(N),
+            dones=torch.tensor([1.0 if is_last else 0.0]),
+            masks=torch.ones(N),
+            bootstrap=torch.tensor([3.5 if is_last else 0.0]),
+            cost_bootstrap=torch.tensor([0.4 if is_last else 0.0]),
+        )
+    buf.finish(
+        last_values=torch.tensor([99.0]),
+        last_dones=torch.tensor([0.0]),
+        last_cost_values=torch.tensor([99.0]),
+    )
+    data = buf.get_tensors(torch.device('cpu'))
+    assert torch.allclose(data['bootstrap_values'][0, T - 1], torch.tensor(3.5))
+    assert torch.allclose(data['bootstrap_costs'][0, T - 1], torch.tensor(0.4))
+
+
 def test_reset_hidden_where_done():
     from sncp_ppo.vec_buffer import reset_hidden_where_done
     N, H, U = 3, 5, 32

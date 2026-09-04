@@ -216,5 +216,5 @@ def test_diagnostic_row_logs_gate_only_for_v37():
     v37 = SNCPPolicy(hh_intent_graph=True)
     v37.hh_gate.data.fill_(-0.125)
     v37_row = update_diagnostic_row(v37, _Agent())
-    assert len(base_row) == 6 and base_row[-1] == ""
-    assert len(v37_row) == 6 and float(v37_row[-1]) == pytest.approx(-0.125)
+    assert len(base_row) == 10 and base_row[5] == ""
+    assert len(v37_row) == 10 and float(v37_row[5]) == pytest.approx(-0.125)

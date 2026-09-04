@@ -199,6 +199,10 @@ UPDATE_DIAGNOSTIC_COLUMNS = [
     'std_angular',
     'return_rms_std',
     'hh_gate',
+    'lagrange_lambda',
+    'risk_bce',
+    'risk_huber',
+    'mean_cost',
 ]
 
 
@@ -230,6 +234,10 @@ def update_diagnostic_row(policy, agent):
         f"{std1:.6f}",
         f"{float(agent.return_rms.std):.6f}",
         hh_gate,
+        f"{float(getattr(agent, 'lagrange_lambda', 0.0)):.6f}",
+        f"{float(getattr(agent, 'last_risk_bce', 0.0)):.6f}",
+        f"{float(getattr(agent, 'last_risk_huber', 0.0)):.6f}",
+        f"{float(getattr(agent, 'last_mean_cost', 0.0)):.6f}",
     ]
 
 
@@ -296,7 +304,8 @@ def _assert_forward_equivalent(base, upgraded, device, atol=1e-6):
 
 
 def build_upgraded_policy(state_dict, *, robot_vpref, robot_wmax, device,
-                          hh_attn_heads=4, cv_horizons=(1, 2, 3, 4), cv_dt=0.25):
+                          hh_attn_heads=4, cv_horizons=(1, 2, 3, 4), cv_dt=0.25,
+                          risk_head=False):
     """Add the zero-gated v37 HH+CV branch to a pre-v37 checkpoint safely."""
     base = build_policy_for_checkpoint(
         state_dict, robot_vpref=robot_vpref, robot_wmax=robot_wmax
@@ -325,10 +334,13 @@ def build_upgraded_policy(state_dict, *, robot_vpref, robot_wmax, device,
         hh_attn_heads=hh_attn_heads,
         cv_horizons=cv_horizons,
         cv_dt=cv_dt,
-        risk_head=getattr(base, 'risk_head', False),
+        risk_head=bool(risk_head) or getattr(base, 'risk_head', False),
     ).to(device)
     missing, unexpected = upgraded.load_state_dict(state_dict, strict=False)
-    unsafe_missing = [key for key in missing if not _is_v37_upgrade_key(key)]
+    unsafe_missing = [
+        key for key in missing
+        if not _is_v37_upgrade_key(key) and not _is_risk_head_key(key)
+    ]
     if unsafe_missing or unexpected:
         raise RuntimeError(
             "unsafe checkpoint upgrade: load mismatch; "
@@ -393,7 +405,12 @@ def build_or_load_policy(args, env, device):
             hh_attn_heads=getattr(args, 'hh_attn_heads', 4),
             cv_horizons=getattr(args, 'cv_horizons', (1, 2, 3, 4)),
             cv_dt=getattr(args, 'cv_dt', 0.25),
+            risk_head=_want_risk_head(args),
         )
+        if _want_risk_head(args) and not getattr(policy, 'risk_head', False):
+            raise RuntimeError(
+                "--lagrange_ppo/--risk_head requires a risk head; upgrade did not attach one"
+            )
         print(
             f"Upgraded policy from {upgrade_ckpt} with zero-gated HH intent graph "
             f"(heads={policy.hh_attn_heads}, horizons={policy.cv_horizons}, dt={policy.cv_dt})"
@@ -633,8 +650,8 @@ def train(args):
                 )
                 coll_label = risk_label.collision
                 clearance_label = risk_label.min_clearance
-                if policy.last_p_coll is not None:
-                    cost_value = float(policy.last_p_coll.detach().cpu().reshape(-1)[0])
+                if policy.last_cost_value is not None:
+                    cost_value = float(policy.last_cost_value.detach().cpu().reshape(-1)[0])
 
             next_obs, reward, terminated, truncated, info = env.step(env_action)
 
@@ -659,8 +676,8 @@ def train(args):
                 _, _, next_value_tensor, _ = policy(_obs_to_tensor(next_obs, device), h_states_next)
                 bootstrap_value = next_value_tensor.item()
                 bootstrap_cost = (
-                    float(policy.last_p_coll.detach().cpu().reshape(-1)[0])
-                    if getattr(policy, 'risk_head', False) and policy.last_p_coll is not None
+                    float(policy.last_cost_value.detach().cpu().reshape(-1)[0])
+                    if getattr(policy, 'risk_head', False) and policy.last_cost_value is not None
                     else 0.0
                 )
         else:
@@ -925,6 +942,44 @@ def _vec_episode_flags(info, i):
     return flag('success'), flag('collision')
 
 
+def _final_obs_row(info, env_index):
+    """s_final for env i if SAME_STEP autoreset stashed it in info; else None."""
+    finals = info.get('final_observation')
+    if finals is None:
+        finals = info.get('final_obs')
+    if finals is None:
+        return None
+    if isinstance(finals, dict):
+        first = next(iter(finals.values()), None)
+        if isinstance(first, np.ndarray) and first.shape[:1] and first.shape[0] > env_index:
+            return {key: np.asarray(value[env_index]) for key, value in finals.items()}
+        return None
+    try:
+        item = finals[env_index]
+    except (IndexError, KeyError, TypeError):
+        return None
+    if item is None or not isinstance(item, dict):
+        return None
+    return item
+
+
+def overlay_truncation_obs(next_obs, info, trunc_indices):
+    """Batch obs whose truncated rows are s_final, not auto-reset s0.
+
+    Gymnasium SAME_STEP stores s_final in info['final_observation']. NEXT_STEP
+    (1.0 default) already returns s_final as next_obs, so this is a no-op.
+    """
+    out = {key: np.array(value, copy=True) for key, value in next_obs.items()}
+    for i in trunc_indices:
+        row = _final_obs_row(info, int(i))
+        if row is None:
+            continue
+        for key, value in row.items():
+            if key in out:
+                out[key][int(i)] = value
+    return out
+
+
 def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, csv_file):
     """Vectorized rollout with step-budgeted curriculum and holdout eval.
 
@@ -1069,7 +1124,7 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
                 )
                 coll_t = torch.tensor(coll_np, dtype=torch.float32, device=device)
                 clr_t = torch.tensor(clr_np, dtype=torch.float32, device=device)
-                cost_v = policy.last_p_coll.squeeze(-1).detach()
+                cost_v = policy.last_cost_value.squeeze(-1).detach()
             next_obs, reward, term, trunc, info = envs.step(act_np)
             done = np.logical_or(term, trunc)
             set_envs_vpref(envs, vpref)
@@ -1087,10 +1142,23 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
             done_t = torch.tensor(done, dtype=torch.float32, device=device)
             reward_t = torch.tensor(reward, dtype=torch.float32, device=device)
             mask_t = torch.tensor(1.0 - term.astype('float32'), device=device)
+            trunc_only = np.logical_and(trunc, np.logical_not(term))
+            boot_t = torch.zeros(N, device=device)
+            cost_boot_t = torch.zeros(N, device=device)
+            if np.any(trunc_only):
+                trunc_idx = np.nonzero(trunc_only)[0]
+                boot_obs = overlay_truncation_obs(next_obs, info, trunc_idx)
+                with torch.no_grad():
+                    _, _, v_final, _ = policy(to_tensor(boot_obs), h_next)
+                trunc_mask = torch.tensor(trunc_only.astype('float32'), device=device)
+                boot_t = v_final.squeeze(-1) * trunc_mask
+                if getattr(policy, 'risk_head', False) and policy.last_cost_value is not None:
+                    cost_boot_t = policy.last_cost_value.squeeze(-1) * trunc_mask
             buf.store(obs=obs_t, hidden=h, actions=action, log_probs=log_prob,
                       rewards=reward_t, values=value.squeeze(-1),
                       dones=done_t, masks=mask_t,
-                      coll_labels=coll_t, clearance_labels=clr_t, cost_values=cost_v)
+                      coll_labels=coll_t, clearance_labels=clr_t, cost_values=cost_v,
+                      bootstrap=boot_t, cost_bootstrap=cost_boot_t)
             obs_np = next_obs
             h = reset_hidden_where_done(h_next, done_t, H)
             total_steps += N
@@ -1098,8 +1166,8 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
         with torch.no_grad():
             last_v = policy(to_tensor(obs_np), h)[2].squeeze(-1)
             last_cost = (
-                policy.last_p_coll.squeeze(-1)
-                if getattr(policy, 'risk_head', False) and policy.last_p_coll is not None
+                policy.last_cost_value.squeeze(-1)
+                if getattr(policy, 'risk_head', False) and policy.last_cost_value is not None
                 else None
             )
         # last_dones = whether each env *terminated* on the final rollout step
@@ -1197,9 +1265,15 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
             replay_mark = "R" if is_replay_update else " "
             gate = _policy_hh_gate(policy)
             gate_text = "" if gate is None else f" gate={gate:+.5f}"
+            lag_text = ""
+            if getattr(agent, 'use_lagrange', False) or getattr(policy, 'risk_head', False):
+                lag_text = (
+                    f" λ={agent.lagrange_lambda:.3f} bce={agent.last_risk_bce:.3f} "
+                    f"cost={agent.last_mean_cost:.3f}"
+                )
             print(f"Update {update_idx} | step {total_steps}/{args.total_steps} [{scenario} {H}h] | "
                   f"[{replay_mark}] ent={agent.last_entropy:+.3f} kl={agent.last_approx_kl:.5f} "
-                  f"std=[{std0:.3f},{std1:.3f}] rms={agent.return_rms.std:.2f}{gate_text}")
+                  f"std=[{std0:.3f},{std1:.3f}] rms={agent.return_rms.std:.2f}{gate_text}{lag_text}")
 
     envs.close()
     # I/O-robust final save: on Colab the save dir may sit behind a Drive FUSE
