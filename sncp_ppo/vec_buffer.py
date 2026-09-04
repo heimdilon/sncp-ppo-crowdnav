@@ -92,9 +92,17 @@ class VectorizedRolloutBuffer:
         self.values = []              # each: (N,)
         self.dones = []               # each: (N,)
         self.masks = []               # each: (N,)  (1 - terminated)
-        self.bootstrap_values = None  # (N, T), filled by finish() in a later task
+        self.coll_labels = []         # each: (N,) privileged short-horizon collision
+        self.clearance_labels = []    # each: (N,) privileged min clearance (>=0)
+        self.cost_values = []         # each: (N,) cost-critic V_cost(s_t)
+        self.bootstraps = []          # each: (N,) V(s_final) at truncation; else 0
+        self.cost_bootstraps = []     # each: (N,) V_cost(s_final) at truncation
+        self.bootstrap_values = None  # (N, T), filled by finish()
+        self.bootstrap_costs = None   # (N, T), cost-critic bootstrap
 
-    def store(self, obs, hidden, actions, log_probs, rewards, values, dones, masks):
+    def store(self, obs, hidden, actions, log_probs, rewards, values, dones, masks,
+              coll_labels=None, clearance_labels=None, cost_values=None,
+              bootstrap=None, cost_bootstrap=None):
         self.obs_robot_node.append(obs['robot_node'].detach().clone())
         self.obs_spatial_edges.append(obs['spatial_edges'].detach().clone())
         self.obs_temporal_edges.append(obs['temporal_edges'].detach().clone())
@@ -110,36 +118,67 @@ class VectorizedRolloutBuffer:
         self.values.append(torch.as_tensor(values, dtype=torch.float32).detach().clone())
         self.dones.append(torch.as_tensor(dones, dtype=torch.float32).detach().clone())
         self.masks.append(torch.as_tensor(masks, dtype=torch.float32).detach().clone())
+        if coll_labels is None:
+            coll_labels = torch.zeros(self.N, dtype=torch.float32)
+        if clearance_labels is None:
+            clearance_labels = torch.zeros(self.N, dtype=torch.float32)
+        if cost_values is None:
+            cost_values = torch.zeros(self.N, dtype=torch.float32)
+        if bootstrap is None:
+            bootstrap = torch.zeros(self.N, dtype=torch.float32)
+        if cost_bootstrap is None:
+            cost_bootstrap = torch.zeros(self.N, dtype=torch.float32)
+        self.coll_labels.append(torch.as_tensor(coll_labels, dtype=torch.float32).detach().clone())
+        self.clearance_labels.append(torch.as_tensor(clearance_labels, dtype=torch.float32).detach().clone())
+        self.cost_values.append(torch.as_tensor(cost_values, dtype=torch.float32).detach().clone())
+        self.bootstraps.append(torch.as_tensor(bootstrap, dtype=torch.float32).detach().clone())
+        self.cost_bootstraps.append(torch.as_tensor(cost_bootstrap, dtype=torch.float32).detach().clone())
 
-    def finish(self, last_values, last_dones):
-        """Finalize the rollout: build the (N, T) bootstrap tensor and mark the
-        horizon end as a done boundary so GAE cuts there.
+    def finish(self, last_values, last_dones, last_cost_values=None):
+        """Finalize the rollout: merge per-step truncation bootstraps with the
+        horizon-cut successor value and mark the last column done for GAE.
 
         last_values: (N,) V(s_next) after the final stored step, per env.
-        last_dones:  (N,) 1.0 if the env was *terminated* exactly on the final
-                     stored step (then its horizon-end bootstrap is 0).
+        last_dones:  kept for call-site compatibility (terminated-at-horizon).
+                     Horizon-end fill now keys off the stored dones mask:
+                     continuing envs get last_values; term/trunc keep the
+                     per-step bootstrap (0 for termination, V(s_final) for
+                     timeout). last_dones is unused for the fill itself.
 
-        Mid-rollout terminations (mask=0) and truncations are handled by GAE via
-        the dones mask + in-buffer values[t+1]; finish only supplies the missing
-        successor value at the horizon end.
+        Mid-rollout timeouts must pass V(s_final) via store(..., bootstrap=);
+        otherwise GAE would treat them as terminated (implicit next-value 0).
         """
         N, T = self.N, self.T
         last_values = torch.as_tensor(last_values, dtype=torch.float32)
-        last_dones = torch.as_tensor(last_dones, dtype=torch.float32)
-        boot = torch.zeros(N, T, device=last_values.device)
-        last_mask = 1.0 - last_dones                     # 0 if terminated at horizon end
-        boot[:, T - 1] = last_values * last_mask
-        # Match the device of the already-stored dones so torch.stack in
-        # get_tensors doesn't hit a CPU/CUDA mismatch (unit tests run on CPU, so
-        # this only bites on GPU — caught by the vectorized smoke test).
-        done_device = self.dones[-1].device if self.dones else last_values.device
-        self.dones[T - 1] = torch.ones(N, device=done_device)                # force horizon-end done for GAE cut
+        device = last_values.device
+        if self.bootstraps:
+            boot = torch.stack(self.bootstraps, dim=1).to(device)
+        else:
+            boot = torch.zeros(N, T, device=device)
+        already_done = self.dones[-1].to(device).clone() if self.dones else torch.zeros(N, device=device)
+        boot[:, T - 1] = torch.where(already_done > 0.5, boot[:, T - 1], last_values)
+        done_device = self.dones[-1].device if self.dones else device
+        self.dones[T - 1] = torch.ones(N, device=done_device)
         self.bootstrap_values = boot
+        if self.cost_bootstraps:
+            cost_boot = torch.stack(self.cost_bootstraps, dim=1).to(device)
+        else:
+            cost_boot = torch.zeros(N, T, device=device)
+        if last_cost_values is not None:
+            last_cost_values = torch.as_tensor(
+                last_cost_values, dtype=torch.float32, device=device,
+            )
+            cost_boot[:, T - 1] = torch.where(
+                already_done > 0.5, cost_boot[:, T - 1], last_cost_values,
+            )
+        self.bootstrap_costs = cost_boot
 
     def get_tensors(self, device):
         def stack(lst):
             return torch.stack(lst, dim=1).to(device)  # (N, T, ...)
         bootstrap = self.bootstrap_values if self.bootstrap_values is not None \
+            else torch.zeros(self.N, self.T, device=device)
+        cost_bootstrap = self.bootstrap_costs if self.bootstrap_costs is not None \
             else torch.zeros(self.N, self.T, device=device)
         return {
             'obs': {
@@ -157,4 +196,8 @@ class VectorizedRolloutBuffer:
             'dones': stack(self.dones),
             'masks': stack(self.masks),
             'bootstrap_values': bootstrap.to(device),
+            'coll_labels': stack(self.coll_labels) if self.coll_labels else torch.zeros(self.N, self.T, device=device),
+            'clearance_labels': stack(self.clearance_labels) if self.clearance_labels else torch.zeros(self.N, self.T, device=device),
+            'cost_values': stack(self.cost_values) if self.cost_values else torch.zeros(self.N, self.T, device=device),
+            'bootstrap_costs': cost_bootstrap.to(device),
         }

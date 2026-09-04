@@ -45,3 +45,27 @@ def test_vectorized_gae_resets_at_done():
     assert torch.allclose(adv[0, 0], torch.tensor(expected_first), atol=1e-5)
     assert torch.allclose(adv[0, 3], torch.tensor(1.0), atol=1e-5)
     assert torch.allclose(adv[0, 2], torch.tensor(expected_first), atol=1e-5)
+
+
+def test_mid_horizon_truncation_uses_nonzero_bootstrap_for_reward_and_cost():
+    """A timeout with V(s_final) != 0 must change both reward and cost GAE."""
+    gamma, lam = 0.99, 0.95
+    rewards = torch.tensor([[1.0, 1.0, 1.0, 1.0]])
+    values = torch.tensor([[0.0, 0.0, 0.0, 0.0]])
+    dones = torch.tensor([[0.0, 1.0, 0.0, 1.0]])
+    zero_boot = torch.zeros(1, 4)
+    reward_boot = torch.tensor([[0.0, 5.0, 0.0, 0.0]])
+    adv0, _ = compute_gae_vectorized(rewards, values, dones, zero_boot, gamma, lam)
+    adv_v, _ = compute_gae_vectorized(rewards, values, dones, reward_boot, gamma, lam)
+    assert not torch.allclose(adv0, adv_v)
+    assert torch.allclose(adv_v[0, 1], torch.tensor(1.0 + gamma * 5.0), atol=1e-5)
+
+    costs = torch.tensor([[0.0, 1.0, 0.0, 0.0]])
+    cost_values = torch.tensor([[0.2, 0.2, 0.2, 0.2]])
+    cost_boot = torch.tensor([[0.0, 0.8, 0.0, 0.0]])
+    cadv0, _ = compute_gae_vectorized(costs, cost_values, dones, zero_boot, gamma, lam)
+    cadv_v, _ = compute_gae_vectorized(costs, cost_values, dones, cost_boot, gamma, lam)
+    assert not torch.allclose(cadv0, cadv_v)
+    assert torch.allclose(
+        cadv_v[0, 1], torch.tensor(1.0 + gamma * 0.8 - 0.2), atol=1e-5,
+    )

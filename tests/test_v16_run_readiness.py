@@ -19,9 +19,9 @@ def test_final_pipeline_run_readiness_passes_current_repo():
 
 
 def test_final_pipeline_run_readiness_flags_stale_notebook(tmp_path):
-    # A stale notebook (old per-version shield-probe cells, no full v34 training and no
-    # inline honest sweep) must be flagged: the final entry point trains v34 then sweeps
-    # the raw policy and the shielded system.
+    # A stale notebook (old per-version shield-probe cells, no v39 training and no
+    # inline honest sweep) must be flagged: the final entry point trains v39 then
+    # sweeps the learned policy with action_shield=False.
     notebook = {
         "cells": [
             {"cell_type": "code", "source": "BASE_CHECKPOINT = 'sncp_ppo_v34.pt'\n"},
@@ -31,13 +31,13 @@ def test_final_pipeline_run_readiness_flags_stale_notebook(tmp_path):
     (tmp_path / "sncp_ppo_colab.ipynb").write_text(json.dumps(notebook), encoding="utf-8")
     package_dir = tmp_path / "sncp_ppo"
     package_dir.mkdir()
-    for name in ("action_shield.py", "train.py", "eval_report.py"):
+    for name in ("action_shield.py", "risk_labeler.py", "train.py", "eval_report.py"):
         (package_dir / name).write_text("stub\n", encoding="utf-8")
 
     summary = verify_v16_run_ready(tmp_path)
 
     assert summary.status == "fail"
-    assert any("v34 training" in note for note in summary.notes)
+    assert any("v39 training" in note for note in summary.notes)
     assert any("honest multi-seed sweep" in note for note in summary.notes)
     assert any("statistical analysis" in note for note in summary.notes)
 
@@ -65,7 +65,7 @@ def test_colab_download_cell_bundles_final_artifacts():
     assert len(persist_cells) == 1
     persist_cell = persist_cells[0]
     assert "zipfile.ZipFile" in persist_cell
-    assert "sncp_ppo_v38_final_artifacts.zip" in persist_cell
-    assert "checkpoints/sncp_ppo_v34.pt" in persist_cell
-    assert "v38_multiseed_result.json" in persist_cell
+    assert "sncp_ppo_v39_final_artifacts.zip" in persist_cell
+    assert "checkpoints/sncp_ppo_v39.pt" in persist_cell
+    assert "v39_multiseed_result.json" in persist_cell
     assert "files.download(bundle)" in persist_cell

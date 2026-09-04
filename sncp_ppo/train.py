@@ -10,8 +10,9 @@ import numpy as np
 import torch
 
 from crowd_sim.crowd_env import CrowdSimEnv, PAPER_SCENARIO_CONFIG
-from sncp_ppo.models import SNCPPolicy, build_policy_for_checkpoint
+from sncp_ppo.models import SNCPPolicy, build_policy_for_checkpoint, checkpoint_has_risk_head, _is_risk_head_key
 from sncp_ppo.ppo import PPOAgent
+from sncp_ppo.risk_labeler import label_short_horizon_risk, label_vectorized_envs
 
 
 def set_seed(seed):
@@ -198,6 +199,10 @@ UPDATE_DIAGNOSTIC_COLUMNS = [
     'std_angular',
     'return_rms_std',
     'hh_gate',
+    'lagrange_lambda',
+    'risk_bce',
+    'risk_huber',
+    'mean_cost',
 ]
 
 
@@ -229,6 +234,10 @@ def update_diagnostic_row(policy, agent):
         f"{std1:.6f}",
         f"{float(agent.return_rms.std):.6f}",
         hh_gate,
+        f"{float(getattr(agent, 'lagrange_lambda', 0.0)):.6f}",
+        f"{float(getattr(agent, 'last_risk_bce', 0.0)):.6f}",
+        f"{float(getattr(agent, 'last_risk_huber', 0.0)):.6f}",
+        f"{float(getattr(agent, 'last_mean_cost', 0.0)):.6f}",
     ]
 
 
@@ -295,7 +304,8 @@ def _assert_forward_equivalent(base, upgraded, device, atol=1e-6):
 
 
 def build_upgraded_policy(state_dict, *, robot_vpref, robot_wmax, device,
-                          hh_attn_heads=4, cv_horizons=(1, 2, 3, 4), cv_dt=0.25):
+                          hh_attn_heads=4, cv_horizons=(1, 2, 3, 4), cv_dt=0.25,
+                          risk_head=False):
     """Add the zero-gated v37 HH+CV branch to a pre-v37 checkpoint safely."""
     base = build_policy_for_checkpoint(
         state_dict, robot_vpref=robot_vpref, robot_wmax=robot_wmax
@@ -324,9 +334,13 @@ def build_upgraded_policy(state_dict, *, robot_vpref, robot_wmax, device,
         hh_attn_heads=hh_attn_heads,
         cv_horizons=cv_horizons,
         cv_dt=cv_dt,
+        risk_head=bool(risk_head) or getattr(base, 'risk_head', False),
     ).to(device)
     missing, unexpected = upgraded.load_state_dict(state_dict, strict=False)
-    unsafe_missing = [key for key in missing if not _is_v37_upgrade_key(key)]
+    unsafe_missing = [
+        key for key in missing
+        if not _is_v37_upgrade_key(key) and not _is_risk_head_key(key)
+    ]
     if unsafe_missing or unexpected:
         raise RuntimeError(
             "unsafe checkpoint upgrade: load mismatch; "
@@ -344,6 +358,10 @@ def _load_checkpoint(path, device):
         return torch.load(path, map_location=device)
 
 
+def _want_risk_head(args):
+    return bool(getattr(args, 'risk_head', False) or getattr(args, 'lagrange_ppo', False))
+
+
 def build_or_load_policy(args, env, device):
     """Build the SNCP policy, optionally initializing it from a checkpoint.
 
@@ -358,11 +376,24 @@ def build_or_load_policy(args, env, device):
         raise ValueError("--init_checkpoint and --upgrade_checkpoint are mutually exclusive")
     if init_ckpt:
         state = _load_checkpoint(init_ckpt, device)
+        want_risk = _want_risk_head(args)
+        detected_risk = checkpoint_has_risk_head(state)
         policy = build_policy_for_checkpoint(
-            state, robot_vpref=env.robot_vpref, robot_wmax=env.robot_wmax
+            state, robot_vpref=env.robot_vpref, robot_wmax=env.robot_wmax,
+            risk_head=True if want_risk else None,
         ).to(device)
-        policy.load_state_dict(state)
-        print(f"Initialized policy from {init_ckpt} (IL warm-start)")
+        if want_risk and not detected_risk:
+            missing, unexpected = policy.load_state_dict(state, strict=False)
+            unsafe_missing = [key for key in missing if not _is_risk_head_key(key)]
+            if unsafe_missing or unexpected:
+                raise RuntimeError(
+                    "unsafe risk-head attach: checkpoint mismatch; "
+                    f"missing={list(missing)}, unexpected={list(unexpected)}"
+                )
+            print(f"Initialized policy from {init_ckpt} and attached a fresh v39 risk head")
+        else:
+            policy.load_state_dict(state)
+            print(f"Initialized policy from {init_ckpt} (IL warm-start)")
         return policy
     if upgrade_ckpt:
         state = _load_checkpoint(upgrade_ckpt, device)
@@ -374,7 +405,12 @@ def build_or_load_policy(args, env, device):
             hh_attn_heads=getattr(args, 'hh_attn_heads', 4),
             cv_horizons=getattr(args, 'cv_horizons', (1, 2, 3, 4)),
             cv_dt=getattr(args, 'cv_dt', 0.25),
+            risk_head=_want_risk_head(args),
         )
+        if _want_risk_head(args) and not getattr(policy, 'risk_head', False):
+            raise RuntimeError(
+                "--lagrange_ppo/--risk_head requires a risk head; upgrade did not attach one"
+            )
         print(
             f"Upgraded policy from {upgrade_ckpt} with zero-gated HH intent graph "
             f"(heads={policy.hh_attn_heads}, horizons={policy.cv_horizons}, dt={policy.cv_dt})"
@@ -395,6 +431,7 @@ def build_or_load_policy(args, env, device):
         hh_attn_heads=getattr(args, 'hh_attn_heads', 4),
         cv_horizons=getattr(args, 'cv_horizons', (1, 2, 3, 4)),
         cv_dt=getattr(args, 'cv_dt', 0.25),
+        risk_head=_want_risk_head(args),
     ).to(device)
 
 
@@ -453,7 +490,20 @@ def train(args):
         lr_end_factor=args.lr_end_factor,
         target_kl=args.target_kl,
         c2=args.ent_coef,
+        risk_bce_coef=getattr(args, 'risk_bce_coef', 1.0),
+        risk_clearance_coef=getattr(args, 'risk_clearance_coef', 0.1),
+        use_lagrange=bool(getattr(args, 'lagrange_ppo', False)),
+        lagrange_cost_limit=getattr(args, 'lagrange_cost_limit', 0.05),
+        lagrange_lr=getattr(args, 'lagrange_lr', 0.01),
+        lagrange_lambda_init=getattr(args, 'lagrange_lambda_init', 0.0),
+        lagrange_lambda_max=getattr(args, 'lagrange_lambda_max', 10.0),
     )
+    if getattr(policy, 'risk_head', False):
+        print(
+            f"v39 risk head ON (not a runtime shield) | lagrange={bool(getattr(args, 'lagrange_ppo', False))} "
+            f"| horizon={int(getattr(args, 'risk_horizon', 6))} steps | "
+            f"cost_limit={getattr(args, 'lagrange_cost_limit', 0.05)}"
+        )
 
     # Defensive: if `checkpoints` exists as a *file* (e.g. left over from a
     # crashed run or a Colab artifact), os.makedirs would raise FileExistsError
@@ -591,12 +641,27 @@ def train(args):
             action, log_prob, value, h_states_next = agent.select_action(obs, h_states, device)
             env_action = PPOAgent.clip_action_for_env(action, env.robot_vpref, env.robot_wmax)
 
+            coll_label = 0.0
+            clearance_label = 0.0
+            cost_value = 0.0
+            if getattr(policy, 'risk_head', False):
+                risk_label = label_short_horizon_risk(
+                    env, env_action, horizon_steps=int(getattr(args, 'risk_horizon', 6)),
+                )
+                coll_label = risk_label.collision
+                clearance_label = risk_label.min_clearance
+                if policy.last_cost_value is not None:
+                    cost_value = float(policy.last_cost_value.detach().cpu().reshape(-1)[0])
+
             next_obs, reward, terminated, truncated, info = env.step(env_action)
 
             # mask = 1 means "the world keeps going from here": true unless terminated
             # (truncation is a soft boundary handled via bootstrap value below).
             mask = 0.0 if terminated else 1.0
-            agent.memory.store(obs, h_states, action, log_prob, reward, value, mask)
+            agent.memory.store(
+                obs, h_states, action, log_prob, reward, value, mask,
+                coll_label=coll_label, clearance_label=clearance_label, cost_value=cost_value,
+            )
 
             obs = next_obs
             h_states = h_states_next
@@ -610,9 +675,15 @@ def train(args):
             with torch.no_grad():
                 _, _, next_value_tensor, _ = policy(_obs_to_tensor(next_obs, device), h_states_next)
                 bootstrap_value = next_value_tensor.item()
+                bootstrap_cost = (
+                    float(policy.last_cost_value.detach().cpu().reshape(-1)[0])
+                    if getattr(policy, 'risk_head', False) and policy.last_cost_value is not None
+                    else 0.0
+                )
         else:
             bootstrap_value = 0.0
-        agent.memory.end_episode(bootstrap_value=bootstrap_value)
+            bootstrap_cost = 0.0
+        agent.memory.end_episode(bootstrap_value=bootstrap_value, bootstrap_cost=bootstrap_cost)
 
         success_history.append(float(info['success']))
         collision_history.append(float(info['collision']))
@@ -871,6 +942,44 @@ def _vec_episode_flags(info, i):
     return flag('success'), flag('collision')
 
 
+def _final_obs_row(info, env_index):
+    """s_final for env i if SAME_STEP autoreset stashed it in info; else None."""
+    finals = info.get('final_observation')
+    if finals is None:
+        finals = info.get('final_obs')
+    if finals is None:
+        return None
+    if isinstance(finals, dict):
+        first = next(iter(finals.values()), None)
+        if isinstance(first, np.ndarray) and first.shape[:1] and first.shape[0] > env_index:
+            return {key: np.asarray(value[env_index]) for key, value in finals.items()}
+        return None
+    try:
+        item = finals[env_index]
+    except (IndexError, KeyError, TypeError):
+        return None
+    if item is None or not isinstance(item, dict):
+        return None
+    return item
+
+
+def overlay_truncation_obs(next_obs, info, trunc_indices):
+    """Batch obs whose truncated rows are s_final, not auto-reset s0.
+
+    Gymnasium SAME_STEP stores s_final in info['final_observation']. NEXT_STEP
+    (1.0 default) already returns s_final as next_obs, so this is a no-op.
+    """
+    out = {key: np.array(value, copy=True) for key, value in next_obs.items()}
+    for i in trunc_indices:
+        row = _final_obs_row(info, int(i))
+        if row is None:
+            continue
+        for key, value in row.items():
+            if key in out:
+                out[key][int(i)] = value
+    return out
+
+
 def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, csv_file):
     """Vectorized rollout with step-budgeted curriculum and holdout eval.
 
@@ -1008,6 +1117,14 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
             act_np = action.cpu().numpy().copy()
             act_np[:, 0] = np.clip(act_np[:, 0], 0.0, env.robot_vpref)
             act_np[:, 1] = np.clip(act_np[:, 1], -env.robot_wmax, env.robot_wmax)
+            coll_t = clr_t = cost_v = None
+            if getattr(policy, 'risk_head', False):
+                coll_np, clr_np = label_vectorized_envs(
+                    envs, act_np, horizon_steps=int(getattr(args, 'risk_horizon', 6)),
+                )
+                coll_t = torch.tensor(coll_np, dtype=torch.float32, device=device)
+                clr_t = torch.tensor(clr_np, dtype=torch.float32, device=device)
+                cost_v = policy.last_cost_value.squeeze(-1).detach()
             next_obs, reward, term, trunc, info = envs.step(act_np)
             done = np.logical_or(term, trunc)
             set_envs_vpref(envs, vpref)
@@ -1025,22 +1142,41 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
             done_t = torch.tensor(done, dtype=torch.float32, device=device)
             reward_t = torch.tensor(reward, dtype=torch.float32, device=device)
             mask_t = torch.tensor(1.0 - term.astype('float32'), device=device)
+            trunc_only = np.logical_and(trunc, np.logical_not(term))
+            boot_t = torch.zeros(N, device=device)
+            cost_boot_t = torch.zeros(N, device=device)
+            if np.any(trunc_only):
+                trunc_idx = np.nonzero(trunc_only)[0]
+                boot_obs = overlay_truncation_obs(next_obs, info, trunc_idx)
+                with torch.no_grad():
+                    _, _, v_final, _ = policy(to_tensor(boot_obs), h_next)
+                trunc_mask = torch.tensor(trunc_only.astype('float32'), device=device)
+                boot_t = v_final.squeeze(-1) * trunc_mask
+                if getattr(policy, 'risk_head', False) and policy.last_cost_value is not None:
+                    cost_boot_t = policy.last_cost_value.squeeze(-1) * trunc_mask
             buf.store(obs=obs_t, hidden=h, actions=action, log_probs=log_prob,
                       rewards=reward_t, values=value.squeeze(-1),
-                      dones=done_t, masks=mask_t)
+                      dones=done_t, masks=mask_t,
+                      coll_labels=coll_t, clearance_labels=clr_t, cost_values=cost_v,
+                      bootstrap=boot_t, cost_bootstrap=cost_boot_t)
             obs_np = next_obs
             h = reset_hidden_where_done(h_next, done_t, H)
             total_steps += N
 
         with torch.no_grad():
             last_v = policy(to_tensor(obs_np), h)[2].squeeze(-1)
+            last_cost = (
+                policy.last_cost_value.squeeze(-1)
+                if getattr(policy, 'risk_head', False) and policy.last_cost_value is not None
+                else None
+            )
         # last_dones = whether each env *terminated* on the final rollout step
         # (term from the last loop iteration). Passing zeros (the old bug) gave a
         # terminated-at-horizon env a nonzero bootstrap V(auto-reset_s0), biasing
         # its return upward — and with timeout=0% in this env, episodes terminate
         # frequently right at the horizon. last_dones=term zeros that bootstrap.
         last_dones = torch.tensor(term.astype('float32'), device=device)
-        buf.finish(last_values=last_v, last_dones=last_dones)
+        buf.finish(last_values=last_v, last_dones=last_dones, last_cost_values=last_cost)
         agent.update_vectorized(buf, device)
         update_idx += 1
 
@@ -1129,9 +1265,15 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
             replay_mark = "R" if is_replay_update else " "
             gate = _policy_hh_gate(policy)
             gate_text = "" if gate is None else f" gate={gate:+.5f}"
+            lag_text = ""
+            if getattr(agent, 'use_lagrange', False) or getattr(policy, 'risk_head', False):
+                lag_text = (
+                    f" λ={agent.lagrange_lambda:.3f} bce={agent.last_risk_bce:.3f} "
+                    f"cost={agent.last_mean_cost:.3f}"
+                )
             print(f"Update {update_idx} | step {total_steps}/{args.total_steps} [{scenario} {H}h] | "
                   f"[{replay_mark}] ent={agent.last_entropy:+.3f} kl={agent.last_approx_kl:.5f} "
-                  f"std=[{std0:.3f},{std1:.3f}] rms={agent.return_rms.std:.2f}{gate_text}")
+                  f"std=[{std0:.3f},{std1:.3f}] rms={agent.return_rms.std:.2f}{gate_text}{lag_text}")
 
     envs.close()
     # I/O-robust final save: on Colab the save dir may sit behind a Drive FUSE
@@ -1290,6 +1432,29 @@ def build_parser():
                              'backward-compatible). The Beta head (v34) has a different entropy '
                              'scale; v36 lowers this (e.g. 0.001) to prevent over-diffusion. '
                              'Training-time only; does not affect evaluation.')
+    parser.add_argument('--risk_head', action='store_true',
+                        help='v39: attach a tiny fusion-level risk head (p_coll + min_clearance). '
+                             'Old checkpoints still load without this flag (auto-detect). '
+                             'This is NOT a runtime action shield; inference is one forward pass.')
+    parser.add_argument('--lagrange_ppo', action='store_true',
+                        help='v39: PPO-Lagrangian on privileged short-horizon collision cost. '
+                             'Implies --risk_head. Dual variable λ ascends when E[collision] '
+                             'exceeds --lagrange_cost_limit. Eval/deploy keep the action shield OFF.')
+    parser.add_argument('--risk_horizon', type=int, default=6,
+                        help='Privileged CV label horizon in steps (default 6 = 1.5s at dt=0.25). '
+                             'Offline labeler only; not used at inference.')
+    parser.add_argument('--risk_bce_coef', type=float, default=1.0,
+                        help='Weight on BCE(p_coll, privileged collision) (v39).')
+    parser.add_argument('--risk_clearance_coef', type=float, default=0.1,
+                        help='Weight on Huber(min_clearance, privileged clearance) (v39).')
+    parser.add_argument('--lagrange_cost_limit', type=float, default=0.05,
+                        help='Target expected privileged collision rate d for the v39 dual.')
+    parser.add_argument('--lagrange_lr', type=float, default=0.01,
+                        help='Dual ascent step size α_λ (v39).')
+    parser.add_argument('--lagrange_lambda_init', type=float, default=0.0,
+                        help='Initial Lagrange multiplier λ (v39).')
+    parser.add_argument('--lagrange_lambda_max', type=float, default=10.0,
+                        help='Upper clip on λ so the constraint cannot overwhelm the task reward.')
     parser.add_argument('--bootstrap_easy_steps', type=int, default=0,
                         help='Probe mode only: run an easy/1 warmup for this many env steps '
                              'before the --fixed_scenario phase. Cold-starting at fixed N=5 '

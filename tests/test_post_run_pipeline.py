@@ -263,28 +263,57 @@ def test_versioned_post_eval_cli_derives_paths_from_version(tmp_path, monkeypatc
     assert "Overall status: pass" in capsys.readouterr().out
 
 
-def test_notebook_is_v34_train_plus_v38_shield():
-    # The final notebook is one end-to-end pipeline: train v34 (Beta) from scratch, then
-    # an inline honest sweep that evaluates the raw policy (shield off) and the shielded
-    # system (shield on) on the SAME checkpoint.
+def test_notebook_is_v39_train_plus_optional_v38_oracle():
+    # Final notebook: optional v34 warm-start, v39 smoke, v39 full train (risk head +
+    # Lagrangian). Primary eval is v39 with action_shield=False. v34 raw / v34+v38
+    # shield remain an optional C0/C1 oracle, not the recommended deploy path.
     code = _colab_code_sources()
     train_cells = [s for s in code if "python -m sncp_ppo.train" in s]
     sweep_cells = [s for s in code if "def honest_sweep(" in s]
-    assert len(train_cells) == 1 and len(sweep_cells) == 1
-    train, sweep = train_cells[0], sweep_cells[0]
-    # final policy = v34 Beta, full training run (not a probe)
-    assert "--action_dist beta" in train
-    assert "--ent_coef 0.001" in train
-    assert "--save_path checkpoints/sncp_ppo_v34.pt" in train
-    assert "--total_steps 2500000" in train
-    assert "checkpoints/sncp_ppo_v36.pt" not in train
-    assert "checkpoints/sncp_ppo_v37.pt" not in train
-    # honest sweep: raw (shield off) + shielded (shield on) -> two result files
+    assert len(train_cells) == 3 and len(sweep_cells) == 1
+    v34 = next(s for s in train_cells if "--save_path checkpoints/sncp_ppo_v34.pt" in s)
+    smoke = next(s for s in train_cells if "sncp_ppo_v39_smoke.pt" in s)
+    v39 = next(
+        s for s in train_cells
+        if "--save_path checkpoints/sncp_ppo_v39.pt" in s and "v39_smoke" not in s
+    )
+    sweep = sweep_cells[0]
+
+    assert "--action_dist beta" in v34
+    assert "--ent_coef 0.001" in v34
+    assert "--total_steps 2500000" in v34
+
+    assert "--risk_head" in smoke
+    assert "--lagrange_ppo" in smoke
+    assert "--total_steps 64" in smoke
+    assert "--init_checkpoint checkpoints/sncp_ppo_v34.pt" in smoke
+
+    for token in (
+        "--risk_head --lagrange_ppo",
+        "--risk_horizon 6",
+        "--risk_bce_coef 1.0 --risk_clearance_coef 0.1",
+        "--lagrange_cost_limit 0.05 --lagrange_lr 0.01",
+        "--total_steps 2500000",
+        "--init_checkpoint checkpoints/sncp_ppo_v34.pt",
+        "--save_path checkpoints/sncp_ppo_v39.pt",
+        "--pre_mlp",
+        "--meanmax_pool",
+        "--action_dist beta",
+        "--ent_coef 0.001",
+    ):
+        assert token in v39
+    assert "--action_shield" not in v39
+    assert "checkpoints/sncp_ppo_v36.pt" not in v39
+    assert "checkpoints/sncp_ppo_v37.pt" not in v39
+
     assert "evaluate_density" in sweep
-    assert "honest_sweep(action_shield=False" in sweep
-    assert "honest_sweep(action_shield=True" in sweep
+    assert "action_shield=False" in sweep
+    assert "v39_multiseed_result.json" in sweep
+    assert "checkpoints/sncp_ppo_v39.pt" in sweep
+    assert "RUN_ORACLE_MATRIX" in sweep
     assert "v34_multiseed_result.json" in sweep
     assert "v38_multiseed_result.json" in sweep
+    assert "action_shield=True" in sweep
 
 
 def test_post_eval_cli_threads_regime_scaled_beeline_gate(tmp_path, monkeypatch):

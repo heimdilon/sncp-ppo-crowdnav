@@ -5,6 +5,10 @@ policy action at evaluation time by checking a short constant-velocity rollout o
 the robot and pedestrians. If the policy action is already predicted safe, it is
 returned unchanged; otherwise a small action lattice is scored for clearance,
 goal progress, and deviation from the policy action.
+
+v39 reuses the same CV rollout as an *offline training labeler*
+(``sncp_ppo.risk_labeler``). Do not call ``shield_action`` in the deployed
+policy path; v39 eval is shield-off.
 """
 
 from __future__ import annotations
@@ -14,6 +18,8 @@ from dataclasses import dataclass
 from typing import Iterable
 
 import numpy as np
+
+from sncp_ppo.risk_labeler import clip_action, constant_velocity_rollout
 
 
 @dataclass(frozen=True)
@@ -34,13 +40,7 @@ class ActionShieldConfig:
 
 
 def _clip_action(env, action: np.ndarray) -> np.ndarray:
-    return np.array(
-        [
-            np.clip(float(action[0]), 0.0, float(env.robot_vpref)),
-            np.clip(float(action[1]), -float(env.robot_wmax), float(env.robot_wmax)),
-        ],
-        dtype=np.float32,
-    )
+    return clip_action(env, action)
 
 
 def _candidate_actions(env, action: np.ndarray) -> Iterable[np.ndarray]:
@@ -84,32 +84,7 @@ def _candidate_actions(env, action: np.ndarray) -> Iterable[np.ndarray]:
 
 def _rollout_stats(env, action: np.ndarray, cfg: ActionShieldConfig) -> tuple[float, float, float]:
     """Return (min_distance, progress, final_speed) for a constant-velocity rollout."""
-    action = _clip_action(env, action)
-    dt = float(env.time_step)
-    px = float(env.robot_px)
-    py = float(env.robot_py)
-    theta = float(env.robot_theta)
-    v = float(action[0])
-    w = float(action[1])
-    humans_px = np.asarray(env.humans_px, dtype=float).copy()
-    humans_py = np.asarray(env.humans_py, dtype=float).copy()
-    humans_vx = np.asarray(env.humans_vx, dtype=float)
-    humans_vy = np.asarray(env.humans_vy, dtype=float)
-
-    start_goal_dist = math.hypot(float(env.robot_gx) - px, float(env.robot_gy) - py)
-    min_dist = math.inf
-    for _ in range(cfg.horizon_steps):
-        theta = (theta + w * dt + math.pi) % (2.0 * math.pi) - math.pi
-        px += v * math.cos(theta) * dt
-        py += v * math.sin(theta) * dt
-        humans_px = humans_px + humans_vx * dt
-        humans_py = humans_py + humans_vy * dt
-        if len(humans_px):
-            min_dist = min(min_dist, float(np.min(np.hypot(humans_px - px, humans_py - py))))
-
-    final_goal_dist = math.hypot(float(env.robot_gx) - px, float(env.robot_gy) - py)
-    progress = start_goal_dist - final_goal_dist
-    return min_dist, progress, v
+    return constant_velocity_rollout(env, action, cfg.horizon_steps)
 
 
 def min_predicted_clearance(env, action: np.ndarray, cfg: ActionShieldConfig) -> float:

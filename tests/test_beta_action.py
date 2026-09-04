@@ -145,6 +145,6 @@ def test_diagnostic_row_handles_beta_no_logstd():
         return_rms = _Rms()
 
     row = update_diagnostic_row(p, _Agent())
-    assert len(row) == 6
+    assert len(row) == 10
     assert row[2] == 'nan' and row[3] == 'nan'   # no global std for beta
     assert row[5] == ''                           # no HH gate on pre-v37 policy
