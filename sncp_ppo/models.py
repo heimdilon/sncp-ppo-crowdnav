@@ -20,7 +20,7 @@ class SNCPPolicy(nn.Module):
                  attn_count_scaling=False, meanmax_pool=False, node_units=128,
                  node_output=48, attn_heads=1, action_dist='gaussian', sense_range=0.0,
                  hh_intent_graph=False, hh_attn_heads=4,
-                 cv_horizons=(1, 2, 3, 4), cv_dt=0.25):
+                 cv_horizons=(1, 2, 3, 4), cv_dt=0.25, risk_head=False):
         super(SNCPPolicy, self).__init__()
 
         self.robot_vpref = robot_vpref
@@ -87,6 +87,22 @@ class SNCPPolicy(nn.Module):
                 batch_first=True,
             )
             self.hh_gate = nn.Parameter(torch.tensor(0.0))
+
+        # v39: tiny fusion-level risk head. Conditional so every pre-v39
+        # checkpoint keeps the same state-dict surface. Predicts a short-horizon
+        # collision probability and a non-negative min-clearance from the node
+        # fusion features; trained with privileged CV labels, then discarded as
+        # a runtime controller — inference stays one forward pass, no shield.
+        self.risk_head = bool(risk_head)
+        self.last_p_coll = None
+        self.last_min_clearance = None
+        if self.risk_head:
+            self.register_buffer('_risk_head', torch.tensor(1.0))
+            self.risk_mlp = nn.Sequential(
+                nn.Linear(256, 32),
+                nn.ReLU(),
+                nn.Linear(32, 2),
+            )
 
         # 1. Robot Node Encoder (MLP)
         # Input robot_node: [dg_local_x, dg_local_y, v_linear, dist_to_goal, vpref, radius, w_angular] (dim 7)
@@ -253,6 +269,12 @@ class SNCPPolicy(nn.Module):
         for m in linears[:-1]:
             _orthogonal_linear(m, gain=sqrt2)
         _orthogonal_linear(linears[-1], gain=1.0)
+
+        if self.risk_head:
+            risk_linears = [m for m in self.risk_mlp if isinstance(m, nn.Linear)]
+            for m in risk_linears[:-1]:
+                _orthogonal_linear(m, gain=sqrt2)
+            _orthogonal_linear(risk_linears[-1], gain=1.0)
 
     def init_hidden(self, batch_size, num_humans, device):
         h_temp = torch.zeros(batch_size, self.temporal_wiring.units, device=device)
@@ -478,6 +500,17 @@ class SNCPPolicy(nn.Module):
         
         # State value
         value = self.critic(sf)  # [batch_size, 1]
+
+        # v39 risk head (optional): p_coll in (0,1), min_clearance >= 0.
+        # Stored on the module so the 4-tuple actor/critic contract is unchanged
+        # and old callers (eval, waffle_ros, PPO unroll) keep unpacking four values.
+        if self.risk_head:
+            risk_raw = self.risk_mlp(sf)
+            self.last_p_coll = torch.sigmoid(risk_raw[:, 0:1])
+            self.last_min_clearance = F.softplus(risk_raw[:, 1:2])
+        else:
+            self.last_p_coll = None
+            self.last_min_clearance = None
         
         if h_spat.dim() == 3:
             h_spat_new = h_spat_new_flat.reshape(batch_size, num_humans, -1)
@@ -493,12 +526,26 @@ class SNCPPolicy(nn.Module):
         return out1, out2, value, new_hidden_states
 
 
-def build_policy_for_checkpoint(state_dict, robot_vpref=0.26, robot_wmax=1.8):
+def checkpoint_has_risk_head(state_dict):
+    return '_risk_head' in state_dict or any(
+        key.startswith('risk_mlp.') for key in state_dict
+    )
+
+
+def _is_risk_head_key(key):
+    return key == '_risk_head' or key.startswith('risk_mlp.')
+
+
+def build_policy_for_checkpoint(state_dict, robot_vpref=0.26, robot_wmax=1.8,
+                                risk_head=None):
     """Construct an SNCPPolicy whose architecture matches a saved state dict.
 
     Checkpoints are plain `policy.state_dict()` files; the only architecture
     variant is the paper-Eq-11 pre-MLP (v22+), detectable from its keys. Old
     checkpoints (v14..v21) have no `*_pre_mlp` keys and get the legacy layout.
+    Pass risk_head=True to attach a fresh v39 head on top of a pre-v39
+    checkpoint (training-only); eval leaves this None so auto-detect preserves
+    old weights byte-for-byte.
     """
     pre_mlp = any(key.startswith('temporal_pre_mlp') for key in state_dict)
     attn_count_scaling = '_attn_count_scaling' in state_dict
@@ -519,10 +566,13 @@ def build_policy_for_checkpoint(state_dict, robot_vpref=0.26, robot_wmax=1.8):
     cv_horizons = tuple(float(value) for value in cvh.tolist()) if cvh is not None else (1, 2, 3, 4)
     cvdt = state_dict.get('_cv_dt')
     cv_dt = float(cvdt.item()) if cvdt is not None else 0.25
+    detected_risk = checkpoint_has_risk_head(state_dict)
+    if risk_head is None:
+        risk_head = detected_risk
     return SNCPPolicy(robot_vpref=robot_vpref, robot_wmax=robot_wmax,
                       pre_mlp=pre_mlp, attn_count_scaling=attn_count_scaling,
                       meanmax_pool=meanmax_pool, node_units=node_units,
                       node_output=node_output, attn_heads=attn_heads,
                       action_dist=action_dist, sense_range=sense_range,
                       hh_intent_graph=hh_intent_graph, hh_attn_heads=hh_attn_heads,
-                      cv_horizons=cv_horizons, cv_dt=cv_dt)
+                      cv_horizons=cv_horizons, cv_dt=cv_dt, risk_head=risk_head)

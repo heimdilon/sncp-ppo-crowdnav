@@ -92,9 +92,14 @@ class VectorizedRolloutBuffer:
         self.values = []              # each: (N,)
         self.dones = []               # each: (N,)
         self.masks = []               # each: (N,)  (1 - terminated)
+        self.coll_labels = []         # each: (N,) privileged short-horizon collision
+        self.clearance_labels = []    # each: (N,) privileged min clearance (>=0)
+        self.cost_values = []         # each: (N,) rollout p_coll used as V_cost
         self.bootstrap_values = None  # (N, T), filled by finish() in a later task
+        self.bootstrap_costs = None   # (N, T), v39 cost-critic bootstrap
 
-    def store(self, obs, hidden, actions, log_probs, rewards, values, dones, masks):
+    def store(self, obs, hidden, actions, log_probs, rewards, values, dones, masks,
+              coll_labels=None, clearance_labels=None, cost_values=None):
         self.obs_robot_node.append(obs['robot_node'].detach().clone())
         self.obs_spatial_edges.append(obs['spatial_edges'].detach().clone())
         self.obs_temporal_edges.append(obs['temporal_edges'].detach().clone())
@@ -110,8 +115,17 @@ class VectorizedRolloutBuffer:
         self.values.append(torch.as_tensor(values, dtype=torch.float32).detach().clone())
         self.dones.append(torch.as_tensor(dones, dtype=torch.float32).detach().clone())
         self.masks.append(torch.as_tensor(masks, dtype=torch.float32).detach().clone())
+        if coll_labels is None:
+            coll_labels = torch.zeros(self.N, dtype=torch.float32)
+        if clearance_labels is None:
+            clearance_labels = torch.zeros(self.N, dtype=torch.float32)
+        if cost_values is None:
+            cost_values = torch.zeros(self.N, dtype=torch.float32)
+        self.coll_labels.append(torch.as_tensor(coll_labels, dtype=torch.float32).detach().clone())
+        self.clearance_labels.append(torch.as_tensor(clearance_labels, dtype=torch.float32).detach().clone())
+        self.cost_values.append(torch.as_tensor(cost_values, dtype=torch.float32).detach().clone())
 
-    def finish(self, last_values, last_dones):
+    def finish(self, last_values, last_dones, last_cost_values=None):
         """Finalize the rollout: build the (N, T) bootstrap tensor and mark the
         horizon end as a done boundary so GAE cuts there.
 
@@ -135,11 +149,20 @@ class VectorizedRolloutBuffer:
         done_device = self.dones[-1].device if self.dones else last_values.device
         self.dones[T - 1] = torch.ones(N, device=done_device)                # force horizon-end done for GAE cut
         self.bootstrap_values = boot
+        cost_boot = torch.zeros(N, T, device=last_values.device)
+        if last_cost_values is not None:
+            last_cost_values = torch.as_tensor(
+                last_cost_values, dtype=torch.float32, device=last_values.device,
+            )
+            cost_boot[:, T - 1] = last_cost_values * last_mask
+        self.bootstrap_costs = cost_boot
 
     def get_tensors(self, device):
         def stack(lst):
             return torch.stack(lst, dim=1).to(device)  # (N, T, ...)
         bootstrap = self.bootstrap_values if self.bootstrap_values is not None \
+            else torch.zeros(self.N, self.T, device=device)
+        cost_bootstrap = self.bootstrap_costs if self.bootstrap_costs is not None \
             else torch.zeros(self.N, self.T, device=device)
         return {
             'obs': {
@@ -157,4 +180,8 @@ class VectorizedRolloutBuffer:
             'dones': stack(self.dones),
             'masks': stack(self.masks),
             'bootstrap_values': bootstrap.to(device),
+            'coll_labels': stack(self.coll_labels) if self.coll_labels else torch.zeros(self.N, self.T, device=device),
+            'clearance_labels': stack(self.clearance_labels) if self.clearance_labels else torch.zeros(self.N, self.T, device=device),
+            'cost_values': stack(self.cost_values) if self.cost_values else torch.zeros(self.N, self.T, device=device),
+            'bootstrap_costs': cost_bootstrap.to(device),
         }
