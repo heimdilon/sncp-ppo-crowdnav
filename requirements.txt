@@ -4,7 +4,9 @@
 # Deep learning framework
 torch>=2.0
 
-# Liquid Time Constant networks (custom recurrent cells used by SNCPPolicy)
+# Liquid Time-Constant (LTC) and Closed-form Continuous-time (CfC) NCP cells
+# (ncps.torch.LTC / ncps.torch.CfC + AutoNCP wiring). CfC is optional; default
+# SNCPPolicy stays LTC. 0.0.5 already ships CfC.
 ncps>=0.0.5
 
 # RL environment API

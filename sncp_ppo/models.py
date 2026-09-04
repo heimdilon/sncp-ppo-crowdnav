@@ -3,8 +3,17 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from ncps.torch import LTC
+from ncps.torch import CfC, LTC
 from ncps.wirings import AutoNCP
+
+
+VALID_CELL_TYPES = ('ltc', 'cfc')
+_LTC_MODULE_PREFIXES = ('temporal_ltc.', 'spatial_ltc.', 'node_ltc.')
+_CFC_MODULE_PREFIXES = ('temporal_cfc.', 'spatial_cfc.', 'node_cfc.')
+
+
+class CellTypeMismatchError(ValueError):
+    """LTC and CfC encoder weights are not interchangeable."""
 
 
 def _orthogonal_linear(layer, gain):
@@ -20,11 +29,13 @@ class SNCPPolicy(nn.Module):
                  attn_count_scaling=False, meanmax_pool=False, node_units=128,
                  node_output=48, attn_heads=1, action_dist='gaussian', sense_range=0.0,
                  hh_intent_graph=False, hh_attn_heads=4,
-                 cv_horizons=(1, 2, 3, 4), cv_dt=0.25, risk_head=False):
+                 cv_horizons=(1, 2, 3, 4), cv_dt=0.25, risk_head=False,
+                 cell_type='ltc'):
         super(SNCPPolicy, self).__init__()
 
         self.robot_vpref = robot_vpref
         self.robot_wmax = robot_wmax
+        self.cell_type = _normalize_cell_type(cell_type)
         self.pre_mlp = pre_mlp
         # Paper Eq 13 scales attention scores by n/sqrt(d_k) (n = #humans); we
         # historically used 1/sqrt(d_k), making the pooled vector a pure
@@ -108,6 +119,13 @@ class SNCPPolicy(nn.Module):
             # collision classifier used only in L_risk BCE).
             self.cost_critic = nn.Linear(256, 1)
 
+        # Side-research CfC marker. Registered ONLY when cell_type='cfc' so
+        # default LTC checkpoints stay byte-identical (same pattern as pre_mlp
+        # / risk_head). build_policy_for_checkpoint auto-detects from this
+        # buffer or from temporal_cfc.* keys.
+        if self.cell_type == 'cfc':
+            self.register_buffer('_cell_type_cfc', torch.tensor(1.0))
+
         # 1. Robot Node Encoder (MLP)
         # Input robot_node: [dg_local_x, dg_local_y, v_linear, dist_to_goal, vpref, radius, w_angular] (dim 7)
         self.robot_mlp = nn.Sequential(
@@ -137,9 +155,9 @@ class SNCPPolicy(nn.Module):
                 nn.Linear(128, 256),
                 nn.ReLU(),
             )
-            self.temporal_ltc = LTC(input_size=256, units=self.temporal_wiring)
+            self._set_ncp_cell('temporal', input_size=256, wiring=self.temporal_wiring)
         else:
-            self.temporal_ltc = LTC(input_size=2, units=self.temporal_wiring)
+            self._set_ncp_cell('temporal', input_size=2, wiring=self.temporal_wiring)
         self.temporal_proj = nn.Linear(self.temporal_wiring.output_dim, 256)
 
         # 3. Spatial Edge Encoder — sparse NCP. Raw input dim 6:
@@ -155,9 +173,9 @@ class SNCPPolicy(nn.Module):
                 nn.Linear(128, 256),
                 nn.ReLU(),
             )
-            self.spatial_ltc = LTC(input_size=256, units=self.spatial_wiring)
+            self._set_ncp_cell('spatial', input_size=256, wiring=self.spatial_wiring)
         else:
-            self.spatial_ltc = LTC(input_size=6, units=self.spatial_wiring)
+            self._set_ncp_cell('spatial', input_size=6, wiring=self.spatial_wiring)
         self.spatial_proj = nn.Linear(self.spatial_wiring.output_dim, 256)
         
         # 4. Attention Pooling weights
@@ -189,8 +207,11 @@ class SNCPPolicy(nn.Module):
         # flagged as the capacity ceiling).
         self.node_units, self.node_output = node_units, node_output
         self.node_wiring = AutoNCP(units=node_units, output_size=node_output, seed=48203)
-        self.node_ltc = LTC(input_size=640, units=self.node_wiring)
+        self._set_ncp_cell('node', input_size=640, wiring=self.node_wiring)
         self.node_proj = nn.Linear(self.node_wiring.output_dim, 256)
+        if self.cell_type == 'cfc':
+            self.register_buffer('_cfc_node_units', torch.tensor(float(self.node_units)))
+            self.register_buffer('_cfc_node_output', torch.tensor(float(self.node_output)))
         
         # 6. Actor & Critic Heads
         # action_dist='gaussian' (default): mean head (2) + global logstd; mean is
@@ -227,6 +248,19 @@ class SNCPPolicy(nn.Module):
             nn.Linear(64, 1)
         )
         self._init_linear_weights()
+
+    def _set_ncp_cell(self, name, input_size, wiring):
+        """Attach temporal/spatial/node as *_ltc (default) or *_cfc.
+
+        Module names stay distinct so LTC and CfC checkpoints cannot load into
+        each other without a missing/unexpected-key error.
+        """
+        cell = (CfC(input_size, wiring) if self.cell_type == 'cfc'
+                else LTC(input_size, wiring))
+        setattr(self, f'{name}_{self.cell_type}', cell)
+
+    def _ncp(self, name):
+        return getattr(self, f'{name}_{self.cell_type}')
 
     def _init_linear_weights(self):
         sqrt2 = math.sqrt(2.0)
@@ -433,12 +467,12 @@ class SNCPPolicy(nn.Module):
             obs: dict containing 'robot_node' (B,7), 'spatial_edges' (B,H,4)
                  = [pos_local, rel_vel_local], 'temporal_edges' (B,2). All in
                  robot-local frame.
-            hidden_states: dict with 'temporal_edge', 'spatial_edge', 'node' LTC states
+            hidden_states: dict with 'temporal_edge', 'spatial_edge', 'node' NCP states
         Returns:
             mu: actor mean [batch_size, 2] — scaled to (v in [0, vpref], w in [-wmax, wmax])
             std: actor std [batch_size, 2] — broadcast from per-dim logstd parameter
             value: critic value [batch_size, 1]
-            new_hidden_states: updated LTC hidden states
+            new_hidden_states: updated NCP hidden states (LTC or CfC)
         """
         robot_node = obs['robot_node']        # [batch_size, 7]
         spatial_edges = obs['spatial_edges']  # [batch_size, num_humans, 4]
@@ -450,15 +484,15 @@ class SNCPPolicy(nn.Module):
         # 1. Robot Node Encoding
         v_m = self.robot_mlp(robot_node)  # [batch_size, 128]
         
-        # 2. Temporal Edge Encoding (LTC). With pre_mlp, the paper's Eq 11
+        # 2. Temporal Edge Encoding (LTC or CfC). With pre_mlp, the paper's Eq 11
         # ordering: expand to the 256-dim encoding first, then the NCP.
         temporal_features = self.temporal_pre_mlp(temporal_edges) if self.pre_mlp else temporal_edges
         temporal_input = temporal_features.unsqueeze(1)
         h_temp = hidden_states['temporal_edge']
-        m_rr_seq, h_temp_new = self.temporal_ltc(temporal_input, h_temp)
+        m_rr_seq, h_temp_new = self._ncp('temporal')(temporal_input, h_temp)
         m_rr = self.temporal_proj(m_rr_seq.squeeze(1))
 
-        # 3. Spatial Edge Encoding (LTC)
+        # 3. Spatial Edge Encoding (LTC or CfC)
         spatial_flat = spatial_edges.reshape(batch_size * num_humans, 6)
         if self.pre_mlp:
             spatial_flat = self.spatial_pre_mlp(spatial_flat)
@@ -469,7 +503,7 @@ class SNCPPolicy(nn.Module):
         else:
             h_spat_flat = h_spat
             
-        M_rh_seq, h_spat_new_flat = self.spatial_ltc(spatial_input, h_spat_flat)
+        M_rh_seq, h_spat_new_flat = self._ncp('spatial')(spatial_input, h_spat_flat)
         M_rh_proj = self.spatial_proj(M_rh_seq.squeeze(1))
         M_rh = M_rh_proj.reshape(batch_size, num_humans, 256)
 
@@ -483,10 +517,10 @@ class SNCPPolicy(nn.Module):
             M_rh = self._human_intent_graph(M_rh, spatial_edges, sense_mask)
         u_att = self._attention_pool(M_rh, m_rr, num_humans, sense_mask)
         
-        # 5. Node LTC Encoder
+        # 5. Node NCP Encoder (LTC or CfC)
         node_input = torch.cat([v_m, m_rr, u_att], dim=-1).unsqueeze(1)
         h_node = hidden_states['node']
-        sf_seq, h_node_new = self.node_ltc(node_input, h_node)
+        sf_seq, h_node_new = self._ncp('node')(node_input, h_node)
         sf = self.node_proj(sf_seq.squeeze(1))
         
         # 6. Actor & Critic Outputs
@@ -533,6 +567,74 @@ class SNCPPolicy(nn.Module):
         return out1, out2, value, new_hidden_states
 
 
+def _normalize_cell_type(cell_type):
+    name = str(cell_type).lower()
+    if name not in VALID_CELL_TYPES:
+        raise ValueError(
+            f"cell_type must be one of {VALID_CELL_TYPES}, got {cell_type!r}"
+        )
+    return name
+
+
+def detect_cell_type(state_dict):
+    """Return 'ltc' or 'cfc' from a policy state dict.
+
+    Default / historical checkpoints have `*_ltc.*` keys and no CfC marker.
+    CfC checkpoints have `*_cfc.*` keys and `_cell_type_cfc`. Mixing both is
+    an error rather than a silent guess.
+    """
+    keys = list(state_dict)
+    has_cfc = any(key.startswith(_CFC_MODULE_PREFIXES) for key in keys)
+    has_ltc = any(key.startswith(_LTC_MODULE_PREFIXES) for key in keys)
+    marked_cfc = '_cell_type_cfc' in state_dict
+    if has_cfc and has_ltc:
+        raise CellTypeMismatchError(
+            "checkpoint contains both LTC and CfC encoder keys; refusing to guess"
+        )
+    if marked_cfc and has_ltc:
+        raise CellTypeMismatchError(
+            "checkpoint is marked CfC but contains LTC encoder keys"
+        )
+    if has_cfc or marked_cfc:
+        return 'cfc'
+    return 'ltc'
+
+
+def assert_cell_type_compatible(policy, state_dict):
+    """Raise if `state_dict` belongs to the other NCP cell family."""
+    detected = detect_cell_type(state_dict)
+    requested = getattr(policy, 'cell_type', 'ltc')
+    if detected != requested:
+        pretty = {'ltc': 'LTC', 'cfc': 'CfC'}
+        raise CellTypeMismatchError(
+            f"Cannot load a {pretty[detected]} checkpoint into a "
+            f"{pretty[requested]} SNCPPolicy. Reconstruct with "
+            f"build_policy_for_checkpoint(...) or SNCPPolicy(cell_type="
+            f"'{detected}') / --temporal_cell {detected}."
+        )
+    return detected
+
+
+def load_policy_state_dict(policy, state_dict, strict=True):
+    """load_state_dict with an explicit LTC/CfC compatibility check."""
+    assert_cell_type_compatible(policy, state_dict)
+    return policy.load_state_dict(state_dict, strict=strict)
+
+
+def _infer_cfc_node_sizes(state_dict):
+    units_buf = state_dict.get('_cfc_node_units')
+    output_buf = state_dict.get('_cfc_node_output')
+    if units_buf is not None and output_buf is not None:
+        return int(units_buf.item()), int(output_buf.item())
+    node_output = int(state_dict['node_proj.weight'].shape[1]) if 'node_proj.weight' in state_dict else 48
+    units = 0
+    layer = 0
+    while f'node_cfc.rnn_cell.layer_{layer}.ff1.bias' in state_dict:
+        units += int(state_dict[f'node_cfc.rnn_cell.layer_{layer}.ff1.bias'].shape[0])
+        layer += 1
+    return (units or 128), node_output
+
+
 def checkpoint_has_risk_head(state_dict):
     return '_risk_head' in state_dict or any(
         key.startswith('risk_mlp.') for key in state_dict
@@ -551,20 +653,24 @@ def build_policy_for_checkpoint(state_dict, robot_vpref=0.26, robot_wmax=1.8,
                                 risk_head=None):
     """Construct an SNCPPolicy whose architecture matches a saved state dict.
 
-    Checkpoints are plain `policy.state_dict()` files; the only architecture
-    variant is the paper-Eq-11 pre-MLP (v22+), detectable from its keys. Old
-    checkpoints (v14..v21) have no `*_pre_mlp` keys and get the legacy layout.
+    Checkpoints are plain `policy.state_dict()` files; architecture variants
+    (pre-MLP, pooling, cell_type, …) are detected from keys. Old checkpoints
+    (v14..v21) have no `*_pre_mlp` keys and get the legacy LTC layout.
     Pass risk_head=True to attach a fresh v39 head on top of a pre-v39
     checkpoint (training-only); eval leaves this None so auto-detect preserves
     old weights byte-for-byte.
     """
+    cell_type = detect_cell_type(state_dict)
     pre_mlp = any(key.startswith('temporal_pre_mlp') for key in state_dict)
     attn_count_scaling = '_attn_count_scaling' in state_dict
     meanmax_pool = any(key.startswith('pool_merge') for key in state_dict)
-    gleak = state_dict.get('node_ltc.rnn_cell.gleak')
-    node_units = int(gleak.shape[0]) if gleak is not None else 128
-    out_w = state_dict.get('node_ltc.rnn_cell.output_w')
-    node_output = int(out_w.shape[0]) if out_w is not None else 48
+    if cell_type == 'cfc':
+        node_units, node_output = _infer_cfc_node_sizes(state_dict)
+    else:
+        gleak = state_dict.get('node_ltc.rnn_cell.gleak')
+        node_units = int(gleak.shape[0]) if gleak is not None else 128
+        out_w = state_dict.get('node_ltc.rnn_cell.output_w')
+        node_output = int(out_w.shape[0]) if out_w is not None else 48
     ah = state_dict.get('_attn_heads')
     attn_heads = int(ah.item()) if ah is not None else 1
     action_dist = 'gaussian' if 'actor_logstd' in state_dict else 'beta'
@@ -586,4 +692,5 @@ def build_policy_for_checkpoint(state_dict, robot_vpref=0.26, robot_wmax=1.8,
                       node_output=node_output, attn_heads=attn_heads,
                       action_dist=action_dist, sense_range=sense_range,
                       hh_intent_graph=hh_intent_graph, hh_attn_heads=hh_attn_heads,
-                      cv_horizons=cv_horizons, cv_dt=cv_dt, risk_head=risk_head)
+                      cv_horizons=cv_horizons, cv_dt=cv_dt, risk_head=risk_head,
+                      cell_type=cell_type)

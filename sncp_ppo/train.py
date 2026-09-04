@@ -10,7 +10,14 @@ import numpy as np
 import torch
 
 from crowd_sim.crowd_env import CrowdSimEnv, PAPER_SCENARIO_CONFIG
-from sncp_ppo.models import SNCPPolicy, build_policy_for_checkpoint, checkpoint_has_risk_head, _is_risk_head_key
+from sncp_ppo.models import (
+    SNCPPolicy,
+    assert_cell_type_compatible,
+    build_policy_for_checkpoint,
+    checkpoint_has_risk_head,
+    detect_cell_type,
+    _is_risk_head_key,
+)
 from sncp_ppo.ppo import PPOAgent
 from sncp_ppo.risk_labeler import label_short_horizon_risk, label_vectorized_envs
 
@@ -335,6 +342,7 @@ def build_upgraded_policy(state_dict, *, robot_vpref, robot_wmax, device,
         cv_horizons=cv_horizons,
         cv_dt=cv_dt,
         risk_head=bool(risk_head) or getattr(base, 'risk_head', False),
+        cell_type=getattr(base, 'cell_type', 'ltc'),
     ).to(device)
     missing, unexpected = upgraded.load_state_dict(state_dict, strict=False)
     unsafe_missing = [
@@ -376,12 +384,24 @@ def build_or_load_policy(args, env, device):
         raise ValueError("--init_checkpoint and --upgrade_checkpoint are mutually exclusive")
     if init_ckpt:
         state = _load_checkpoint(init_ckpt, device)
+        requested_cell = getattr(args, 'temporal_cell', 'ltc') or 'ltc'
+        detected_cell = detect_cell_type(state)
+        if requested_cell != detected_cell:
+            pretty = {'ltc': 'LTC', 'cfc': 'CfC'}
+            raise ValueError(
+                f"checkpoint is {pretty[detected_cell]} but --temporal_cell "
+                f"{requested_cell} was requested. Refusing to load "
+                f"{pretty[detected_cell]} weights into a {pretty[requested_cell]} "
+                "policy. Pass --temporal_cell matching the checkpoint, or omit "
+                "--init_checkpoint to train the requested cell from scratch."
+            )
         want_risk = _want_risk_head(args)
         detected_risk = checkpoint_has_risk_head(state)
         policy = build_policy_for_checkpoint(
             state, robot_vpref=env.robot_vpref, robot_wmax=env.robot_wmax,
             risk_head=True if want_risk else None,
         ).to(device)
+        assert_cell_type_compatible(policy, state)
         if want_risk and not detected_risk:
             missing, unexpected = policy.load_state_dict(state, strict=False)
             unsafe_missing = [key for key in missing if not _is_risk_head_key(key)]
@@ -432,6 +452,7 @@ def build_or_load_policy(args, env, device):
         cv_horizons=getattr(args, 'cv_horizons', (1, 2, 3, 4)),
         cv_dt=getattr(args, 'cv_dt', 0.25),
         risk_head=_want_risk_head(args),
+        cell_type=getattr(args, 'temporal_cell', 'ltc') or 'ltc',
     ).to(device)
 
 
@@ -1377,6 +1398,18 @@ def build_parser():
                              'phase (scenario, --num_humans, canonical speed), bypassing the '
                              '10/25/50/75%% curriculum and replay. For short fixed-density '
                              'attribution runs; leave unset for real training.')
+    parser.add_argument(
+        '--temporal_cell', '--cell_type',
+        dest='temporal_cell',
+        type=str, default='ltc', choices=['ltc', 'cfc'],
+        help='NCP neuron model for the temporal, spatial, and node encoders. '
+             'ltc (default) = Liquid Time-Constant ODE cell; existing checkpoints '
+             'and the v39 stack stay unchanged. cfc = Closed-form Continuous-time '
+             'cell (Hasani et al. 2022 / ncps.torch.CfC) with the same AutoNCP '
+             'wiring and no ODE solver — a Pi-latency side experiment. '
+             'Auto-detected on load; mixing LTC and CfC weights raises a clear '
+             'error. Observation schema and the runtime action shield stay unchanged.',
+    )
     parser.add_argument('--pre_mlp', action='store_true',
                         help='Paper Eq 11 fidelity: expand edge inputs to the 256-dim encoding '
                              'with an MLP BEFORE the NCP encoders (v22 candidate). Default off '
@@ -1384,7 +1417,8 @@ def build_parser():
     parser.add_argument('--init_checkpoint', type=str, default=None,
                         help='Initialize the policy from this checkpoint instead of fresh weights '
                              '(v23 IL warm-start: PPO fine-tunes from the BC checkpoint). The '
-                             'architecture is auto-detected from the saved keys.')
+                             'architecture is auto-detected from the saved keys. --temporal_cell '
+                             'must match the checkpoint (LTC vs CfC); a mismatch is a hard error.')
     parser.add_argument('--upgrade_checkpoint', type=str, default=None,
                         help='Safely upgrade a pre-v37 checkpoint with the zero-initialized '
                              'human-human intention graph. Unlike --init_checkpoint, this permits '
