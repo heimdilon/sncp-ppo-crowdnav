@@ -243,7 +243,7 @@ class PPOAgent:
                 action = self.policy.deterministic_action(out1, out2)
                 log_prob_value = 0.0
             else:
-                dist = torch.distributions.Beta(out1, out2)
+                dist = self.policy.make_action_dist(out1, out2)
                 x = dist.sample()
                 action = self.policy._scale_action(x)        # store physical, in-bounds
                 log_prob_value = dist.log_prob(x).sum(-1).item()
@@ -253,7 +253,7 @@ class PPOAgent:
                 action = mu
                 log_prob_value = 0.0
             else:
-                dist = torch.distributions.Normal(mu, std)
+                dist = self.policy.make_action_dist(mu, std)
                 action = dist.sample()
                 log_prob_value = dist.log_prob(action).sum(-1).item()
 
@@ -634,15 +634,13 @@ class PPOAgent:
                 # Compute log probs and entropy under the policy's distribution.
                 # Beta: log_prob on the [0,1] pre-image of the stored physical action;
                 # the affine _scale Jacobian is constant so it cancels in the ratio.
+                dist = self.policy.make_action_dist(all_p1, all_p2)
                 if self.policy.action_dist == 'beta':
                     x = self.policy._unscale_action(b_actions)
-                    dist = torch.distributions.Beta(all_p1, all_p2)
                     new_log_probs = dist.log_prob(x).sum(-1)        # [B, S]
-                    entropy = dist.entropy().sum(-1)                 # [B, S]
                 else:
-                    dist = torch.distributions.Normal(all_p1, all_p2)
                     new_log_probs = dist.log_prob(b_actions).sum(-1)  # [B, S]
-                    entropy = dist.entropy().sum(-1)                  # [B, S]
+                entropy = dist.entropy().sum(-1)                  # [B, S]
                 
                 # Apply valid mask
                 ratio = torch.exp(new_log_probs - b_old_lp)
