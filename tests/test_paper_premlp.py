@@ -22,7 +22,7 @@ def test_default_policy_still_loads_v18_checkpoint():
     import os, pytest
     if not os.path.exists('checkpoints/sncp_ppo_v18.pt'):
         pytest.skip('milestone checkpoint checkpoints/sncp_ppo_v18.pt is git-ignored; present only locally')
-    state = torch.load('checkpoints/sncp_ppo_v18.pt', map_location='cpu')
+    state = torch.load('checkpoints/sncp_ppo_v18.pt', map_location='cpu', weights_only=True)
     policy = build_policy_for_checkpoint(state)
     policy.load_state_dict(state)  # must not raise
     assert policy.pre_mlp is False
@@ -54,7 +54,7 @@ def test_checkpoint_roundtrip_detects_pre_mlp(tmp_path):
     saved = SNCPPolicy(pre_mlp=True)
     path = tmp_path / 'premlp.pt'
     torch.save(saved.state_dict(), path)
-    state = torch.load(path, map_location='cpu')
+    state = torch.load(path, map_location='cpu', weights_only=True)
     policy = build_policy_for_checkpoint(state, robot_vpref=1.0, robot_wmax=1.8)
     policy.load_state_dict(state)  # must not raise
     assert policy.pre_mlp is True

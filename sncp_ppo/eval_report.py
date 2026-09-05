@@ -457,7 +457,7 @@ def evaluate_density(
         robot_vpref=robot_vpref, human_vpref_override=human_vpref_override,
         max_time=max_time, human_goal_noise=human_goal_noise,
     )
-    state_dict = torch.load(checkpoint_path, map_location=device)
+    state_dict = torch.load(checkpoint_path, map_location=device, weights_only=True)
     policy = build_policy_for_checkpoint(
         state_dict, robot_vpref=env.robot_vpref, robot_wmax=env.robot_wmax
     ).to(device)

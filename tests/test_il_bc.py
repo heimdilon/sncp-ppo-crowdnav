@@ -51,7 +51,7 @@ def test_bc_checkpoint_loads_via_builder(tmp_path):
     )
     path = tmp_path / 'v23_bc.pt'
     torch.save(policy.state_dict(), path)
-    state = torch.load(path, map_location='cpu')
+    state = torch.load(path, map_location='cpu', weights_only=True)
     rebuilt = build_policy_for_checkpoint(state, robot_vpref=1.0, robot_wmax=1.8)
     rebuilt.load_state_dict(state)  # must not raise
     assert rebuilt.pre_mlp is False

@@ -90,7 +90,7 @@ def draw(ax, robot_path, human_paths, env, info, steps, num_humans):
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    sd = torch.load(CKPT, map_location=device)
+    sd = torch.load(CKPT, map_location=device, weights_only=True)
     policy = build_policy_for_checkpoint(sd, robot_vpref=1.0, robot_wmax=1.8).to(device)
     policy.load_state_dict(sd)
     policy.train(False)
