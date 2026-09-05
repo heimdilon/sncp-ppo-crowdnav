@@ -6,7 +6,6 @@ import matplotlib.patches as patches
 
 from crowd_sim.orca import orca_velocities
 
-
 # Paper-faithful physics for the reproduction scenarios (Ao et al. 2026, Table 1 + S5.1).
 # robot_y = start (0,-robot_y) -> goal (0,+robot_y); 2*robot_y = 8 m crossing (paper S5.3.2
 # states "(0,-4) -> (0,4)"). max_time is PER-SCENARIO: Table 1's 12.5 s is the STANDARD
@@ -15,26 +14,38 @@ from crowd_sim.orca import orca_velocities
 # Nav-Time is reported so the loose budget is transparent). Single source of truth so
 # train + eval cannot silently disagree (the v24/v25 failure was a wrong CLI budget).
 PAPER_SCENARIO_CONFIG = {
-    "paper_standard":    {"arena": 10.0, "sense_range": 4.0, "collision_threshold": 0.3,
-                          "robot_y": 4.0, "max_time": 12.5, "comfort_coeff": 2.0},
-    "paper_challenging": {"arena": 15.0, "sense_range": 6.0, "collision_threshold": 0.3,
-                          "robot_y": 4.0, "max_time": 50.0, "comfort_coeff": 2.0},
+    "paper_standard": {
+        "arena": 10.0,
+        "sense_range": 4.0,
+        "collision_threshold": 0.3,
+        "robot_y": 4.0,
+        "max_time": 12.5,
+        "comfort_coeff": 2.0,
+    },
+    "paper_challenging": {
+        "arena": 15.0,
+        "sense_range": 6.0,
+        "collision_threshold": 0.3,
+        "robot_y": 4.0,
+        "max_time": 50.0,
+        "comfort_coeff": 2.0,
+    },
 }
 
 
 class CrowdSimEnv(gym.Env):
-    metadata = {'render.modes': ['human', 'rgb_array']}
+    metadata = {"render.modes": ["human", "rgb_array"]}
 
     def __init__(
         self,
         num_humans=5,
         time_step=0.25,
         max_time=None,
-        scenario='circle',
+        scenario="circle",
         human_dodge_robot=False,
         randomize_layout=True,
         comfort_coeff=None,
-        human_motion_model='orca',
+        human_motion_model="orca",
         robot_vpref=0.26,
         human_vpref_override=None,
         human_goal_noise=0.0,
@@ -45,7 +56,9 @@ class CrowdSimEnv(gym.Env):
     ):
         super(CrowdSimEnv, self).__init__()
 
-        self.scenario = scenario  # 'easy', 'medium', 'hard', 'extreme', 'circle', 'random'
+        self.scenario = (
+            scenario  # 'easy', 'medium', 'hard', 'extreme', 'circle', 'random'
+        )
         self.paper_regime = bool(paper_regime)
         # Regime params (budget/comfort/d_col) come from the paper config of THIS scenario
         # if it is a paper scenario (so paper_challenging -> 50 s, paper_standard -> 12.5 s);
@@ -55,10 +68,10 @@ class CrowdSimEnv(gym.Env):
         # separately in reset() from the CURRENT scenario.
         _regime_cfg = PAPER_SCENARIO_CONFIG.get(scenario)
         if _regime_cfg is None and self.paper_regime:
-            _regime_cfg = PAPER_SCENARIO_CONFIG['paper_challenging']
+            _regime_cfg = PAPER_SCENARIO_CONFIG["paper_challenging"]
         self._regime_cfg = _regime_cfg
         self.human_dodge_robot = human_dodge_robot
-        if human_motion_model not in ('sfm', 'linear', 'orca'):
+        if human_motion_model not in ("sfm", "linear", "orca"):
             raise ValueError("human_motion_model must be 'sfm', 'linear', or 'orca'")
         self.human_motion_model = human_motion_model
         # When set, ALL pedestrians use this preferred speed regardless of
@@ -80,17 +93,23 @@ class CrowdSimEnv(gym.Env):
         self.randomize_layout = randomize_layout
         self.num_humans = num_humans
         self.time_step = time_step
-        self.max_time = max_time if max_time is not None else (
-            _regime_cfg['max_time'] if _regime_cfg else 50.0)
-        self.comfort_coeff = comfort_coeff if comfort_coeff is not None else (
-            _regime_cfg['comfort_coeff'] if _regime_cfg else 6.0)
-        
+        self.max_time = (
+            max_time
+            if max_time is not None
+            else (_regime_cfg["max_time"] if _regime_cfg else 50.0)
+        )
+        self.comfort_coeff = (
+            comfort_coeff
+            if comfort_coeff is not None
+            else (_regime_cfg["comfort_coeff"] if _regime_cfg else 6.0)
+        )
+
         # Robot physical parameters (Turtlebot3 Waffle by default; the
         # paper-reproduction run overrides robot_vpref to the paper's 1.0 m/s).
         self.robot_radius = 0.3
         self.robot_vpref = robot_vpref  # max speed (m/s); Waffle hardware = 0.26
-        self.robot_wmax = 1.8    # max angular speed (rad/s)
-        
+        self.robot_wmax = 1.8  # max angular speed (rad/s)
+
         # Human physical parameters
         self.human_radius = 0.3
         self.human_vpref = 0.5  # typical human walking speed (m/s)
@@ -99,9 +118,13 @@ class CrowdSimEnv(gym.Env):
         # a collision. Default = robot_radius + human_radius (0.6), preserving
         # current behaviour. The paper uses d_col = 0.3 (Table 1).
         self.collision_threshold = (
-            collision_threshold if collision_threshold is not None
-            else (_regime_cfg['collision_threshold'] if _regime_cfg
-                  else self.robot_radius + self.human_radius)
+            collision_threshold
+            if collision_threshold is not None
+            else (
+                _regime_cfg["collision_threshold"]
+                if _regime_cfg
+                else self.robot_radius + self.human_radius
+            )
         )
         # Paper scenarios scale the arena and sense range with density; None keeps
         # the legacy circle-crossing layout. sense_range is recorded for paper
@@ -114,23 +137,25 @@ class CrowdSimEnv(gym.Env):
         # repulsion (_move_humans), so the two can never silently diverge.
         self.sfm_repulsion_A = 2.0  # repulsive force magnitude
         self.sfm_repulsion_B = 0.3  # repulsive force range
-        
+
         # Safe distance threshold
         self.d_col = 0.3  # collision distance = robot_radius + human_radius
-        
+
         # Ellipse parameters for comfort space
         self.a_front = 1.5
         self.a_back = 0.5
         self.b_left = 0.5
-        self.b_right = 1.0  # right side is larger to encourage robot to pass on left (its right)
-        
+        self.b_right = (
+            1.0  # right side is larger to encourage robot to pass on left (its right)
+        )
+
         # Define action space: [v_linear, w_angular]
         self.action_space = spaces.Box(
             low=np.array([0.0, -self.robot_wmax], dtype=np.float32),
             high=np.array([self.robot_vpref, self.robot_wmax], dtype=np.float32),
-            dtype=np.float32
+            dtype=np.float32,
         )
-        
+
         # Define observation space as a Dict.
         # ALL observations are in the robot's LOCAL coordinate frame:
         #   - Robot faces along +x axis in local frame
@@ -139,18 +164,29 @@ class CrowdSimEnv(gym.Env):
         #     goal_dir_x, goal_dir_y] for each human (num_humans, 6) — position,
         #     relative velocity AND goal-direction intent
         #   - temporal_edges: [v_linear, w_angular] in local frame (2,)
-        self.observation_space = spaces.Dict({
-            'robot_node': spaces.Box(low=-np.inf, high=np.inf, shape=(7,), dtype=np.float32),
-            'spatial_edges': spaces.Box(low=-np.inf, high=np.inf, shape=(self.num_humans, 6), dtype=np.float32),
-            'temporal_edges': spaces.Box(low=-np.inf, high=np.inf, shape=(2,), dtype=np.float32)
-        })
-        
+        self.observation_space = spaces.Dict(
+            {
+                "robot_node": spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(7,), dtype=np.float32
+                ),
+                "spatial_edges": spaces.Box(
+                    low=-np.inf,
+                    high=np.inf,
+                    shape=(self.num_humans, 6),
+                    dtype=np.float32,
+                ),
+                "temporal_edges": spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(2,), dtype=np.float32
+                ),
+            }
+        )
+
         self.reset()
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self.current_time = 0.0
-        
+
         # Robot start/goal. With randomize_layout (default) the robot spawns at
         # a random angle on a circle of radius R with an antipodal goal and a
         # RANDOM heading, so the policy must generalise over geometry (and learn
@@ -172,7 +208,7 @@ class CrowdSimEnv(gym.Env):
             self.robot_theta = np.pi / 2.0  # facing North
             self.robot_gx = 0.0
             self.robot_gy = 4.0
-        
+
         # Initialize humans array (fixed size)
         self.humans_px = np.zeros(self.num_humans)
         self.humans_py = np.zeros(self.num_humans)
@@ -181,36 +217,40 @@ class CrowdSimEnv(gym.Env):
         self.humans_theta = np.zeros(self.num_humans)
         self.humans_gx = np.zeros(self.num_humans)
         self.humans_gy = np.zeros(self.num_humans)
-        
+
         # Determine scenario parameters based on difficulty level
         # NB: human_vpref is also overwritten externally by the curriculum loop
         # (train.py); these defaults only apply when reset() is called directly.
         # v15: pedestrian speeds capped at robot parity (<=0.26 m/s) so a slow
         # TurtleBot3 can feasibly avoid a NON-reactive crowd. (v14 used 0.15-0.50;
         # at 0.5 the robot was 2x slower and could not unilaterally dodge.)
-        if self.scenario == 'easy':
+        if self.scenario == "easy":
             self.human_vpref = 0.13
-            scenario_type = 'circle'
-        elif self.scenario == 'easy_plus':
+            scenario_type = "circle"
+        elif self.scenario == "easy_plus":
             self.human_vpref = 0.18
-            scenario_type = 'circle'
-        elif self.scenario == 'medium':
+            scenario_type = "circle"
+        elif self.scenario == "medium":
             self.human_vpref = 0.22
-            scenario_type = 'circle'
-        elif self.scenario == 'hard':
+            scenario_type = "circle"
+        elif self.scenario == "hard":
             self.human_vpref = 0.26
-            scenario_type = 'circle'
-        elif self.scenario == 'extreme':
+            scenario_type = "circle"
+        elif self.scenario == "extreme":
             self.human_vpref = 0.26
-            scenario_type = 'random'
+            scenario_type = "random"
         elif self.scenario in PAPER_SCENARIO_CONFIG:
             cfg = PAPER_SCENARIO_CONFIG[self.scenario]
             self.human_vpref = 1.0  # parity with the 1.0 m/s robot
-            scenario_type = 'paper'
-            self._paper_arena = self.arena_size if self.arena_size is not None else cfg['arena']
-            self._paper_robot_y = cfg['robot_y']  # 5.0 -> 10 m crossing (paper nav-time ~10.4-11.8s)
+            scenario_type = "paper"
+            self._paper_arena = (
+                self.arena_size if self.arena_size is not None else cfg["arena"]
+            )
+            self._paper_robot_y = cfg[
+                "robot_y"
+            ]  # 5.0 -> 10 m crossing (paper nav-time ~10.4-11.8s)
             if self.sense_range is None:
-                self.sense_range = cfg['sense_range']
+                self.sense_range = cfg["sense_range"]
         else:
             self.human_vpref = 0.26
             scenario_type = self.scenario
@@ -221,8 +261,8 @@ class CrowdSimEnv(gym.Env):
             self.human_vpref = float(self.human_vpref_override)
 
         self.humans_vpref = np.full(self.num_humans, self.human_vpref, dtype=float)
-        
-        if scenario_type == 'circle':
+
+        if scenario_type == "circle":
             radius = 4.0
             min_safe = self.robot_radius + self.human_radius + 0.5  # 1.1 m
             if self.randomize_layout:
@@ -273,7 +313,7 @@ class CrowdSimEnv(gym.Env):
                     dx = self.humans_gx[i] - self.humans_px[i]
                     dy = self.humans_gy[i] - self.humans_py[i]
                     self.humans_theta[i] = np.arctan2(dy, dx)
-        elif scenario_type == 'paper':
+        elif scenario_type == "paper":
             # Paper-faithful square-crossing: robot fixed bottom -> top, humans
             # scattered uniformly across the (large) arena. NOT antipodal on a
             # circle, so paths do NOT all funnel through the center.
@@ -294,8 +334,13 @@ class CrowdSimEnv(gym.Env):
                     d_goal = np.hypot(px - self.robot_gx, py - self.robot_gy)
                     if d_start < min_sep or d_goal < min_sep:
                         continue
-                    if i == 0 or np.min(np.hypot(
-                            px - self.humans_px[:i], py - self.humans_py[:i])) > min_sep:
+                    if (
+                        i == 0
+                        or np.min(
+                            np.hypot(px - self.humans_px[:i], py - self.humans_py[:i])
+                        )
+                        > min_sep
+                    ):
                         break
                 self.humans_px[i] = px
                 self.humans_py[i] = py
@@ -306,14 +351,22 @@ class CrowdSimEnv(gym.Env):
                 dx = self.humans_gx[i] - self.humans_px[i]
                 dy = self.humans_gy[i] - self.humans_py[i]
                 self.humans_theta[i] = np.arctan2(dy, dx)
-        else: # random
+        else:  # random
             for i in range(self.num_humans):
                 while True:
                     px = self.np_random.uniform(-5.0, 5.0)
                     py = self.np_random.uniform(-5.0, 5.0)
                     dist_to_robot = np.hypot(px - self.robot_px, py - self.robot_py)
                     if dist_to_robot > 1.5:
-                        if i == 0 or np.min(np.hypot(px - self.humans_px[:i], py - self.humans_py[:i])) > 1.0:
+                        if (
+                            i == 0
+                            or np.min(
+                                np.hypot(
+                                    px - self.humans_px[:i], py - self.humans_py[:i]
+                                )
+                            )
+                            > 1.0
+                        ):
                             self.humans_px[i] = px
                             self.humans_py[i] = py
                             break
@@ -335,33 +388,37 @@ class CrowdSimEnv(gym.Env):
         """
         cos_t = np.cos(self.robot_theta)
         sin_t = np.sin(self.robot_theta)
-        
+
         # Goal vector in global frame
         dg_x_global = self.robot_gx - self.robot_px
         dg_y_global = self.robot_gy - self.robot_py
-        
+
         # Rotate goal vector to local frame
         dg_local_x = dg_x_global * cos_t + dg_y_global * sin_t
         dg_local_y = -dg_x_global * sin_t + dg_y_global * cos_t
-        
+
         dist_to_goal = np.hypot(dg_x_global, dg_y_global)
-        
+
         # Current linear speed magnitude
         v_linear = np.hypot(self.robot_vx, self.robot_vy)
-        
+
         # Current angular velocity (stored from last action)
-        w_angular = getattr(self, '_last_w', 0.0)
-        
+        w_angular = getattr(self, "_last_w", 0.0)
+
         # robot_node: [dg_local_x, dg_local_y, v_linear, dist_to_goal, vpref, radius, w_angular]
-        robot_node = np.array([
-            dg_local_x, dg_local_y,
-            v_linear,
-            dist_to_goal,
-            self.robot_vpref,
-            self.robot_radius,
-            w_angular
-        ], dtype=np.float32)
-        
+        robot_node = np.array(
+            [
+                dg_local_x,
+                dg_local_y,
+                v_linear,
+                dist_to_goal,
+                self.robot_vpref,
+                self.robot_radius,
+                w_angular,
+            ],
+            dtype=np.float32,
+        )
+
         # Spatial edges: per-pedestrian local-frame position, relative velocity
         # (pedestrian - robot), AND goal-direction unit vector. All rotated into
         # the robot's local frame. Layout per row:
@@ -387,14 +444,14 @@ class CrowdSimEnv(gym.Env):
         spatial_edges[:, 3] = -dvx_global * sin_t + dvy_global * cos_t
         spatial_edges[:, 4] = gdx * cos_t + gdy * sin_t
         spatial_edges[:, 5] = -gdx * sin_t + gdy * cos_t
-            
+
         # Temporal edges: robot velocity in local frame = [v_linear, w_angular]
         temporal_edges = np.array([v_linear, w_angular], dtype=np.float32)
-        
+
         return {
-            'robot_node': robot_node,
-            'spatial_edges': spatial_edges,
-            'temporal_edges': temporal_edges
+            "robot_node": robot_node,
+            "spatial_edges": spatial_edges,
+            "temporal_edges": temporal_edges,
         }
 
     def _compute_social_pressure(self):
@@ -412,7 +469,10 @@ class CrowdSimEnv(gym.Env):
         num = 0.0
         den = 0.0
         N = self.num_humans
-        
+
+        if N == 0:
+            return 0.0
+
         # Distances between all humans (vectorized NxN). The diagonal is set to
         # inf so the self term contributes 1/(inf+1e-5)=0 to the omega weight sum
         # below, exactly matching the original loop's `j != i` skip. Named *_mat
@@ -421,52 +481,56 @@ class CrowdSimEnv(gym.Env):
         dy_mat = self.humans_py[:, np.newaxis] - self.humans_py
         d_humans = np.hypot(dx_mat, dy_mat)
         np.fill_diagonal(d_humans, np.inf)
-        
-        for i in range(N):
-            # Robot relative to human i
-            dx = self.robot_px - self.humans_px[i]
-            dy = self.robot_py - self.humans_py[i]
-            d_hr = np.hypot(dx, dy)
-            
-            # Transform to human local frame
-            theta_h = self.humans_theta[i]
-            x_local = dx * np.cos(theta_h) + dy * np.sin(theta_h)
-            y_local = -dx * np.sin(theta_h) + dy * np.cos(theta_h)
-            
-            phi = np.arctan2(y_local, x_local)
-            
-            # Select ellipse semi-axes based on quadrant in local frame
-            a = self.a_front if x_local >= 0 else self.a_back
-            b = self.b_left if y_local >= 0 else self.b_right
-            
-            # Original interaction space boundary in direction phi
-            s_T = (a * b) / (np.sqrt((b * np.cos(phi))**2 + (a * np.sin(phi))**2) + 1e-6)
-            
-            # Deformed interaction space boundary
-            s_prime_T = min(d_hr, s_T)
-            
-            # Deformation index I_1
-            if s_prime_T < s_T:
-                ratio = s_prime_T / (s_T + 1e-6)
-                I_1 = 1.0 / (1.0 + np.exp(-3.0 * (0.5 - ratio)))
-            else:
-                I_1 = 0.0
-                
-            # Compute distance weight omega
-            w_hr = 1.0 / (d_hr + 1e-5)
-            w_hj_sum = np.sum(1.0 / (d_humans[i] + 1e-5))
-                    
-            omega = w_hr / (w_hr + w_hj_sum + 1e-5)
-            
-            # Individual social pressure on human i
-            I_2 = omega * I_1
 
-            # Eq 7 weighted average: accumulate the 1/d_hr-weighted numerator and the
-            # weight denominator (no cap — the normalization below bounds I_sp to [0,1],
-            # so the old min(.,10) cap + clip are unnecessary and were gradient-killing).
-            w_i = 1.0 / (d_hr + 1e-5)
-            num += w_i * I_2
-            den += w_i
+        # Robot relative to all humans
+        dx = self.robot_px - self.humans_px
+        dy = self.robot_py - self.humans_py
+        d_hr = np.hypot(dx, dy)
+
+        # Transform to human local frames
+        theta_h = self.humans_theta
+        cos_theta_h = np.cos(theta_h)
+        sin_theta_h = np.sin(theta_h)
+
+        x_local = dx * cos_theta_h + dy * sin_theta_h
+        y_local = -dx * sin_theta_h + dy * cos_theta_h
+
+        phi = np.arctan2(y_local, x_local)
+
+        # Select ellipse semi-axes based on quadrant in local frame
+        a = np.where(x_local >= 0, self.a_front, self.a_back)
+        b = np.where(y_local >= 0, self.b_left, self.b_right)
+
+        # Original interaction space boundary in direction phi
+        s_T = (a * b) / (
+            np.sqrt((b * np.cos(phi)) ** 2 + (a * np.sin(phi)) ** 2) + 1e-6
+        )
+
+        # Deformed interaction space boundary
+        s_prime_T = np.minimum(d_hr, s_T)
+
+        # Deformation index I_1
+        I_1 = np.zeros(N)
+        deformed_mask = s_prime_T < s_T
+        if np.any(deformed_mask):
+            ratio = s_prime_T[deformed_mask] / (s_T[deformed_mask] + 1e-6)
+            I_1[deformed_mask] = 1.0 / (1.0 + np.exp(-3.0 * (0.5 - ratio)))
+
+        # Compute distance weight omega
+        w_hr = 1.0 / (d_hr + 1e-5)
+        w_hj_sum = np.sum(1.0 / (d_humans + 1e-5), axis=1)
+
+        omega = w_hr / (w_hr + w_hj_sum + 1e-5)
+
+        # Individual social pressure on human i
+        I_2 = omega * I_1
+
+        # Eq 7 weighted average: accumulate the 1/d_hr-weighted numerator and the
+        # weight denominator (no cap — the normalization below bounds I_sp to [0,1],
+        # so the old min(.,10) cap + clip are unnecessary and were gradient-killing).
+        w_i = 1.0 / (d_hr + 1e-5)
+        num = np.sum(w_i * I_2)
+        den = np.sum(w_i)
 
         # Eq 7 normalized weighted average (naturally in [0,1] since I_2 in [0,1]).
         return float(num / (den + 1e-9))
@@ -475,43 +539,47 @@ class CrowdSimEnv(gym.Env):
         # Action is [v, w]
         v = float(action[0])
         w = float(action[1])
-        
+
         # Store angular velocity for local-frame observations
         self._last_w = w
-        
+
         # Update robot orientation and position (differential drive kinematics)
         self.robot_theta += w * self.time_step
         # Normalize theta to [-pi, pi]
         self.robot_theta = (self.robot_theta + np.pi) % (2.0 * np.pi) - np.pi
-        
+
         self.robot_vx = v * np.cos(self.robot_theta)
         self.robot_vy = v * np.sin(self.robot_theta)
-        
+
         # Previous position
         prev_rx = self.robot_px
         prev_ry = self.robot_py
-        
+
         self.robot_px += self.robot_vx * self.time_step
         self.robot_py += self.robot_vy * self.time_step
-        
+
         # Move humans using a simple, robust Social Force Model (SFM)
         self._move_humans()
-        
+
         # Increment time
         self.current_time += self.time_step
-        
+
         # Calculate distances
-        distances = np.hypot(self.humans_px - self.robot_px, self.humans_py - self.robot_py)
+        distances = np.hypot(
+            self.humans_px - self.robot_px, self.humans_py - self.robot_py
+        )
         d_min = np.min(distances) if len(distances) > 0 else np.inf
-        
+
         # Check terminal conditions
         collision = d_min < self.collision_threshold
-        
-        dist_to_goal = np.hypot(self.robot_px - self.robot_gx, self.robot_py - self.robot_gy)
+
+        dist_to_goal = np.hypot(
+            self.robot_px - self.robot_gx, self.robot_py - self.robot_gy
+        )
         reached_goal = dist_to_goal < self.robot_radius
-        
+
         timeout = self.current_time >= self.max_time
-        
+
         # Calculate Reward components
         # 1. Goal reward (paper Eq 18, r_g). Reaching the goal yields +20; every
         # other step yields 2 * (how much closer to the goal we got this step).
@@ -535,7 +603,9 @@ class CrowdSimEnv(gym.Env):
         if reached_goal:
             r_g = 20.0
         else:
-            prev_dist_to_goal = np.hypot(prev_rx - self.robot_gx, prev_ry - self.robot_gy)
+            prev_dist_to_goal = np.hypot(
+                prev_rx - self.robot_gx, prev_ry - self.robot_gy
+            )
             r_g = 2.0 * (prev_dist_to_goal - dist_to_goal)
 
         # 2. Collision penalty. Raised 20 → 25 to keep deterrence after the
@@ -545,7 +615,7 @@ class CrowdSimEnv(gym.Env):
             r_c = -20.0
         else:
             r_c = 0.0
-            
+
         # 3. Comfort penalty (paper Eq 20): r_s = -2 * I_sp. I_sp is the social
         # pressure index summed over humans (per-human cap 10/d_hr), already a
         # normalized 0..1 quantity. The -2 coefficient matches the source paper;
@@ -553,30 +623,30 @@ class CrowdSimEnv(gym.Env):
         # social proximity (it never braked into crowds).
         I_sp = self._compute_social_pressure()
         r_s = -self.comfort_coeff * I_sp
-        
+
         # 4. Standstill penalty removed. Even the softened -0.05 / v<0.03
         # version was sampling-driven (negative Normal samples clip to 0 and
         # trigger it) rather than policy-driven. With approach coefficient
         # now 5.0, a stalled agent simply collects zero approach reward —
         # that's already the right signal.
         r_still = 0.0
-        
+
         reward = r_g + r_c + r_s + r_still
-        
+
         # Done flags
         terminated = collision or reached_goal
         truncated = timeout
-        
+
         # Info dictionary
         info = {
-            'success': reached_goal,
-            'collision': collision,
-            'timeout': timeout and not reached_goal,
-            'comfort': r_s,
-            'd_min': d_min,
-            'I_sp': I_sp
+            "success": reached_goal,
+            "collision": collision,
+            "timeout": timeout and not reached_goal,
+            "comfort": r_s,
+            "d_min": d_min,
+            "I_sp": I_sp,
         }
-        
+
         return self._get_obs(), reward, terminated, truncated, info
 
     def _move_humans(self):
@@ -585,10 +655,10 @@ class CrowdSimEnv(gym.Env):
         same reciprocal collision avoidance CrowdSim uses); 'sfm' and 'linear'
         are kept for the legacy/custom-map paths.
         """
-        if self.human_motion_model == 'orca':
+        if self.human_motion_model == "orca":
             self._move_humans_orca()
             return
-        if self.human_motion_model == 'linear':
+        if self.human_motion_model == "linear":
             self._move_humans_linear()
             return
 
@@ -596,7 +666,7 @@ class CrowdSimEnv(gym.Env):
         tau = 0.5  # relaxation time
         A = self.sfm_repulsion_A  # repulsive force magnitude
         B = self.sfm_repulsion_B  # repulsive force range
-        
+
         new_px = np.zeros(N)
         new_py = np.zeros(N)
         new_vx = np.zeros(N)
@@ -613,14 +683,14 @@ class CrowdSimEnv(gym.Env):
             py = self.humans_py[i]
             vx = self.humans_vx[i]
             vy = self.humans_vy[i]
-            
+
             # 1. Goal driving force
             gx = self.humans_gx[i]
             gy = self.humans_gy[i]
             dx_g = gx - px
             dy_g = gy - py
             dist_g = np.hypot(dx_g, dy_g)
-            
+
             if dist_g < 0.1:
                 # Reached goal, stop
                 pref_vx = 0.0
@@ -629,10 +699,10 @@ class CrowdSimEnv(gym.Env):
                 vpref_i = self._human_vpref(i)
                 pref_vx = (dx_g / dist_g) * vpref_i
                 pref_vy = (dy_g / dist_g) * vpref_i
-                
+
             f_drive_x = (pref_vx - vx) / tau
             f_drive_y = (pref_vy - vy) / tau
-            
+
             # 2. Repulsion from other humans (precomputed vectorized, above)
             f_rep_x = f_rep_x_all[i]
             f_rep_y = f_rep_y_all[i]
@@ -647,32 +717,32 @@ class CrowdSimEnv(gym.Env):
                     force_r = A * np.exp((r_sum_r - dist_r) / B)
                     f_rep_x += force_r * (dx_r / dist_r)
                     f_rep_y += force_r * (dy_r / dist_r)
-                
+
             # Total force
             ax = f_drive_x + f_rep_x
             ay = f_drive_y + f_rep_y
-            
+
             # Update velocity
             nvx = vx + ax * self.time_step
             nvy = vy + ay * self.time_step
-            
+
             # Limit speed to max preferred speed
             speed = np.hypot(nvx, nvy)
             vpref_i = self._human_vpref(i)
             if speed > vpref_i:
                 nvx = (nvx / speed) * vpref_i
                 nvy = (nvy / speed) * vpref_i
-                
+
             # Update position
             new_px[i] = px + nvx * self.time_step
             new_py[i] = py + nvy * self.time_step
             new_vx[i] = nvx
             new_vy[i] = nvy
-            
+
             # Update orientation
             if np.hypot(nvx, nvy) > 0.01:
                 self.humans_theta[i] = np.arctan2(nvy, nvx)
-                
+
         self.humans_px = new_px
         self.humans_py = new_py
         self.humans_vx = new_vx
@@ -715,7 +785,7 @@ class CrowdSimEnv(gym.Env):
         return f_rep_x, f_rep_y
 
     def _human_vpref(self, index):
-        speeds = getattr(self, 'humans_vpref', None)
+        speeds = getattr(self, "humans_vpref", None)
         if speeds is None:
             return float(self.human_vpref)
         return float(speeds[index])
@@ -752,7 +822,7 @@ class CrowdSimEnv(gym.Env):
         vel = np.stack([self.humans_vx, self.humans_vy], axis=1)
         radii = np.full(N, self.human_radius)
 
-        speeds = getattr(self, 'humans_vpref', None)
+        speeds = getattr(self, "humans_vpref", None)
         if speeds is not None:
             # asarray (not array(copy=False)) so a list/non-float humans_vpref is
             # converted instead of raising under NumPy 2.x, matching the old
@@ -772,8 +842,13 @@ class CrowdSimEnv(gym.Env):
                 pref[i, 1] = (dy / dist) * vpref_i
 
         new_vel = orca_velocities(
-            pos, vel, radii, pref, max_speeds,
-            time_horizon=3.0, time_step=self.time_step,
+            pos,
+            vel,
+            radii,
+            pref,
+            max_speeds,
+            time_horizon=3.0,
+            time_step=self.time_step,
         )
         self.humans_vx = new_vel[:, 0]
         self.humans_vy = new_vel[:, 1]
@@ -786,49 +861,74 @@ class CrowdSimEnv(gym.Env):
             moving, np.arctan2(self.humans_vy, self.humans_vx), self.humans_theta
         )
 
-    def render(self, mode='human'):
+    def render(self, mode="human"):
         # For simple visual verification
         fig, ax = plt.subplots(figsize=(6, 6))
         ax.set_xlim(-8, 8)
         ax.set_ylim(-8, 8)
-        
+
         # Draw target
-        ax.plot(self.robot_gx, self.robot_gy, 'r*', markersize=12, label='Goal')
-        
+        ax.plot(self.robot_gx, self.robot_gy, "r*", markersize=12, label="Goal")
+
         # Draw robot
-        robot_circle = patches.Circle((self.robot_px, self.robot_py), self.robot_radius, color='y', fill=True, label='Robot')
+        robot_circle = patches.Circle(
+            (self.robot_px, self.robot_py),
+            self.robot_radius,
+            color="y",
+            fill=True,
+            label="Robot",
+        )
         ax.add_patch(robot_circle)
-        
+
         # Draw robot heading
         arrow_len = 0.5
-        ax.arrow(self.robot_px, self.robot_py, 
-                 arrow_len * np.cos(self.robot_theta), 
-                 arrow_len * np.sin(self.robot_theta), 
-                 head_width=0.1, head_length=0.1, fc='black', ec='black')
-        
+        ax.arrow(
+            self.robot_px,
+            self.robot_py,
+            arrow_len * np.cos(self.robot_theta),
+            arrow_len * np.sin(self.robot_theta),
+            head_width=0.1,
+            head_length=0.1,
+            fc="black",
+            ec="black",
+        )
+
         # Draw humans
         for i in range(self.num_humans):
             # Draw ellipse comfort space
             # Rotate by human orientation
             deg = np.degrees(self.humans_theta[i])
             ellipse = patches.Ellipse(
-                (self.humans_px[i], self.humans_py[i]), 
-                width=self.a_front + self.a_back, 
-                height=self.b_left + self.b_right, 
-                angle=deg, 
-                color='blue', alpha=0.1, fill=True
+                (self.humans_px[i], self.humans_py[i]),
+                width=self.a_front + self.a_back,
+                height=self.b_left + self.b_right,
+                angle=deg,
+                color="blue",
+                alpha=0.1,
+                fill=True,
             )
             ax.add_patch(ellipse)
-            
-            human_circle = patches.Circle((self.humans_px[i], self.humans_py[i]), self.human_radius, color='b', fill=True)
+
+            human_circle = patches.Circle(
+                (self.humans_px[i], self.humans_py[i]),
+                self.human_radius,
+                color="b",
+                fill=True,
+            )
             ax.add_patch(human_circle)
-            
+
             # Draw human heading
-            ax.arrow(self.humans_px[i], self.humans_py[i], 
-                     arrow_len * np.cos(self.humans_theta[i]), 
-                     arrow_len * np.sin(self.humans_theta[i]), 
-                     head_width=0.1, head_length=0.1, fc='blue', ec='blue')
-            
+            ax.arrow(
+                self.humans_px[i],
+                self.humans_py[i],
+                arrow_len * np.cos(self.humans_theta[i]),
+                arrow_len * np.sin(self.humans_theta[i]),
+                head_width=0.1,
+                head_length=0.1,
+                fc="blue",
+                ec="blue",
+            )
+
         plt.grid(True)
         plt.title(f"Time: {self.current_time:.2f}s")
         plt.show()
