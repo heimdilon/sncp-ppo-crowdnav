@@ -36,7 +36,7 @@ def run_and_animate_scenario(scenario_name, model_path='checkpoints/sncp_ppo.pt'
     
     # Initialize policy and agent (architecture auto-detected from the checkpoint)
     if os.path.exists(model_path):
-        state_dict = torch.load(model_path, map_location=device)
+        state_dict = torch.load(model_path, map_location=device, weights_only=True)
         policy = build_policy_for_checkpoint(
             state_dict, robot_vpref=env.robot_vpref, robot_wmax=env.robot_wmax
         ).to(device)
