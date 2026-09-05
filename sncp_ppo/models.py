@@ -3,8 +3,24 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from ncps.torch import LTC
+from ncps.torch import CfC, LTC
 from ncps.wirings import AutoNCP
+
+
+VALID_CELL_TYPES = ('ltc', 'cfc')
+SPARSE_HIG_MAX_K = 4
+_LTC_MODULE_PREFIXES = ('temporal_ltc.', 'spatial_ltc.', 'node_ltc.')
+_CFC_MODULE_PREFIXES = ('temporal_cfc.', 'spatial_cfc.', 'node_cfc.')
+_DENSE_HH_PREFIXES = ('hh_attn.',)
+_SPARSE_HH_PREFIXES = ('hh_sparse_attn.',)
+
+
+class CellTypeMismatchError(ValueError):
+    """LTC and CfC encoder weights are not interchangeable."""
+
+
+class SparseHIGMismatchError(ValueError):
+    """Dense v37 HH (full MHA) and SparseHIG weights are not interchangeable."""
 
 
 def _orthogonal_linear(layer, gain):
@@ -20,11 +36,13 @@ class SNCPPolicy(nn.Module):
                  attn_count_scaling=False, meanmax_pool=False, node_units=128,
                  node_output=48, attn_heads=1, action_dist='gaussian', sense_range=0.0,
                  hh_intent_graph=False, hh_attn_heads=4,
-                 cv_horizons=(1, 2, 3, 4), cv_dt=0.25, risk_head=False):
+                 cv_horizons=(1, 2, 3, 4), cv_dt=0.25, risk_head=False,
+                 cell_type='ltc', sparse_hig=False, hh_topk=3):
         super(SNCPPolicy, self).__init__()
 
         self.robot_vpref = robot_vpref
         self.robot_wmax = robot_wmax
+        self.cell_type = _normalize_cell_type(cell_type)
         self.pre_mlp = pre_mlp
         # Paper Eq 13 scales attention scores by n/sqrt(d_k) (n = #humans); we
         # historically used 1/sqrt(d_k), making the pooled vector a pure
@@ -59,10 +77,21 @@ class SNCPPolicy(nn.Module):
         # the existing [dx,dy,rel_vx,rel_vy] spatial edge fields; no observation
         # or environment schema change is required. The scalar gate starts at
         # zero, making an upgraded checkpoint behaviorally identical to its base.
-        self.hh_intent_graph = bool(hh_intent_graph)
+        #
+        # M2' SparseHIG: optional top-k (k≤4) neighbor HH instead of the full
+        # H×H MHA. Distinct module name (hh_sparse_attn) so dense v37 weights
+        # cannot silently load. sparse_hig implies the v37 CV+gate surface.
+        self.sparse_hig = bool(sparse_hig)
+        self.hh_intent_graph = bool(hh_intent_graph) or self.sparse_hig
         self.hh_attn_heads = int(hh_attn_heads)
+        self._hh_topk = int(hh_topk) if self.sparse_hig else 0
         self.cv_horizons = tuple(float(h) for h in cv_horizons)
         self.cv_dt = float(cv_dt)
+        if self.sparse_hig and not (0 <= self._hh_topk <= SPARSE_HIG_MAX_K):
+            raise ValueError(
+                f"hh_topk must be in 0..{SPARSE_HIG_MAX_K} for SparseHIG, "
+                f"got {hh_topk!r}"
+            )
         if self.hh_intent_graph:
             if not self.cv_horizons or any(h <= 0 for h in self.cv_horizons):
                 raise ValueError("cv_horizons must contain positive values")
@@ -81,11 +110,16 @@ class SNCPPolicy(nn.Module):
                 nn.ReLU(),
             )
             self.hh_norm = nn.LayerNorm(256)
-            self.hh_attn = nn.MultiheadAttention(
+            hh_mha = nn.MultiheadAttention(
                 embed_dim=256,
                 num_heads=self.hh_attn_heads,
                 batch_first=True,
             )
+            if self.sparse_hig:
+                self.register_buffer('_hh_sparse_k', torch.tensor(float(self._hh_topk)))
+                self.hh_sparse_attn = hh_mha
+            else:
+                self.hh_attn = hh_mha
             self.hh_gate = nn.Parameter(torch.tensor(0.0))
 
         # v39: tiny fusion-level risk head. Conditional so every pre-v39
@@ -107,6 +141,13 @@ class SNCPPolicy(nn.Module):
             # Discounted cost-to-go critic. Separate from p_coll (short-horizon
             # collision classifier used only in L_risk BCE).
             self.cost_critic = nn.Linear(256, 1)
+
+        # Side-research CfC marker. Registered ONLY when cell_type='cfc' so
+        # default LTC checkpoints stay byte-identical (same pattern as pre_mlp
+        # / risk_head). build_policy_for_checkpoint auto-detects from this
+        # buffer or from temporal_cfc.* keys.
+        if self.cell_type == 'cfc':
+            self.register_buffer('_cell_type_cfc', torch.tensor(1.0))
 
         # 1. Robot Node Encoder (MLP)
         # Input robot_node: [dg_local_x, dg_local_y, v_linear, dist_to_goal, vpref, radius, w_angular] (dim 7)
@@ -137,9 +178,9 @@ class SNCPPolicy(nn.Module):
                 nn.Linear(128, 256),
                 nn.ReLU(),
             )
-            self.temporal_ltc = LTC(input_size=256, units=self.temporal_wiring)
+            self._set_ncp_cell('temporal', input_size=256, wiring=self.temporal_wiring)
         else:
-            self.temporal_ltc = LTC(input_size=2, units=self.temporal_wiring)
+            self._set_ncp_cell('temporal', input_size=2, wiring=self.temporal_wiring)
         self.temporal_proj = nn.Linear(self.temporal_wiring.output_dim, 256)
 
         # 3. Spatial Edge Encoder — sparse NCP. Raw input dim 6:
@@ -155,9 +196,9 @@ class SNCPPolicy(nn.Module):
                 nn.Linear(128, 256),
                 nn.ReLU(),
             )
-            self.spatial_ltc = LTC(input_size=256, units=self.spatial_wiring)
+            self._set_ncp_cell('spatial', input_size=256, wiring=self.spatial_wiring)
         else:
-            self.spatial_ltc = LTC(input_size=6, units=self.spatial_wiring)
+            self._set_ncp_cell('spatial', input_size=6, wiring=self.spatial_wiring)
         self.spatial_proj = nn.Linear(self.spatial_wiring.output_dim, 256)
         
         # 4. Attention Pooling weights
@@ -189,8 +230,11 @@ class SNCPPolicy(nn.Module):
         # flagged as the capacity ceiling).
         self.node_units, self.node_output = node_units, node_output
         self.node_wiring = AutoNCP(units=node_units, output_size=node_output, seed=48203)
-        self.node_ltc = LTC(input_size=640, units=self.node_wiring)
+        self._set_ncp_cell('node', input_size=640, wiring=self.node_wiring)
         self.node_proj = nn.Linear(self.node_wiring.output_dim, 256)
+        if self.cell_type == 'cfc':
+            self.register_buffer('_cfc_node_units', torch.tensor(float(self.node_units)))
+            self.register_buffer('_cfc_node_output', torch.tensor(float(self.node_output)))
         
         # 6. Actor & Critic Heads
         # action_dist='gaussian' (default): mean head (2) + global logstd; mean is
@@ -228,6 +272,19 @@ class SNCPPolicy(nn.Module):
         )
         self._init_linear_weights()
 
+    def _set_ncp_cell(self, name, input_size, wiring):
+        """Attach temporal/spatial/node as *_ltc (default) or *_cfc.
+
+        Module names stay distinct so LTC and CfC checkpoints cannot load into
+        each other without a missing/unexpected-key error.
+        """
+        cell = (CfC(input_size, wiring) if self.cell_type == 'cfc'
+                else LTC(input_size, wiring))
+        setattr(self, f'{name}_{self.cell_type}', cell)
+
+    def _ncp(self, name):
+        return getattr(self, f'{name}_{self.cell_type}')
+
     def _init_linear_weights(self):
         sqrt2 = math.sqrt(2.0)
         for m in self.robot_mlp:
@@ -252,10 +309,11 @@ class SNCPPolicy(nn.Module):
             for m in self.cv_encoder:
                 if isinstance(m, nn.Linear):
                     _orthogonal_linear(m, gain=sqrt2)
-            nn.init.xavier_uniform_(self.hh_attn.in_proj_weight)
-            if self.hh_attn.in_proj_bias is not None:
-                nn.init.zeros_(self.hh_attn.in_proj_bias)
-            _orthogonal_linear(self.hh_attn.out_proj, gain=sqrt2)
+            hh_mha = self._hh_mha()
+            nn.init.xavier_uniform_(hh_mha.in_proj_weight)
+            if hh_mha.in_proj_bias is not None:
+                nn.init.zeros_(hh_mha.in_proj_bias)
+            _orthogonal_linear(hh_mha.out_proj, gain=sqrt2)
         
         linears = [m for m in self.actor_mu if isinstance(m, nn.Linear)]
         for m in linears[:-1]:
@@ -315,18 +373,96 @@ class SNCPPolicy(nn.Module):
         future = rel_pos + rel_vel * times
         return future.flatten(start_dim=-2)
 
+    @property
+    def hh_topk(self):
+        """Neighbor k. After load_state_dict the `_hh_sparse_k` buffer wins."""
+        buf = getattr(self, '_hh_sparse_k', None)
+        if buf is not None:
+            return int(buf.item())
+        return int(getattr(self, '_hh_topk', 0))
+
+    def _hh_mha(self):
+        """Dense v37 `hh_attn` or SparseHIG `hh_sparse_attn`."""
+        return self.hh_sparse_attn if self.sparse_hig else self.hh_attn
+
+    def _topk_neighbor_index(self, spatial_edges, mask=None):
+        """Nearest-other-human indices [B,H,k] and validity [B,H,k].
+
+        Distance is pairwise Euclidean on robot-local (dx, dy). Self is never a
+        neighbor. Invisible humans (mask False) cannot be selected. When H-1 < k
+        leftover slots are invalid pads (valid=False); their gathered indices
+        are clamped and must stay masked in attention.
+        """
+        k = self.hh_topk
+        pos = spatial_edges[..., :2]
+        batch, num_humans, _ = pos.shape
+        if k <= 0 or num_humans <= 0:
+            empty_idx = pos.new_zeros(batch, num_humans, max(k, 0), dtype=torch.long)
+            empty_valid = torch.zeros(batch, num_humans, max(k, 0), dtype=torch.bool,
+                                      device=pos.device)
+            return empty_idx, empty_valid
+
+        dist = torch.cdist(pos, pos)
+        self_mask = torch.eye(num_humans, dtype=torch.bool, device=pos.device)
+        dist = dist.masked_fill(self_mask.unsqueeze(0), float('inf'))
+        if mask is not None:
+            dist = dist.masked_fill(~mask.unsqueeze(1), float('inf'))
+            dist = dist.masked_fill(~mask.unsqueeze(2), float('inf'))
+        if k > num_humans:
+            pad = dist.new_full((batch, num_humans, k - num_humans), float('inf'))
+            dist = torch.cat([dist, pad], dim=-1)
+        values, idx = dist.topk(k, dim=-1, largest=False)
+        valid = torch.isfinite(values)
+        idx = idx.clamp(min=0, max=max(num_humans - 1, 0))
+        return idx, valid
+
+    def _sparse_hh_attention(self, tokens, spatial_edges, mask=None):
+        """Query each human against its k nearest others; pad-safe when H < k."""
+        if self.hh_topk <= 0:
+            return torch.zeros_like(tokens)
+        idx, valid = self._topk_neighbor_index(spatial_edges, mask)
+        batch, num_humans, dim = tokens.shape
+        k = self.hh_topk
+        gather_idx = idx.reshape(batch, num_humans * k).unsqueeze(-1).expand(
+            batch, num_humans * k, dim
+        )
+        gathered = torch.gather(tokens, 1, gather_idx).reshape(batch, num_humans, k, dim)
+        query = tokens.reshape(batch * num_humans, 1, dim)
+        key_value = gathered.reshape(batch * num_humans, k, dim)
+        key_padding = ~valid.reshape(batch * num_humans, k)
+        none_valid = ~valid.any(dim=-1)
+        none_valid_flat = none_valid.reshape(batch * num_humans)
+        if bool(none_valid_flat.any()):
+            key_padding = key_padding.clone()
+            key_padding[none_valid_flat, 0] = False
+        hh_flat, _ = self.hh_sparse_attn(
+            query, key_value, key_value,
+            key_padding_mask=key_padding,
+            need_weights=False,
+        )
+        hh = hh_flat.reshape(batch, num_humans, dim)
+        hh = hh.masked_fill(none_valid.unsqueeze(-1), 0.0)
+        if mask is not None:
+            hh = hh.masked_fill((~mask).unsqueeze(-1), 0.0)
+        return hh
+
     def _human_intent_graph(self, M_rh, spatial_edges, mask=None):
         """Apply gated human-human self-attention over CV-enriched tokens.
 
-        mask uses the policy convention True=visible, while PyTorch MHA expects
-        True=hidden in key_padding_mask. Rows with no visible humans temporarily
-        expose one safe key to avoid all-masked softmax NaNs, then zero the whole
-        residual. Hidden query rows are also zeroed.
+        Dense path: full H×H MHA (v37). SparseHIG: each human attends to its
+        k≤4 nearest others. mask uses the policy convention True=visible, while
+        PyTorch MHA expects True=hidden in key_padding_mask. Rows with no
+        visible humans temporarily expose one safe key to avoid all-masked
+        softmax NaNs, then zero the whole residual. Hidden query rows are also
+        zeroed.
         """
         if not self.hh_intent_graph:
             return M_rh
         cv_embed = self.cv_encoder(self._constant_velocity_features(spatial_edges))
         tokens = self.hh_norm(M_rh + cv_embed)
+        if self.sparse_hig:
+            hh = self._sparse_hh_attention(tokens, spatial_edges, mask)
+            return M_rh + torch.tanh(self.hh_gate) * hh
         key_padding_mask = None
         all_masked = None
         safe_mask = mask
@@ -433,12 +569,12 @@ class SNCPPolicy(nn.Module):
             obs: dict containing 'robot_node' (B,7), 'spatial_edges' (B,H,4)
                  = [pos_local, rel_vel_local], 'temporal_edges' (B,2). All in
                  robot-local frame.
-            hidden_states: dict with 'temporal_edge', 'spatial_edge', 'node' LTC states
+            hidden_states: dict with 'temporal_edge', 'spatial_edge', 'node' NCP states
         Returns:
             mu: actor mean [batch_size, 2] — scaled to (v in [0, vpref], w in [-wmax, wmax])
             std: actor std [batch_size, 2] — broadcast from per-dim logstd parameter
             value: critic value [batch_size, 1]
-            new_hidden_states: updated LTC hidden states
+            new_hidden_states: updated NCP hidden states (LTC or CfC)
         """
         robot_node = obs['robot_node']        # [batch_size, 7]
         spatial_edges = obs['spatial_edges']  # [batch_size, num_humans, 4]
@@ -450,15 +586,15 @@ class SNCPPolicy(nn.Module):
         # 1. Robot Node Encoding
         v_m = self.robot_mlp(robot_node)  # [batch_size, 128]
         
-        # 2. Temporal Edge Encoding (LTC). With pre_mlp, the paper's Eq 11
+        # 2. Temporal Edge Encoding (LTC or CfC). With pre_mlp, the paper's Eq 11
         # ordering: expand to the 256-dim encoding first, then the NCP.
         temporal_features = self.temporal_pre_mlp(temporal_edges) if self.pre_mlp else temporal_edges
         temporal_input = temporal_features.unsqueeze(1)
         h_temp = hidden_states['temporal_edge']
-        m_rr_seq, h_temp_new = self.temporal_ltc(temporal_input, h_temp)
+        m_rr_seq, h_temp_new = self._ncp('temporal')(temporal_input, h_temp)
         m_rr = self.temporal_proj(m_rr_seq.squeeze(1))
 
-        # 3. Spatial Edge Encoding (LTC)
+        # 3. Spatial Edge Encoding (LTC or CfC)
         spatial_flat = spatial_edges.reshape(batch_size * num_humans, 6)
         if self.pre_mlp:
             spatial_flat = self.spatial_pre_mlp(spatial_flat)
@@ -469,7 +605,7 @@ class SNCPPolicy(nn.Module):
         else:
             h_spat_flat = h_spat
             
-        M_rh_seq, h_spat_new_flat = self.spatial_ltc(spatial_input, h_spat_flat)
+        M_rh_seq, h_spat_new_flat = self._ncp('spatial')(spatial_input, h_spat_flat)
         M_rh_proj = self.spatial_proj(M_rh_seq.squeeze(1))
         M_rh = M_rh_proj.reshape(batch_size, num_humans, 256)
 
@@ -483,10 +619,10 @@ class SNCPPolicy(nn.Module):
             M_rh = self._human_intent_graph(M_rh, spatial_edges, sense_mask)
         u_att = self._attention_pool(M_rh, m_rr, num_humans, sense_mask)
         
-        # 5. Node LTC Encoder
+        # 5. Node NCP Encoder (LTC or CfC)
         node_input = torch.cat([v_m, m_rr, u_att], dim=-1).unsqueeze(1)
         h_node = hidden_states['node']
-        sf_seq, h_node_new = self.node_ltc(node_input, h_node)
+        sf_seq, h_node_new = self._ncp('node')(node_input, h_node)
         sf = self.node_proj(sf_seq.squeeze(1))
         
         # 6. Actor & Critic Outputs
@@ -533,6 +669,129 @@ class SNCPPolicy(nn.Module):
         return out1, out2, value, new_hidden_states
 
 
+def _normalize_cell_type(cell_type):
+    name = str(cell_type).lower()
+    if name not in VALID_CELL_TYPES:
+        raise ValueError(
+            f"cell_type must be one of {VALID_CELL_TYPES}, got {cell_type!r}"
+        )
+    return name
+
+
+def detect_cell_type(state_dict):
+    """Return 'ltc' or 'cfc' from a policy state dict.
+
+    Default / historical checkpoints have `*_ltc.*` keys and no CfC marker.
+    CfC checkpoints have `*_cfc.*` keys and `_cell_type_cfc`. Mixing both is
+    an error rather than a silent guess.
+    """
+    keys = list(state_dict)
+    has_cfc = any(key.startswith(_CFC_MODULE_PREFIXES) for key in keys)
+    has_ltc = any(key.startswith(_LTC_MODULE_PREFIXES) for key in keys)
+    marked_cfc = '_cell_type_cfc' in state_dict
+    if has_cfc and has_ltc:
+        raise CellTypeMismatchError(
+            "checkpoint contains both LTC and CfC encoder keys; refusing to guess"
+        )
+    if marked_cfc and has_ltc:
+        raise CellTypeMismatchError(
+            "checkpoint is marked CfC but contains LTC encoder keys"
+        )
+    if has_cfc or marked_cfc:
+        return 'cfc'
+    return 'ltc'
+
+
+def assert_cell_type_compatible(policy, state_dict):
+    """Raise if `state_dict` belongs to the other NCP cell family."""
+    detected = detect_cell_type(state_dict)
+    requested = getattr(policy, 'cell_type', 'ltc')
+    if detected != requested:
+        pretty = {'ltc': 'LTC', 'cfc': 'CfC'}
+        raise CellTypeMismatchError(
+            f"Cannot load a {pretty[detected]} checkpoint into a "
+            f"{pretty[requested]} SNCPPolicy. Reconstruct with "
+            f"build_policy_for_checkpoint(...) or SNCPPolicy(cell_type="
+            f"'{detected}') / --temporal_cell {detected}."
+        )
+    return detected
+
+
+def detect_sparse_hig(state_dict):
+    """Return True if `state_dict` is a SparseHIG checkpoint.
+
+    Marker is `_hh_sparse_k` and/or `hh_sparse_attn.*`. Mixing those with dense
+    v37 `hh_attn.*` is a hard error — never a silent guess.
+    """
+    keys = list(state_dict)
+    has_sparse = (
+        '_hh_sparse_k' in state_dict
+        or any(key.startswith(_SPARSE_HH_PREFIXES) for key in keys)
+    )
+    has_dense = any(key.startswith(_DENSE_HH_PREFIXES) for key in keys)
+    if has_sparse and has_dense:
+        raise SparseHIGMismatchError(
+            "checkpoint contains both dense HH (hh_attn.*) and SparseHIG "
+            "(hh_sparse_attn.* / _hh_sparse_k) keys; refusing to guess"
+        )
+    return has_sparse
+
+
+def detect_hh_topk(state_dict):
+    """SparseHIG k from `_hh_sparse_k`, or 0 when the branch is off."""
+    if not detect_sparse_hig(state_dict):
+        return 0
+    buf = state_dict.get('_hh_sparse_k')
+    if buf is None:
+        raise SparseHIGMismatchError(
+            "SparseHIG checkpoint is missing _hh_sparse_k; refusing to guess k"
+        )
+    return int(buf.item())
+
+
+def assert_sparse_hig_compatible(policy, state_dict):
+    """Raise if `state_dict` is the other HH graph family (dense vs SparseHIG)."""
+    detected = detect_sparse_hig(state_dict)
+    requested = bool(getattr(policy, 'sparse_hig', False))
+    if detected != requested:
+        have = "SparseHIG" if detected else "dense-or-no HH"
+        want = "SparseHIG" if requested else "dense-or-no HH"
+        raise SparseHIGMismatchError(
+            f"Cannot load a {have} checkpoint into a {want} SNCPPolicy. "
+            "Reconstruct with build_policy_for_checkpoint(...) or pass "
+            "--sparse_hig / omit it to match the file."
+        )
+    if detected:
+        ckpt_k = detect_hh_topk(state_dict)
+        pol_k = int(getattr(policy, 'hh_topk', 0))
+        if ckpt_k != pol_k:
+            raise SparseHIGMismatchError(
+                f"SparseHIG k mismatch: checkpoint k={ckpt_k} vs policy k={pol_k}"
+            )
+    return detected
+
+
+def load_policy_state_dict(policy, state_dict, strict=True):
+    """load_state_dict with explicit LTC/CfC and dense-HH/SparseHIG checks."""
+    assert_cell_type_compatible(policy, state_dict)
+    assert_sparse_hig_compatible(policy, state_dict)
+    return policy.load_state_dict(state_dict, strict=strict)
+
+
+def _infer_cfc_node_sizes(state_dict):
+    units_buf = state_dict.get('_cfc_node_units')
+    output_buf = state_dict.get('_cfc_node_output')
+    if units_buf is not None and output_buf is not None:
+        return int(units_buf.item()), int(output_buf.item())
+    node_output = int(state_dict['node_proj.weight'].shape[1]) if 'node_proj.weight' in state_dict else 48
+    units = 0
+    layer = 0
+    while f'node_cfc.rnn_cell.layer_{layer}.ff1.bias' in state_dict:
+        units += int(state_dict[f'node_cfc.rnn_cell.layer_{layer}.ff1.bias'].shape[0])
+        layer += 1
+    return (units or 128), node_output
+
+
 def checkpoint_has_risk_head(state_dict):
     return '_risk_head' in state_dict or any(
         key.startswith('risk_mlp.') for key in state_dict
@@ -551,20 +810,24 @@ def build_policy_for_checkpoint(state_dict, robot_vpref=0.26, robot_wmax=1.8,
                                 risk_head=None):
     """Construct an SNCPPolicy whose architecture matches a saved state dict.
 
-    Checkpoints are plain `policy.state_dict()` files; the only architecture
-    variant is the paper-Eq-11 pre-MLP (v22+), detectable from its keys. Old
-    checkpoints (v14..v21) have no `*_pre_mlp` keys and get the legacy layout.
+    Checkpoints are plain `policy.state_dict()` files; architecture variants
+    (pre-MLP, pooling, cell_type, …) are detected from keys. Old checkpoints
+    (v14..v21) have no `*_pre_mlp` keys and get the legacy LTC layout.
     Pass risk_head=True to attach a fresh v39 head on top of a pre-v39
     checkpoint (training-only); eval leaves this None so auto-detect preserves
     old weights byte-for-byte.
     """
+    cell_type = detect_cell_type(state_dict)
     pre_mlp = any(key.startswith('temporal_pre_mlp') for key in state_dict)
     attn_count_scaling = '_attn_count_scaling' in state_dict
     meanmax_pool = any(key.startswith('pool_merge') for key in state_dict)
-    gleak = state_dict.get('node_ltc.rnn_cell.gleak')
-    node_units = int(gleak.shape[0]) if gleak is not None else 128
-    out_w = state_dict.get('node_ltc.rnn_cell.output_w')
-    node_output = int(out_w.shape[0]) if out_w is not None else 48
+    if cell_type == 'cfc':
+        node_units, node_output = _infer_cfc_node_sizes(state_dict)
+    else:
+        gleak = state_dict.get('node_ltc.rnn_cell.gleak')
+        node_units = int(gleak.shape[0]) if gleak is not None else 128
+        out_w = state_dict.get('node_ltc.rnn_cell.output_w')
+        node_output = int(out_w.shape[0]) if out_w is not None else 48
     ah = state_dict.get('_attn_heads')
     attn_heads = int(ah.item()) if ah is not None else 1
     action_dist = 'gaussian' if 'actor_logstd' in state_dict else 'beta'
@@ -577,6 +840,8 @@ def build_policy_for_checkpoint(state_dict, robot_vpref=0.26, robot_wmax=1.8,
     cv_horizons = tuple(float(value) for value in cvh.tolist()) if cvh is not None else (1, 2, 3, 4)
     cvdt = state_dict.get('_cv_dt')
     cv_dt = float(cvdt.item()) if cvdt is not None else 0.25
+    sparse_hig = detect_sparse_hig(state_dict)
+    hh_topk = detect_hh_topk(state_dict) if sparse_hig else 3
     detected_risk = checkpoint_has_risk_head(state_dict)
     if risk_head is None:
         risk_head = detected_risk
@@ -585,5 +850,7 @@ def build_policy_for_checkpoint(state_dict, robot_vpref=0.26, robot_wmax=1.8,
                       meanmax_pool=meanmax_pool, node_units=node_units,
                       node_output=node_output, attn_heads=attn_heads,
                       action_dist=action_dist, sense_range=sense_range,
-                      hh_intent_graph=hh_intent_graph, hh_attn_heads=hh_attn_heads,
-                      cv_horizons=cv_horizons, cv_dt=cv_dt, risk_head=risk_head)
+                      hh_intent_graph=hh_intent_graph or sparse_hig,
+                      hh_attn_heads=hh_attn_heads,
+                      cv_horizons=cv_horizons, cv_dt=cv_dt, risk_head=risk_head,
+                      cell_type=cell_type, sparse_hig=sparse_hig, hh_topk=hh_topk)

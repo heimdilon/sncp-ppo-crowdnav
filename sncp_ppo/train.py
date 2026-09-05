@@ -10,7 +10,17 @@ import numpy as np
 import torch
 
 from crowd_sim.crowd_env import CrowdSimEnv, PAPER_SCENARIO_CONFIG
-from sncp_ppo.models import SNCPPolicy, build_policy_for_checkpoint, checkpoint_has_risk_head, _is_risk_head_key
+from sncp_ppo.models import (
+    SNCPPolicy,
+    assert_cell_type_compatible,
+    assert_sparse_hig_compatible,
+    build_policy_for_checkpoint,
+    checkpoint_has_risk_head,
+    detect_cell_type,
+    detect_sparse_hig,
+    load_policy_state_dict,
+    _is_risk_head_key,
+)
 from sncp_ppo.ppo import PPOAgent
 from sncp_ppo.risk_labeler import label_short_horizon_risk, label_vectorized_envs
 
@@ -275,8 +285,9 @@ _V37_UPGRADE_EXACT_KEYS = {
     '_cv_horizons',
     '_cv_dt',
     'hh_gate',
+    '_hh_sparse_k',
 }
-_V37_UPGRADE_PREFIXES = ('cv_encoder.', 'hh_norm.', 'hh_attn.')
+_V37_UPGRADE_PREFIXES = ('cv_encoder.', 'hh_norm.', 'hh_attn.', 'hh_sparse_attn.')
 
 
 def _is_v37_upgrade_key(key):
@@ -305,8 +316,11 @@ def _assert_forward_equivalent(base, upgraded, device, atol=1e-6):
 
 def build_upgraded_policy(state_dict, *, robot_vpref, robot_wmax, device,
                           hh_attn_heads=4, cv_horizons=(1, 2, 3, 4), cv_dt=0.25,
-                          risk_head=False):
-    """Add the zero-gated v37 HH+CV branch to a pre-v37 checkpoint safely."""
+                          risk_head=False, sparse_hig=False, hh_topk=3):
+    """Add the zero-gated v37 HH+CV branch to a pre-v37 checkpoint safely.
+
+    Pass sparse_hig=True to attach M2' top-k SparseHIG instead of dense H×H MHA.
+    """
     base = build_policy_for_checkpoint(
         state_dict, robot_vpref=robot_vpref, robot_wmax=robot_wmax
     ).to(device)
@@ -335,6 +349,9 @@ def build_upgraded_policy(state_dict, *, robot_vpref, robot_wmax, device,
         cv_horizons=cv_horizons,
         cv_dt=cv_dt,
         risk_head=bool(risk_head) or getattr(base, 'risk_head', False),
+        cell_type=getattr(base, 'cell_type', 'ltc'),
+        sparse_hig=bool(sparse_hig),
+        hh_topk=hh_topk,
     ).to(device)
     missing, unexpected = upgraded.load_state_dict(state_dict, strict=False)
     unsafe_missing = [
@@ -376,12 +393,43 @@ def build_or_load_policy(args, env, device):
         raise ValueError("--init_checkpoint and --upgrade_checkpoint are mutually exclusive")
     if init_ckpt:
         state = _load_checkpoint(init_ckpt, device)
+        requested_cell = getattr(args, 'temporal_cell', 'ltc') or 'ltc'
+        detected_cell = detect_cell_type(state)
+        if requested_cell != detected_cell:
+            pretty = {'ltc': 'LTC', 'cfc': 'CfC'}
+            raise ValueError(
+                f"checkpoint is {pretty[detected_cell]} but --temporal_cell "
+                f"{requested_cell} was requested. Refusing to load "
+                f"{pretty[detected_cell]} weights into a {pretty[requested_cell]} "
+                "policy. Pass --temporal_cell matching the checkpoint, or omit "
+                "--init_checkpoint to train the requested cell from scratch."
+            )
         want_risk = _want_risk_head(args)
         detected_risk = checkpoint_has_risk_head(state)
+        if getattr(args, 'sparse_hig', False) and not detect_sparse_hig(state):
+            already_hh = '_hh_intent_graph' in state
+            if already_hh:
+                hint = (
+                    "This file is already dense v37 HH; there is no conversion "
+                    "path into SparseHIG (weights are not interchangeable). "
+                    "Train SparseHIG from a pre-v37 checkpoint via "
+                    "--upgrade_checkpoint --sparse_hig, or from scratch."
+                )
+            else:
+                hint = (
+                    "Use --upgrade_checkpoint --sparse_hig to attach a fresh "
+                    "zero-gated SparseHIG branch to this pre-v37 file."
+                )
+            raise ValueError(
+                "checkpoint is not SparseHIG but --sparse_hig was requested. "
+                + hint
+            )
         policy = build_policy_for_checkpoint(
             state, robot_vpref=env.robot_vpref, robot_wmax=env.robot_wmax,
             risk_head=True if want_risk else None,
         ).to(device)
+        assert_cell_type_compatible(policy, state)
+        assert_sparse_hig_compatible(policy, state)
         if want_risk and not detected_risk:
             missing, unexpected = policy.load_state_dict(state, strict=False)
             unsafe_missing = [key for key in missing if not _is_risk_head_key(key)]
@@ -392,7 +440,7 @@ def build_or_load_policy(args, env, device):
                 )
             print(f"Initialized policy from {init_ckpt} and attached a fresh v39 risk head")
         else:
-            policy.load_state_dict(state)
+            load_policy_state_dict(policy, state)
             print(f"Initialized policy from {init_ckpt} (IL warm-start)")
         return policy
     if upgrade_ckpt:
@@ -406,6 +454,8 @@ def build_or_load_policy(args, env, device):
             cv_horizons=getattr(args, 'cv_horizons', (1, 2, 3, 4)),
             cv_dt=getattr(args, 'cv_dt', 0.25),
             risk_head=_want_risk_head(args),
+            sparse_hig=getattr(args, 'sparse_hig', False),
+            hh_topk=getattr(args, 'hh_topk', 3),
         )
         if _want_risk_head(args) and not getattr(policy, 'risk_head', False):
             raise RuntimeError(
@@ -427,11 +477,16 @@ def build_or_load_policy(args, env, device):
         attn_heads=getattr(args, 'attn_heads', 1),
         action_dist=getattr(args, 'action_dist', 'gaussian'),
         sense_range=getattr(args, 'sense_range', 0.0),
-        hh_intent_graph=getattr(args, 'hh_intent_graph', False),
+        hh_intent_graph=bool(
+            getattr(args, 'hh_intent_graph', False) or getattr(args, 'sparse_hig', False)
+        ),
         hh_attn_heads=getattr(args, 'hh_attn_heads', 4),
         cv_horizons=getattr(args, 'cv_horizons', (1, 2, 3, 4)),
         cv_dt=getattr(args, 'cv_dt', 0.25),
         risk_head=_want_risk_head(args),
+        cell_type=getattr(args, 'temporal_cell', 'ltc') or 'ltc',
+        sparse_hig=getattr(args, 'sparse_hig', False),
+        hh_topk=getattr(args, 'hh_topk', 3),
     ).to(device)
 
 
@@ -498,6 +553,12 @@ def train(args):
         lagrange_lambda_init=getattr(args, 'lagrange_lambda_init', 0.0),
         lagrange_lambda_max=getattr(args, 'lagrange_lambda_max', 10.0),
     )
+    print(f"NCP cell_type={getattr(policy, 'cell_type', 'ltc')} (ltc=ODE default, cfc=closed-form side branch)")
+    if getattr(policy, 'sparse_hig', False):
+        print(
+            f"SparseHIG ON k={int(getattr(policy, 'hh_topk', 0))} "
+            "(top-k HH; not HEIGHT/transformer; RH attention unchanged; no runtime shield)"
+        )
     if getattr(policy, 'risk_head', False):
         print(
             f"v39 risk head ON (not a runtime shield) | lagrange={bool(getattr(args, 'lagrange_ppo', False))} "
@@ -1377,6 +1438,18 @@ def build_parser():
                              'phase (scenario, --num_humans, canonical speed), bypassing the '
                              '10/25/50/75%% curriculum and replay. For short fixed-density '
                              'attribution runs; leave unset for real training.')
+    parser.add_argument(
+        '--temporal_cell', '--cell_type',
+        dest='temporal_cell',
+        type=str, default='ltc', choices=['ltc', 'cfc'],
+        help='NCP neuron model for the temporal, spatial, and node encoders. '
+             'ltc (default) = Liquid Time-Constant ODE cell; existing checkpoints '
+             'and the v39 stack stay unchanged. cfc = Closed-form Continuous-time '
+             'cell (Hasani et al. 2022 / ncps.torch.CfC) with the same AutoNCP '
+             'wiring and no ODE solver — a Pi-latency side experiment. '
+             'Auto-detected on load; mixing LTC and CfC weights raises a clear '
+             'error. Observation schema and the runtime action shield stay unchanged.',
+    )
     parser.add_argument('--pre_mlp', action='store_true',
                         help='Paper Eq 11 fidelity: expand edge inputs to the 256-dim encoding '
                              'with an MLP BEFORE the NCP encoders (v22 candidate). Default off '
@@ -1384,7 +1457,8 @@ def build_parser():
     parser.add_argument('--init_checkpoint', type=str, default=None,
                         help='Initialize the policy from this checkpoint instead of fresh weights '
                              '(v23 IL warm-start: PPO fine-tunes from the BC checkpoint). The '
-                             'architecture is auto-detected from the saved keys.')
+                             'architecture is auto-detected from the saved keys. --temporal_cell '
+                             'must match the checkpoint (LTC vs CfC); a mismatch is a hard error.')
     parser.add_argument('--upgrade_checkpoint', type=str, default=None,
                         help='Safely upgrade a pre-v37 checkpoint with the zero-initialized '
                              'human-human intention graph. Unlike --init_checkpoint, this permits '
@@ -1394,6 +1468,15 @@ def build_parser():
                         help='Enable the v37 gated human-human self-attention branch with '
                              'constant-velocity future geometry. --upgrade_checkpoint enables '
                              'the branch automatically; this flag also supports fresh builds.')
+    parser.add_argument('--sparse_hig', action='store_true',
+                        help='M2\' SparseHIG: replace dense v37 H×H human-human MHA with '
+                             'top-k (k≤4) nearest-neighbor HH. Implies --hh_intent_graph. '
+                             'Default off keeps existing checkpoints load-compatible. '
+                             'Auto-detected on load; mixing SparseHIG and dense HH weights '
+                             'is a hard error. Not a runtime action shield.')
+    parser.add_argument('--hh_topk', type=int, default=3,
+                        help='SparseHIG neighbor count k (default 3, max 4). Used only with '
+                             '--sparse_hig. k=0 is a no-op residual (identity HH).')
     parser.add_argument('--hh_attn_heads', type=int, default=4,
                         help='Human-human self-attention head count for v37 (default 4; must divide 256).')
     parser.add_argument('--cv_horizons', type=int, nargs='+', default=[1, 2, 3, 4],
