@@ -133,7 +133,7 @@ def make_policy_action_provider(
     else:
         device = torch.device(device_name)
 
-    state_dict = torch.load(checkpoint_path, map_location=device)
+    state_dict = torch.load(checkpoint_path, map_location=device, weights_only=True)
     policy = build_policy_for_checkpoint(
         state_dict, robot_vpref=env.robot_vpref, robot_wmax=env.robot_wmax
     ).to(device)

@@ -25,7 +25,7 @@ def test_default_node_size_unchanged_and_compatible():
     import os, pytest
     if not os.path.exists('checkpoints/sncp_ppo_v18.pt'):
         pytest.skip('milestone checkpoint checkpoints/sncp_ppo_v18.pt is git-ignored; present only locally')
-    state = torch.load('checkpoints/sncp_ppo_v18.pt', map_location='cpu')
+    state = torch.load('checkpoints/sncp_ppo_v18.pt', map_location='cpu', weights_only=True)
     policy = build_policy_for_checkpoint(state)
     policy.load_state_dict(state)
     assert policy.node_units == 128
@@ -51,7 +51,7 @@ def test_widened_node_is_autodetected(tmp_path):
     policy = SNCPPolicy(node_units=256, node_output=96)
     path = tmp_path / 'node256.pt'
     torch.save(policy.state_dict(), path)
-    state = torch.load(path, map_location='cpu')
+    state = torch.load(path, map_location='cpu', weights_only=True)
     rebuilt = build_policy_for_checkpoint(state)
     assert rebuilt.node_units == 256 and rebuilt.node_output == 96
     rebuilt.load_state_dict(state)  # must not raise
@@ -61,7 +61,7 @@ def test_default_node_state_dict_infers_128(tmp_path):
     policy = SNCPPolicy()  # node 128/48
     path = tmp_path / 'node128.pt'
     torch.save(policy.state_dict(), path)
-    state = torch.load(path, map_location='cpu')
+    state = torch.load(path, map_location='cpu', weights_only=True)
     rebuilt = build_policy_for_checkpoint(state)
     assert rebuilt.node_units == 128 and rebuilt.node_output == 48
     rebuilt.load_state_dict(state)  # must not raise

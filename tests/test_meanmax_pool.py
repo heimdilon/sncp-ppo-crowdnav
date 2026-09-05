@@ -28,7 +28,7 @@ def test_default_off_no_pool_merge_and_checkpoint_compatible():
     import os, pytest
     if not os.path.exists('checkpoints/sncp_ppo_v18.pt'):
         pytest.skip('milestone checkpoint checkpoints/sncp_ppo_v18.pt is git-ignored; present only locally')
-    state = torch.load('checkpoints/sncp_ppo_v18.pt', map_location='cpu')
+    state = torch.load('checkpoints/sncp_ppo_v18.pt', map_location='cpu', weights_only=True)
     policy = build_policy_for_checkpoint(state)
     policy.load_state_dict(state)
     assert policy.meanmax_pool is False
@@ -41,7 +41,7 @@ def test_meanmax_builds_pool_merge_and_is_autodetected(tmp_path):
 
     path = tmp_path / 'meanmax.pt'
     torch.save(policy.state_dict(), path)
-    state = torch.load(path, map_location='cpu')
+    state = torch.load(path, map_location='cpu', weights_only=True)
     rebuilt = build_policy_for_checkpoint(state)
     assert rebuilt.meanmax_pool is True
     rebuilt.load_state_dict(state)  # must not raise

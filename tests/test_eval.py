@@ -59,7 +59,7 @@ def run_evaluation(args):
     policy = SNCPPolicy(robot_vpref=env.robot_vpref, robot_wmax=env.robot_wmax).to(device)
 
     if os.path.exists(args.checkpoint):
-        policy.load_state_dict(torch.load(args.checkpoint, map_location=device))
+        policy.load_state_dict(torch.load(args.checkpoint, map_location=device, weights_only=True))
         print(f"Loaded policy from {args.checkpoint}")
     else:
         print(f"No checkpoint at {args.checkpoint} - using untrained policy.")

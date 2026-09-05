@@ -29,7 +29,7 @@ def test_default_has_no_scaling_buffer_and_is_checkpoint_compatible():
     import os, pytest
     if not os.path.exists('checkpoints/sncp_ppo_v18.pt'):
         pytest.skip('milestone checkpoint checkpoints/sncp_ppo_v18.pt is git-ignored; present only locally')
-    state = torch.load('checkpoints/sncp_ppo_v18.pt', map_location='cpu')
+    state = torch.load('checkpoints/sncp_ppo_v18.pt', map_location='cpu', weights_only=True)
     policy = build_policy_for_checkpoint(state)
     policy.load_state_dict(state)
     assert policy.attn_count_scaling is False
@@ -42,7 +42,7 @@ def test_scaling_policy_persists_a_buffer_and_is_autodetected(tmp_path):
 
     path = tmp_path / 'scaled.pt'
     torch.save(policy.state_dict(), path)
-    state = torch.load(path, map_location='cpu')
+    state = torch.load(path, map_location='cpu', weights_only=True)
     rebuilt = build_policy_for_checkpoint(state)
     assert rebuilt.attn_count_scaling is True
     rebuilt.load_state_dict(state)  # must not raise
