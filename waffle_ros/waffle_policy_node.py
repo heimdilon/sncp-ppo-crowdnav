@@ -50,7 +50,7 @@ class WafflePolicyNode(Node):
         self.get_logger().info(f"Loading policy on device: {self.device}")
         
         if os.path.exists(model_path):
-            state_dict = torch.load(model_path, map_location=self.device)
+            state_dict = torch.load(model_path, map_location=self.device, weights_only=True)
             self.policy = build_policy_for_checkpoint(
                 state_dict, robot_vpref=self.robot_vpref, robot_wmax=self.robot_wmax
             ).to(self.device)
