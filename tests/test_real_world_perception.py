@@ -51,6 +51,16 @@ def test_vision_localizer_projects_bottom_center_and_estimates_velocity():
     np.testing.assert_allclose([second[0].vx, second[0].vy], [0.2, 0.0], atol=1e-6)
 
 
+def test_vision_localizer_empty_detections_returns_empty_list():
+    calibration = PlanarCalibration.from_points(
+        [(0, 0), (100, 0), (100, 100), (0, 100)],
+        [(0, 0), (1, 0), (1, 1), (0, 1)],
+    )
+    localizer = VisionLocalizer(calibration)
+
+    tracks = localizer.update([], timestamp_s=0.0)
+    assert tracks == []
+
 def test_vision_localizer_filters_low_confidence_and_sorts_by_distance():
     calibration = PlanarCalibration.from_points(
         [(0, 0), (100, 0), (100, 100), (0, 100)],
