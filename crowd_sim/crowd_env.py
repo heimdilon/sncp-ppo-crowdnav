@@ -32,6 +32,16 @@ PAPER_SCENARIO_CONFIG = {
     },
 }
 
+# Finite rejection-sampling budgets for reset() layout placement.
+# Keep these matching the pre-vectorized loops so a dense crowd cannot hang
+# in an unbounded `while`. Paper N<=20 stays sequential (batch_size=1) so
+# seeded layouts and N=20 latency stay draw-equivalent to the old sampler.
+CIRCLE_LAYOUT_ATTEMPTS = 100
+PAPER_LAYOUT_ATTEMPTS = 200
+RANDOM_LAYOUT_ATTEMPTS = 200
+LAYOUT_BATCH_N_THRESHOLD = 20
+LAYOUT_BATCH_SIZE_CAP = 16
+
 
 class CrowdSimEnv(gym.Env):
     metadata = {"render.modes": ["human", "rgb_array"]}
@@ -183,6 +193,92 @@ class CrowdSimEnv(gym.Env):
 
         self.reset()
 
+    def _layout_batch_size(self, num_humans=None):
+        """1 for N<=20 (seed + paper-N20 latency); modest batches only at high N."""
+        n = self.num_humans if num_humans is None else int(num_humans)
+        if n <= LAYOUT_BATCH_N_THRESHOLD:
+            return 1
+        return min(LAYOUT_BATCH_SIZE_CAP, max(4, n // 4))
+
+    def _sample_separated_xy(
+        self,
+        *,
+        low,
+        high,
+        max_attempts,
+        min_start,
+        min_goal,
+        min_others,
+        placed_px,
+        placed_py,
+        batch_size,
+        check_goal=True,
+        start_strict=False,
+    ):
+        """Rejection-sample one (x, y) with a finite attempt budget.
+
+        ``batch_size==1`` uses scalar ``uniform()`` draws so the RNG stream
+        matches the legacy per-attempt loop. Larger batches are used only
+        when N is above ``LAYOUT_BATCH_N_THRESHOLD``. Exhausting the budget
+        returns the last candidate (same fallback as the old 100/200 loops).
+        """
+        last_px, last_py = 0.0, 0.0
+        placed_px = np.asarray(placed_px, dtype=float)
+        placed_py = np.asarray(placed_py, dtype=float)
+        n_placed = int(placed_px.size)
+        attempts = 0
+        batch_size = max(1, int(batch_size))
+        while attempts < max_attempts:
+            n = min(batch_size, max_attempts - attempts)
+            if n <= 0:
+                break
+            if n == 1:
+                px_b = np.array([self.np_random.uniform(low, high)], dtype=float)
+                py_b = np.array([self.np_random.uniform(low, high)], dtype=float)
+            else:
+                px_b = np.asarray(self.np_random.uniform(low, high, size=n), dtype=float)
+                py_b = np.asarray(self.np_random.uniform(low, high, size=n), dtype=float)
+            last_px, last_py = float(px_b[-1]), float(py_b[-1])
+            d_start = np.hypot(px_b - self.robot_px, py_b - self.robot_py)
+            start_ok = d_start > min_start if start_strict else d_start >= min_start
+            valid = start_ok
+            if check_goal:
+                d_goal = np.hypot(px_b - self.robot_gx, py_b - self.robot_gy)
+                valid = valid & (d_goal >= min_goal)
+            if n_placed:
+                dx = px_b[:, None] - placed_px[None, :]
+                dy = py_b[:, None] - placed_py[None, :]
+                valid = valid & (np.min(np.hypot(dx, dy), axis=1) > min_others)
+            hit = np.flatnonzero(valid)
+            if hit.size:
+                i = int(hit[0])
+                return float(px_b[i]), float(py_b[i])
+            attempts += n
+        return last_px, last_py
+
+    def _place_circle_humans(self, radius, min_safe):
+        """Per-human circle angles, 100-attempt last-candidate fallback."""
+        for i in range(self.num_humans):
+            px, py = self.robot_px, self.robot_py
+            for _ in range(CIRCLE_LAYOUT_ATTEMPTS):
+                angle = self.np_random.uniform(0.0, 2.0 * np.pi)
+                px = radius * np.cos(angle)
+                py = radius * np.sin(angle)
+                d_robot = np.hypot(px - self.robot_px, py - self.robot_py)
+                d_goal = np.hypot(px - self.robot_gx, py - self.robot_gy)
+                if d_robot >= min_safe and d_goal >= min_safe:
+                    break
+            self.humans_px[i] = px
+            self.humans_py[i] = py
+            gnoise = self.human_goal_noise
+            nx = self.np_random.uniform(-gnoise, gnoise) if gnoise > 0 else 0.0
+            ny = self.np_random.uniform(-gnoise, gnoise) if gnoise > 0 else 0.0
+            self.humans_gx[i] = -px + nx
+            self.humans_gy[i] = -py + ny
+            dx = self.humans_gx[i] - self.humans_px[i]
+            dy = self.humans_gy[i] - self.humans_py[i]
+            self.humans_theta[i] = np.arctan2(dy, dx)
+
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self.current_time = 0.0
@@ -269,28 +365,10 @@ class CrowdSimEnv(gym.Env):
                 # Random circle-crossing: each pedestrian gets a random angle on
                 # the circle with an antipodal goal, rejection-sampled to stay at
                 # least min_safe from BOTH the robot start and goal so no episode
-                # begins in collision. This is the variety the fixed i·2π/N
-                # placement lacked — a fresh geometry every episode.
-                for i in range(self.num_humans):
-                    px, py = self.robot_px, self.robot_py
-                    for _ in range(100):
-                        angle = self.np_random.uniform(0.0, 2.0 * np.pi)
-                        px = radius * np.cos(angle)
-                        py = radius * np.sin(angle)
-                        d_robot = np.hypot(px - self.robot_px, py - self.robot_py)
-                        d_goal = np.hypot(px - self.robot_gx, py - self.robot_gy)
-                        if d_robot >= min_safe and d_goal >= min_safe:
-                            break
-                    self.humans_px[i] = px
-                    self.humans_py[i] = py
-                    gnoise = self.human_goal_noise
-                    nx = self.np_random.uniform(-gnoise, gnoise) if gnoise > 0 else 0.0
-                    ny = self.np_random.uniform(-gnoise, gnoise) if gnoise > 0 else 0.0
-                    self.humans_gx[i] = -px + nx
-                    self.humans_gy[i] = -py + ny
-                    dx = self.humans_gx[i] - self.humans_px[i]
-                    dy = self.humans_gy[i] - self.humans_py[i]
-                    self.humans_theta[i] = np.arctan2(dy, dx)
+                # begins in collision. Sequential 100-attempt fallback keeps the
+                # pre-#37 seed stream (batching here is cheap and would break
+                # draw-equivalence for no real high-N win).
+                self._place_circle_humans(radius, min_safe)
             else:
                 # Legacy deterministic placement (angles i·2π/N + tiny jitter),
                 # kept for reproducibility of the old fixed scene. The per-spawn
@@ -325,23 +403,21 @@ class CrowdSimEnv(gym.Env):
             self.robot_theta = np.pi / 2.0  # facing the goal (north)
             min_sep = self.robot_radius + self.human_radius + 0.5
             gnoise = 1.0
+            # N<=20 stays batch_size=1 (legacy RNG + no N=20 slowdown). High-N
+            # uses a small vectorized batch with the same 200-attempt cap.
+            paper_batch = self._layout_batch_size()
             for i in range(self.num_humans):
-                px, py = 0.0, 0.0
-                for _ in range(200):
-                    px = self.np_random.uniform(-half, half)
-                    py = self.np_random.uniform(-half, half)
-                    d_start = np.hypot(px - self.robot_px, py - self.robot_py)
-                    d_goal = np.hypot(px - self.robot_gx, py - self.robot_gy)
-                    if d_start < min_sep or d_goal < min_sep:
-                        continue
-                    if (
-                        i == 0
-                        or np.min(
-                            np.hypot(px - self.humans_px[:i], py - self.humans_py[:i])
-                        )
-                        > min_sep
-                    ):
-                        break
+                px, py = self._sample_separated_xy(
+                    low=-half,
+                    high=half,
+                    max_attempts=PAPER_LAYOUT_ATTEMPTS,
+                    min_start=min_sep,
+                    min_goal=min_sep,
+                    min_others=min_sep,
+                    placed_px=self.humans_px[:i],
+                    placed_py=self.humans_py[:i],
+                    batch_size=paper_batch,
+                )
                 self.humans_px[i] = px
                 self.humans_py[i] = py
                 nx = self.np_random.uniform(-gnoise, gnoise)
@@ -352,24 +428,25 @@ class CrowdSimEnv(gym.Env):
                 dy = self.humans_gy[i] - self.humans_py[i]
                 self.humans_theta[i] = np.arctan2(dy, dx)
         else:  # random
+            # Old path was unbounded `while True`. Cap at 200 like paper and
+            # fall back to the last candidate. N<=20 stays sequential.
+            random_batch = self._layout_batch_size()
             for i in range(self.num_humans):
-                while True:
-                    px = self.np_random.uniform(-5.0, 5.0)
-                    py = self.np_random.uniform(-5.0, 5.0)
-                    dist_to_robot = np.hypot(px - self.robot_px, py - self.robot_py)
-                    if dist_to_robot > 1.5:
-                        if (
-                            i == 0
-                            or np.min(
-                                np.hypot(
-                                    px - self.humans_px[:i], py - self.humans_py[:i]
-                                )
-                            )
-                            > 1.0
-                        ):
-                            self.humans_px[i] = px
-                            self.humans_py[i] = py
-                            break
+                px, py = self._sample_separated_xy(
+                    low=-5.0,
+                    high=5.0,
+                    max_attempts=RANDOM_LAYOUT_ATTEMPTS,
+                    min_start=1.5,
+                    min_goal=0.0,
+                    min_others=1.0,
+                    placed_px=self.humans_px[:i],
+                    placed_py=self.humans_py[:i],
+                    batch_size=random_batch,
+                    check_goal=False,
+                    start_strict=True,
+                )
+                self.humans_px[i] = px
+                self.humans_py[i] = py
                 self.humans_gx[i] = -px + self.np_random.uniform(-1.0, 1.0)
                 self.humans_gy[i] = -py + self.np_random.uniform(-1.0, 1.0)
                 dx = self.humans_gx[i] - self.humans_px[i]
