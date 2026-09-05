@@ -146,3 +146,10 @@ print(p.cell_type, detect_cell_type(p.state_dict()), type(p._ncp("temporal")))
 - Full multi-seed training or claiming CfC beats LTC
 - Changing obs, reward, or bringing back the v38 runtime shield
 - DS-RNN, distillation, or a GRU cell in this PR
+
+## 8. Follow-on: M2′ SparseHIG
+
+Optional top-k human–human graph on this same CfC + v39 stack. See
+[`docs/m2-sparsehig.md`](m2-sparsehig.md). Default remains SparseHIG **off**.
+`--temporal_cell cfc --sparse_hig --risk_head` is the combined side-research
+surface; RH attention is unchanged.

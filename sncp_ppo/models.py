@@ -8,12 +8,19 @@ from ncps.wirings import AutoNCP
 
 
 VALID_CELL_TYPES = ('ltc', 'cfc')
+SPARSE_HIG_MAX_K = 4
 _LTC_MODULE_PREFIXES = ('temporal_ltc.', 'spatial_ltc.', 'node_ltc.')
 _CFC_MODULE_PREFIXES = ('temporal_cfc.', 'spatial_cfc.', 'node_cfc.')
+_DENSE_HH_PREFIXES = ('hh_attn.',)
+_SPARSE_HH_PREFIXES = ('hh_sparse_attn.',)
 
 
 class CellTypeMismatchError(ValueError):
     """LTC and CfC encoder weights are not interchangeable."""
+
+
+class SparseHIGMismatchError(ValueError):
+    """Dense v37 HH (full MHA) and SparseHIG weights are not interchangeable."""
 
 
 def _orthogonal_linear(layer, gain):
@@ -30,7 +37,7 @@ class SNCPPolicy(nn.Module):
                  node_output=48, attn_heads=1, action_dist='gaussian', sense_range=0.0,
                  hh_intent_graph=False, hh_attn_heads=4,
                  cv_horizons=(1, 2, 3, 4), cv_dt=0.25, risk_head=False,
-                 cell_type='ltc'):
+                 cell_type='ltc', sparse_hig=False, hh_topk=3):
         super(SNCPPolicy, self).__init__()
 
         self.robot_vpref = robot_vpref
@@ -70,10 +77,21 @@ class SNCPPolicy(nn.Module):
         # the existing [dx,dy,rel_vx,rel_vy] spatial edge fields; no observation
         # or environment schema change is required. The scalar gate starts at
         # zero, making an upgraded checkpoint behaviorally identical to its base.
-        self.hh_intent_graph = bool(hh_intent_graph)
+        #
+        # M2' SparseHIG: optional top-k (k≤4) neighbor HH instead of the full
+        # H×H MHA. Distinct module name (hh_sparse_attn) so dense v37 weights
+        # cannot silently load. sparse_hig implies the v37 CV+gate surface.
+        self.sparse_hig = bool(sparse_hig)
+        self.hh_intent_graph = bool(hh_intent_graph) or self.sparse_hig
         self.hh_attn_heads = int(hh_attn_heads)
+        self.hh_topk = int(hh_topk) if self.sparse_hig else 0
         self.cv_horizons = tuple(float(h) for h in cv_horizons)
         self.cv_dt = float(cv_dt)
+        if self.sparse_hig and not (0 <= self.hh_topk <= SPARSE_HIG_MAX_K):
+            raise ValueError(
+                f"hh_topk must be in 0..{SPARSE_HIG_MAX_K} for SparseHIG, "
+                f"got {hh_topk!r}"
+            )
         if self.hh_intent_graph:
             if not self.cv_horizons or any(h <= 0 for h in self.cv_horizons):
                 raise ValueError("cv_horizons must contain positive values")
@@ -92,11 +110,16 @@ class SNCPPolicy(nn.Module):
                 nn.ReLU(),
             )
             self.hh_norm = nn.LayerNorm(256)
-            self.hh_attn = nn.MultiheadAttention(
+            hh_mha = nn.MultiheadAttention(
                 embed_dim=256,
                 num_heads=self.hh_attn_heads,
                 batch_first=True,
             )
+            if self.sparse_hig:
+                self.register_buffer('_hh_sparse_k', torch.tensor(float(self.hh_topk)))
+                self.hh_sparse_attn = hh_mha
+            else:
+                self.hh_attn = hh_mha
             self.hh_gate = nn.Parameter(torch.tensor(0.0))
 
         # v39: tiny fusion-level risk head. Conditional so every pre-v39
@@ -286,10 +309,11 @@ class SNCPPolicy(nn.Module):
             for m in self.cv_encoder:
                 if isinstance(m, nn.Linear):
                     _orthogonal_linear(m, gain=sqrt2)
-            nn.init.xavier_uniform_(self.hh_attn.in_proj_weight)
-            if self.hh_attn.in_proj_bias is not None:
-                nn.init.zeros_(self.hh_attn.in_proj_bias)
-            _orthogonal_linear(self.hh_attn.out_proj, gain=sqrt2)
+            hh_mha = self._hh_mha()
+            nn.init.xavier_uniform_(hh_mha.in_proj_weight)
+            if hh_mha.in_proj_bias is not None:
+                nn.init.zeros_(hh_mha.in_proj_bias)
+            _orthogonal_linear(hh_mha.out_proj, gain=sqrt2)
         
         linears = [m for m in self.actor_mu if isinstance(m, nn.Linear)]
         for m in linears[:-1]:
@@ -349,18 +373,87 @@ class SNCPPolicy(nn.Module):
         future = rel_pos + rel_vel * times
         return future.flatten(start_dim=-2)
 
+    def _hh_mha(self):
+        """Dense v37 `hh_attn` or SparseHIG `hh_sparse_attn`."""
+        return self.hh_sparse_attn if self.sparse_hig else self.hh_attn
+
+    def _topk_neighbor_index(self, spatial_edges, mask=None):
+        """Nearest-other-human indices [B,H,k] and validity [B,H,k].
+
+        Distance is pairwise Euclidean on robot-local (dx, dy). Self is never a
+        neighbor. Invisible humans (mask False) cannot be selected. When H-1 < k
+        the leftover slots are invalid pads (index 0, valid=False).
+        """
+        k = self.hh_topk
+        pos = spatial_edges[..., :2]
+        batch, num_humans, _ = pos.shape
+        if k <= 0 or num_humans <= 0:
+            empty_idx = pos.new_zeros(batch, num_humans, max(k, 0), dtype=torch.long)
+            empty_valid = torch.zeros(batch, num_humans, max(k, 0), dtype=torch.bool,
+                                      device=pos.device)
+            return empty_idx, empty_valid
+
+        dist = torch.cdist(pos, pos)
+        self_mask = torch.eye(num_humans, dtype=torch.bool, device=pos.device)
+        dist = dist.masked_fill(self_mask.unsqueeze(0), float('inf'))
+        if mask is not None:
+            dist = dist.masked_fill(~mask.unsqueeze(1), float('inf'))
+            dist = dist.masked_fill(~mask.unsqueeze(2), float('inf'))
+        if k > num_humans:
+            pad = dist.new_full((batch, num_humans, k - num_humans), float('inf'))
+            dist = torch.cat([dist, pad], dim=-1)
+        values, idx = dist.topk(k, dim=-1, largest=False)
+        valid = torch.isfinite(values)
+        idx = idx.clamp(min=0, max=max(num_humans - 1, 0))
+        return idx, valid
+
+    def _sparse_hh_attention(self, tokens, spatial_edges, mask=None):
+        """Query each human against its k nearest others; pad-safe when H < k."""
+        if self.hh_topk <= 0:
+            return torch.zeros_like(tokens)
+        idx, valid = self._topk_neighbor_index(spatial_edges, mask)
+        batch, num_humans, dim = tokens.shape
+        k = self.hh_topk
+        gather_idx = idx.reshape(batch, num_humans * k).unsqueeze(-1).expand(
+            batch, num_humans * k, dim
+        )
+        gathered = torch.gather(tokens, 1, gather_idx).reshape(batch, num_humans, k, dim)
+        query = tokens.reshape(batch * num_humans, 1, dim)
+        key_value = gathered.reshape(batch * num_humans, k, dim)
+        key_padding = ~valid.reshape(batch * num_humans, k)
+        none_valid = ~valid.any(dim=-1)
+        none_valid_flat = none_valid.reshape(batch * num_humans)
+        if bool(none_valid_flat.any()):
+            key_padding = key_padding.clone()
+            key_padding[none_valid_flat, 0] = False
+        hh_flat, _ = self.hh_sparse_attn(
+            query, key_value, key_value,
+            key_padding_mask=key_padding,
+            need_weights=False,
+        )
+        hh = hh_flat.reshape(batch, num_humans, dim)
+        hh = hh.masked_fill(none_valid.unsqueeze(-1), 0.0)
+        if mask is not None:
+            hh = hh.masked_fill((~mask).unsqueeze(-1), 0.0)
+        return hh
+
     def _human_intent_graph(self, M_rh, spatial_edges, mask=None):
         """Apply gated human-human self-attention over CV-enriched tokens.
 
-        mask uses the policy convention True=visible, while PyTorch MHA expects
-        True=hidden in key_padding_mask. Rows with no visible humans temporarily
-        expose one safe key to avoid all-masked softmax NaNs, then zero the whole
-        residual. Hidden query rows are also zeroed.
+        Dense path: full H×H MHA (v37). SparseHIG: each human attends to its
+        k≤4 nearest others. mask uses the policy convention True=visible, while
+        PyTorch MHA expects True=hidden in key_padding_mask. Rows with no
+        visible humans temporarily expose one safe key to avoid all-masked
+        softmax NaNs, then zero the whole residual. Hidden query rows are also
+        zeroed.
         """
         if not self.hh_intent_graph:
             return M_rh
         cv_embed = self.cv_encoder(self._constant_velocity_features(spatial_edges))
         tokens = self.hh_norm(M_rh + cv_embed)
+        if self.sparse_hig:
+            hh = self._sparse_hh_attention(tokens, spatial_edges, mask)
+            return M_rh + torch.tanh(self.hh_gate) * hh
         key_padding_mask = None
         all_masked = None
         safe_mask = mask
@@ -615,9 +708,60 @@ def assert_cell_type_compatible(policy, state_dict):
     return detected
 
 
+def detect_sparse_hig(state_dict):
+    """Return True if `state_dict` is a SparseHIG checkpoint.
+
+    Marker is `_hh_sparse_k` and/or `hh_sparse_attn.*`. Mixing those with dense
+    v37 `hh_attn.*` is a hard error — never a silent guess.
+    """
+    keys = list(state_dict)
+    has_sparse = (
+        '_hh_sparse_k' in state_dict
+        or any(key.startswith(_SPARSE_HH_PREFIXES) for key in keys)
+    )
+    has_dense = any(key.startswith(_DENSE_HH_PREFIXES) for key in keys)
+    if has_sparse and has_dense:
+        raise SparseHIGMismatchError(
+            "checkpoint contains both dense HH (hh_attn.*) and SparseHIG "
+            "(hh_sparse_attn.* / _hh_sparse_k) keys; refusing to guess"
+        )
+    return has_sparse
+
+
+def detect_hh_topk(state_dict):
+    """SparseHIG k from `_hh_sparse_k`, or 0 when the branch is off."""
+    if detect_sparse_hig(state_dict):
+        buf = state_dict.get('_hh_sparse_k')
+        return int(buf.item()) if buf is not None else 3
+    return 0
+
+
+def assert_sparse_hig_compatible(policy, state_dict):
+    """Raise if `state_dict` is the other HH graph family (dense vs SparseHIG)."""
+    detected = detect_sparse_hig(state_dict)
+    requested = bool(getattr(policy, 'sparse_hig', False))
+    if detected != requested:
+        have = "SparseHIG" if detected else "dense HH"
+        want = "SparseHIG" if requested else "dense HH"
+        raise SparseHIGMismatchError(
+            f"Cannot load a {have} checkpoint into a {want} SNCPPolicy. "
+            "Reconstruct with build_policy_for_checkpoint(...) or pass "
+            "--sparse_hig / omit it to match the file."
+        )
+    if detected:
+        ckpt_k = detect_hh_topk(state_dict)
+        pol_k = int(getattr(policy, 'hh_topk', 0))
+        if ckpt_k != pol_k:
+            raise SparseHIGMismatchError(
+                f"SparseHIG k mismatch: checkpoint k={ckpt_k} vs policy k={pol_k}"
+            )
+    return detected
+
+
 def load_policy_state_dict(policy, state_dict, strict=True):
-    """load_state_dict with an explicit LTC/CfC compatibility check."""
+    """load_state_dict with explicit LTC/CfC and dense-HH/SparseHIG checks."""
     assert_cell_type_compatible(policy, state_dict)
+    assert_sparse_hig_compatible(policy, state_dict)
     return policy.load_state_dict(state_dict, strict=strict)
 
 
@@ -683,6 +827,8 @@ def build_policy_for_checkpoint(state_dict, robot_vpref=0.26, robot_wmax=1.8,
     cv_horizons = tuple(float(value) for value in cvh.tolist()) if cvh is not None else (1, 2, 3, 4)
     cvdt = state_dict.get('_cv_dt')
     cv_dt = float(cvdt.item()) if cvdt is not None else 0.25
+    sparse_hig = detect_sparse_hig(state_dict)
+    hh_topk = detect_hh_topk(state_dict) if sparse_hig else 3
     detected_risk = checkpoint_has_risk_head(state_dict)
     if risk_head is None:
         risk_head = detected_risk
@@ -691,6 +837,7 @@ def build_policy_for_checkpoint(state_dict, robot_vpref=0.26, robot_wmax=1.8,
                       meanmax_pool=meanmax_pool, node_units=node_units,
                       node_output=node_output, attn_heads=attn_heads,
                       action_dist=action_dist, sense_range=sense_range,
-                      hh_intent_graph=hh_intent_graph, hh_attn_heads=hh_attn_heads,
+                      hh_intent_graph=hh_intent_graph or sparse_hig,
+                      hh_attn_heads=hh_attn_heads,
                       cv_horizons=cv_horizons, cv_dt=cv_dt, risk_head=risk_head,
-                      cell_type=cell_type)
+                      cell_type=cell_type, sparse_hig=sparse_hig, hh_topk=hh_topk)
