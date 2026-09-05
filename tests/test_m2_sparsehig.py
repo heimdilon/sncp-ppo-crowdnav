@@ -80,6 +80,23 @@ def test_sparse_hig_forward_finite_for_k_and_variable_h(k, humans):
         assert torch.isfinite(tensor).all()
 
 
+def test_nonzero_gate_changes_output_and_gets_gradient():
+    policy = SNCPPolicy(sparse_hig=True, hh_topk=3)
+    zero = SNCPPolicy(sparse_hig=True, hh_topk=3)
+    zero.load_state_dict(policy.state_dict())
+    policy.hh_gate.data.fill_(0.8)
+    obs = _obs(2, 6)
+    hidden = policy.init_hidden(2, 6, torch.device("cpu"))
+    z_out = zero(obs, zero.init_hidden(2, 6, torch.device("cpu")))
+    p_out = policy(obs, hidden)
+    assert any(not torch.allclose(a, b) for a, b in zip(z_out[:3], p_out[:3]))
+    loss = sum(tensor.sum() for tensor in p_out[:3])
+    loss.backward()
+    assert policy.hh_gate.grad is not None
+    assert torch.isfinite(policy.hh_gate.grad)
+    assert float(policy.hh_gate.grad.abs()) > 0.0
+
+
 def test_k_zero_is_identity_even_with_nonzero_gate():
     sparse = SNCPPolicy(sparse_hig=True, hh_topk=0)
     sparse.hh_gate.data.fill_(0.8)
@@ -99,9 +116,9 @@ def test_h_less_than_k_pads_safely():
     idx, valid = policy._topk_neighbor_index(_obs(1, 2)["spatial_edges"])
     assert idx.shape == (1, 2, 4)
     assert valid.shape == (1, 2, 4)
-    # H=2 ⇒ at most one real (non-self) neighbor per query.
-    assert int(valid[0].sum().item()) <= 2
-    assert bool(valid[0].any())
+    # H=2 ⇒ exactly one real (non-self) neighbor per query.
+    assert int(valid[0].sum().item()) == 2
+    assert bool(valid[0, 0, 0]) and not bool(valid[0, 0, 1:].any())
 
 
 def test_topk_selects_nearest_other_humans():
@@ -214,6 +231,31 @@ def test_k_mismatch_is_a_hard_error():
     k4 = SNCPPolicy(sparse_hig=True, hh_topk=4)
     with pytest.raises(SparseHIGMismatchError, match="k"):
         assert_sparse_hig_compatible(k4, k3.state_dict())
+
+
+def test_load_state_dict_syncs_k_from_buffer():
+    k3 = SNCPPolicy(sparse_hig=True, hh_topk=3)
+    k4 = SNCPPolicy(sparse_hig=True, hh_topk=4)
+    k3.load_state_dict(k4.state_dict())
+    assert k3.hh_topk == 4
+    assert int(k3._hh_sparse_k.item()) == 4
+    assert detect_hh_topk(k3.state_dict()) == 4
+
+
+def test_sparsehig_checkpoint_without_k_buffer_is_rejected():
+    state = SNCPPolicy(sparse_hig=True, hh_topk=3).state_dict()
+    del state["_hh_sparse_k"]
+    with pytest.raises(SparseHIGMismatchError, match="_hh_sparse_k"):
+        detect_hh_topk(state)
+
+
+def test_upgrade_rejects_dense_v37_as_already_hh():
+    dense = SNCPPolicy(hh_intent_graph=True, robot_vpref=1.0, robot_wmax=1.8)
+    with pytest.raises(RuntimeError, match="already v37"):
+        build_upgraded_policy(
+            dense.state_dict(), robot_vpref=1.0, robot_wmax=1.8,
+            device=torch.device("cpu"), sparse_hig=True, hh_topk=3,
+        )
 
 
 def test_cli_exposes_sparse_hig_off_by_default():

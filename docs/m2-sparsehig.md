@@ -48,9 +48,11 @@ Helpers (same spirit as CfC cell-type checks):
 - `load_policy_state_dict` also refuses SparseHIG ↔ dense HH mixes and k mismatches
 - `build_policy_for_checkpoint` auto-detects SparseHIG (eval / viz / waffle)
 
-`--init_checkpoint` of a SparseHIG file needs no extra flag (auto-detect).
-`--init_checkpoint` of a dense / no-HH file **plus** `--sparse_hig` is a hard
+`--init_checkpoint` of a SparseHIG file needs no extra flag (auto-detect; file `k` wins).
+`--init_checkpoint` of a **pre-v37 / no-HH** file plus `--sparse_hig` is a hard
 error — use `--upgrade_checkpoint --sparse_hig` to attach a fresh zero-gated branch.
+A **dense v37** file has no conversion path into SparseHIG (`hh_attn.*` ≠ `hh_sparse_attn.*`);
+train SparseHIG from a pre-v37 checkpoint or from scratch.
 
 ## 3. Train smoke
 

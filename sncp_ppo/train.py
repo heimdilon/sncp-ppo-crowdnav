@@ -407,11 +407,22 @@ def build_or_load_policy(args, env, device):
         want_risk = _want_risk_head(args)
         detected_risk = checkpoint_has_risk_head(state)
         if getattr(args, 'sparse_hig', False) and not detect_sparse_hig(state):
+            already_hh = '_hh_intent_graph' in state
+            if already_hh:
+                hint = (
+                    "This file is already dense v37 HH; there is no conversion "
+                    "path into SparseHIG (weights are not interchangeable). "
+                    "Train SparseHIG from a pre-v37 checkpoint via "
+                    "--upgrade_checkpoint --sparse_hig, or from scratch."
+                )
+            else:
+                hint = (
+                    "Use --upgrade_checkpoint --sparse_hig to attach a fresh "
+                    "zero-gated SparseHIG branch to this pre-v37 file."
+                )
             raise ValueError(
-                "checkpoint is dense HH / no-HH but --sparse_hig was requested. "
-                "Refusing to mix SparseHIG with dense v37 weights. Pass a "
-                "SparseHIG checkpoint, or use --upgrade_checkpoint --sparse_hig "
-                "to attach a fresh zero-gated SparseHIG branch."
+                "checkpoint is not SparseHIG but --sparse_hig was requested. "
+                + hint
             )
         policy = build_policy_for_checkpoint(
             state, robot_vpref=env.robot_vpref, robot_wmax=env.robot_wmax,

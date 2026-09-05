@@ -84,10 +84,10 @@ class SNCPPolicy(nn.Module):
         self.sparse_hig = bool(sparse_hig)
         self.hh_intent_graph = bool(hh_intent_graph) or self.sparse_hig
         self.hh_attn_heads = int(hh_attn_heads)
-        self.hh_topk = int(hh_topk) if self.sparse_hig else 0
+        self._hh_topk = int(hh_topk) if self.sparse_hig else 0
         self.cv_horizons = tuple(float(h) for h in cv_horizons)
         self.cv_dt = float(cv_dt)
-        if self.sparse_hig and not (0 <= self.hh_topk <= SPARSE_HIG_MAX_K):
+        if self.sparse_hig and not (0 <= self._hh_topk <= SPARSE_HIG_MAX_K):
             raise ValueError(
                 f"hh_topk must be in 0..{SPARSE_HIG_MAX_K} for SparseHIG, "
                 f"got {hh_topk!r}"
@@ -116,7 +116,7 @@ class SNCPPolicy(nn.Module):
                 batch_first=True,
             )
             if self.sparse_hig:
-                self.register_buffer('_hh_sparse_k', torch.tensor(float(self.hh_topk)))
+                self.register_buffer('_hh_sparse_k', torch.tensor(float(self._hh_topk)))
                 self.hh_sparse_attn = hh_mha
             else:
                 self.hh_attn = hh_mha
@@ -373,6 +373,14 @@ class SNCPPolicy(nn.Module):
         future = rel_pos + rel_vel * times
         return future.flatten(start_dim=-2)
 
+    @property
+    def hh_topk(self):
+        """Neighbor k. After load_state_dict the `_hh_sparse_k` buffer wins."""
+        buf = getattr(self, '_hh_sparse_k', None)
+        if buf is not None:
+            return int(buf.item())
+        return int(getattr(self, '_hh_topk', 0))
+
     def _hh_mha(self):
         """Dense v37 `hh_attn` or SparseHIG `hh_sparse_attn`."""
         return self.hh_sparse_attn if self.sparse_hig else self.hh_attn
@@ -382,7 +390,8 @@ class SNCPPolicy(nn.Module):
 
         Distance is pairwise Euclidean on robot-local (dx, dy). Self is never a
         neighbor. Invisible humans (mask False) cannot be selected. When H-1 < k
-        the leftover slots are invalid pads (index 0, valid=False).
+        leftover slots are invalid pads (valid=False); their gathered indices
+        are clamped and must stay masked in attention.
         """
         k = self.hh_topk
         pos = spatial_edges[..., :2]
@@ -730,10 +739,14 @@ def detect_sparse_hig(state_dict):
 
 def detect_hh_topk(state_dict):
     """SparseHIG k from `_hh_sparse_k`, or 0 when the branch is off."""
-    if detect_sparse_hig(state_dict):
-        buf = state_dict.get('_hh_sparse_k')
-        return int(buf.item()) if buf is not None else 3
-    return 0
+    if not detect_sparse_hig(state_dict):
+        return 0
+    buf = state_dict.get('_hh_sparse_k')
+    if buf is None:
+        raise SparseHIGMismatchError(
+            "SparseHIG checkpoint is missing _hh_sparse_k; refusing to guess k"
+        )
+    return int(buf.item())
 
 
 def assert_sparse_hig_compatible(policy, state_dict):
@@ -741,8 +754,8 @@ def assert_sparse_hig_compatible(policy, state_dict):
     detected = detect_sparse_hig(state_dict)
     requested = bool(getattr(policy, 'sparse_hig', False))
     if detected != requested:
-        have = "SparseHIG" if detected else "dense HH"
-        want = "SparseHIG" if requested else "dense HH"
+        have = "SparseHIG" if detected else "dense-or-no HH"
+        want = "SparseHIG" if requested else "dense-or-no HH"
         raise SparseHIGMismatchError(
             f"Cannot load a {have} checkpoint into a {want} SNCPPolicy. "
             "Reconstruct with build_policy_for_checkpoint(...) or pass "
