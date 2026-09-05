@@ -5,6 +5,14 @@ from sncp_ppo.real_world import Detection2D, ImageSpaceTracker, PlanarCalibratio
 from sncp_ppo.real_world.vision_localizer import bbox_bottom_center
 
 
+def test_singular_homography_raises_value_error():
+    image_points = [(0, 0), (1, 1), (2, 2), (3, 3)]
+    ground_points = [(0, 0), (1, 1), (2, 2), (3, 3)]
+
+    with pytest.raises(ValueError, match="singular homography"):
+        PlanarCalibration.from_points(image_points, ground_points)
+
+
 def test_homography_maps_image_points_to_robot_ground_plane():
     image_points = [(100, 400), (500, 400), (500, 200), (100, 200)]
     ground_points = [(0.5, 0.5), (0.5, -0.5), (2.0, -0.5), (2.0, 0.5)]
