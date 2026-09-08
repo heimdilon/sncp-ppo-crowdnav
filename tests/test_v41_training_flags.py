@@ -1,0 +1,618 @@
+"""v41 CLI knobs: weighted P(N), cost density adapt, KNN tokens, resume, denser holdout."""
+import random as _random
+from types import SimpleNamespace
+
+import numpy as np
+import pytest
+import torch
+
+from sncp_ppo.models import SNCPPolicy, build_policy_for_checkpoint
+from sncp_ppo.ppo import PPOAgent
+from sncp_ppo.train import (
+    build_or_load_policy,
+    build_parser,
+    evaluate_holdout,
+    normalize_train_args,
+    select_vectorized_phase,
+)
+from sncp_ppo.v41_flags import (
+    adapt_lagrange_cost,
+    apply_v41_runtime_flags,
+    count_n_near,
+    expand_holdout_scenarios,
+    pack_crowd_summary,
+    parse_human_count_weights,
+    resolve_holdout_arm,
+    resolve_init_checkpoint_path,
+    sample_human_count,
+)
+from sncp_ppo.vec_buffer import VectorizedRolloutBuffer
+
+
+def test_parse_human_count_weights_and_reject_bad_spec():
+    parsed = parse_human_count_weights("5:0.05,10:0.1,15:0.25,18:0.15,20:0.35")
+    assert parsed == {5: 0.05, 10: 0.1, 15: 0.25, 18: 0.15, 20: 0.35}
+    assert parse_human_count_weights(None) is None
+    assert parse_human_count_weights("  ") is None
+    with pytest.raises(ValueError, match="invalid"):
+        parse_human_count_weights("5=0.1")
+    with pytest.raises(ValueError, match="positive total"):
+        parse_human_count_weights("5:0,10:0")
+
+
+def test_sample_human_count_uniform_is_inclusive_randint():
+    rng = _random.Random(0)
+    seen = {sample_human_count(rng, (5, 20), None) for _ in range(400)}
+    assert min(seen) == 5
+    assert max(seen) == 20
+    assert seen == set(range(5, 21))
+
+
+def test_sample_human_count_respects_weights():
+    rng = _random.Random(0)
+    weights = {5: 0.0, 10: 0.1, 20: 0.9}
+    counts = {5: 0, 10: 0, 20: 0}
+    for _ in range(2000):
+        n = sample_human_count(rng, (5, 20), weights)
+        counts[n] += 1
+    assert counts[5] == 0
+    assert counts[20] > counts[10]
+    assert counts[20] > 1500
+
+
+def test_sample_human_count_errors_when_weights_miss_range():
+    with pytest.raises(ValueError, match="no mass"):
+        sample_human_count(_random.Random(0), (5, 8), {15: 1.0, 20: 1.0})
+
+
+def test_select_vectorized_phase_weighted_vs_uniform():
+    rng_u = _random.Random(1)
+    uniform = {
+        select_vectorized_phase(
+            300000, 2_500_000, 10, rng=rng_u,
+            fixed_scenario="paper_challenging", bootstrap_easy_steps=0,
+            num_humans_range=(5, 20),
+        )[0][1]
+        for _ in range(80)
+    }
+    assert 5 in uniform and 20 in uniform
+    assert len(uniform) >= 8
+
+    rng_w = _random.Random(1)
+    weighted = [
+        select_vectorized_phase(
+            300000, 2_500_000, 10, rng=rng_w,
+            fixed_scenario="paper_challenging", bootstrap_easy_steps=0,
+            num_humans_range=(5, 20),
+            human_count_weights={5: 0.05, 10: 0.1, 15: 0.25, 18: 0.15, 20: 0.35},
+        )[0][1]
+        for _ in range(80)
+    ]
+    assert set(weighted) <= {5, 10, 15, 18, 20}
+    assert weighted.count(20) > weighted.count(5)
+
+
+def test_adapt_lagrange_cost_n_near_and_sqrt_n():
+    cost = np.array([1.0, 1.0, 0.0], dtype=np.float32)
+    n_near = np.array([0.0, 4.0, 4.0], dtype=np.float32)
+    scaled = adapt_lagrange_cost(cost, n_near=n_near, alpha=0.25, mode="n_near")
+    np.testing.assert_allclose(scaled, [1.0, 1.0 / 2.0, 0.0])
+    sqrt = adapt_lagrange_cost(cost, n_humans=16.0, mode="sqrt_n")
+    np.testing.assert_allclose(sqrt, [0.25, 0.25, 0.0])
+
+
+def test_count_n_near_from_spatial_edges():
+    spatial = np.zeros((2, 4, 6), dtype=np.float32)
+    spatial[0, 0, :2] = (0.5, 0.0)
+    spatial[0, 1, :2] = (3.0, 0.0)
+    spatial[0, 2, :2] = (8.0, 0.0)
+    spatial[0, 3, :2] = (9.0, 0.0)
+    spatial[1, :, 0] = 0.1
+    near = count_n_near(spatial, radius=2.0)
+    np.testing.assert_array_equal(near, [1.0, 4.0])
+
+
+def test_parser_v41_defaults_preserve_old_cli():
+    parser = build_parser()
+    defaults = parser.parse_args([])
+    assert defaults.human_count_weights is None
+    assert defaults.cost_density_adapt is False
+    assert defaults.cost_adapt_alpha == pytest.approx(0.15)
+    assert defaults.cost_adapt_mode == "n_near"
+    # Unspecified (not "all"/10) so --resume keeps checkpoint KNN settings.
+    assert defaults.human_token_mode is None
+    assert defaults.knn_k is None
+    assert defaults.knn_summary_radius is None
+    assert defaults.holdout_densities is None
+    assert defaults.resume is None
+    assert defaults.load_path is None
+    help_text = parser.format_help()
+    assert "--human_count_weights" in help_text
+    assert "--cost_density_adapt" in help_text
+    assert "knn_sorted" in help_text
+    assert "--resume" in help_text
+    assert "SparseHIG" not in help_text or "NOT SparseHIG" in help_text
+
+
+def test_parser_accepts_v41_flag_bundle():
+    args = build_parser().parse_args([
+        "--num_humans_range", "5", "20",
+        "--human_count_weights", "5:0.05,10:0.1,15:0.25,18:0.15,20:0.35",
+        "--cost_density_adapt", "--cost_adapt_alpha", "0.2",
+        "--human_token_mode", "knn_sorted", "--knn_k", "10",
+        "--resume", "checkpoints/sncp_ppo_v40.pt",
+        "--holdout_scenarios", "paper_challenging",
+        "--holdout_densities", "15", "20",
+        "--lagrange_ppo",
+    ])
+    assert parse_human_count_weights(args.human_count_weights)[20] == pytest.approx(0.35)
+    assert args.cost_density_adapt is True
+    assert args.human_token_mode == "knn_sorted"
+    assert args.resume.endswith("sncp_ppo_v40.pt")
+    assert args.holdout_densities == [15, 20]
+
+
+def test_resume_aliases_are_synonyms_and_conflict():
+    a = SimpleNamespace(init_checkpoint="a.pt", resume=None, load_path=None)
+    assert resolve_init_checkpoint_path(a) == "a.pt"
+    b = SimpleNamespace(init_checkpoint=None, resume="b.pt", load_path=None)
+    assert resolve_init_checkpoint_path(b) == "b.pt"
+    c = SimpleNamespace(init_checkpoint=None, resume=None, load_path="c.pt")
+    assert resolve_init_checkpoint_path(c) == "c.pt"
+    d = SimpleNamespace(init_checkpoint="a.pt", resume="a.pt", load_path=None)
+    assert resolve_init_checkpoint_path(d) == "a.pt"
+    e = SimpleNamespace(init_checkpoint="a.pt", resume="b.pt", load_path=None)
+    with pytest.raises(ValueError, match="conflicting"):
+        resolve_init_checkpoint_path(e)
+    f = SimpleNamespace(init_checkpoint=None, resume="a.pt", load_path="b.pt")
+    with pytest.raises(ValueError, match="conflicting"):
+        resolve_init_checkpoint_path(f)
+
+
+def test_expand_holdout_keeps_already_suffixed_arms():
+    expanded = expand_holdout_scenarios(["paper_challenging_n15"], [15, 20])
+    assert expanded == ["paper_challenging_n15"]
+    from sncp_ppo.train import SCENARIO_HOLDOUT_CONFIG
+
+    expanded = expand_holdout_scenarios(["paper_challenging"], [15, 20])
+    assert expanded == ["paper_challenging_n15", "paper_challenging_n20"]
+    assert expand_holdout_scenarios(["easy", "hard"], [15, 20]) == ["easy", "hard"]
+    assert expand_holdout_scenarios(["paper_challenging"], None) == ["paper_challenging"]
+
+    base, n, vpref = resolve_holdout_arm("paper_challenging_n20", SCENARIO_HOLDOUT_CONFIG)
+    assert (base, n, vpref) == ("paper_challenging", 20, 1.0)
+    base10, n10, _ = resolve_holdout_arm("paper_challenging", SCENARIO_HOLDOUT_CONFIG)
+    assert (base10, n10) == ("paper_challenging", 10)
+
+
+def test_parser_accepts_named_n15_n20_holdout_arms():
+    args = build_parser().parse_args([
+        "--holdout_scenarios", "paper_challenging_n15", "paper_challenging_n20",
+    ])
+    assert args.holdout_scenarios == ["paper_challenging_n15", "paper_challenging_n20"]
+
+
+def test_normalize_train_args_expands_densities_and_requires_range():
+    args = build_parser().parse_args([
+        "--holdout_scenarios", "paper_challenging",
+        "--holdout_densities", "15", "20",
+        "--resume", "ckpt.pt",
+    ])
+    normalize_train_args(args)
+    assert args.init_checkpoint == "ckpt.pt"
+    assert args.holdout_scenarios == ["paper_challenging_n15", "paper_challenging_n20"]
+
+    bad = build_parser().parse_args(["--human_count_weights", "20:1.0"])
+    with pytest.raises(ValueError, match="num_humans_range"):
+        normalize_train_args(bad)
+
+    single_env = build_parser().parse_args([
+        "--human_count_weights", "20:1.0",
+        "--num_humans_range", "5", "20",
+    ])
+    assert single_env.num_envs == 1
+    with pytest.raises(ValueError, match="num_envs"):
+        normalize_train_args(single_env)
+
+    ok = build_parser().parse_args([
+        "--human_count_weights", "20:1.0",
+        "--num_humans_range", "5", "20",
+        "--num_envs", "16",
+    ])
+    normalize_train_args(ok)
+    assert ok.human_count_weights_parsed == {20: 1.0}
+
+
+def test_evaluate_holdout_uses_alias_density_not_canonical_ten(monkeypatch):
+    from crowd_sim.crowd_env import CrowdSimEnv
+    from sncp_ppo.train import SCENARIO_HOLDOUT_CONFIG
+
+    captured = {}
+
+    class DummyPolicy:
+        def init_hidden(self, batch_size, num_humans, device):
+            captured["num_humans"] = num_humans
+            return {}
+
+    class DummyAgent:
+        @staticmethod
+        def clip_action_for_env(action, vpref, wmax):
+            return np.zeros(2, dtype=np.float32)
+
+        def select_action(self, obs, h_states, device, deterministic=True):
+            return np.zeros(2, dtype=np.float32), 0.0, 0.0, h_states
+
+    env = CrowdSimEnv(num_humans=10, scenario="paper_challenging", max_time=0.25)
+    env.reset = lambda seed=None: (
+        {
+            "robot_node": np.zeros(7, dtype=np.float32),
+            "spatial_edges": np.zeros((env.num_humans, 6), dtype=np.float32),
+            "temporal_edges": np.zeros(2, dtype=np.float32),
+        },
+        {},
+    )
+
+    def fake_step(_action):
+        return (
+            {
+                "robot_node": np.zeros(7, dtype=np.float32),
+                "spatial_edges": np.zeros((env.num_humans, 6), dtype=np.float32),
+                "temporal_edges": np.zeros(2, dtype=np.float32),
+            },
+            0.0,
+            True,
+            False,
+            {"success": True, "collision": False, "timeout": False, "I_sp": 0.0, "d_min": 1.0},
+        )
+
+    env.step = fake_step
+    evaluate_holdout(
+        env, DummyPolicy(), DummyAgent(), torch.device("cpu"),
+        n_episodes=1, scenario="paper_challenging_n20", base_seed=0,
+    )
+    assert captured["num_humans"] == 20
+    assert env.num_humans == 10  # restored
+    assert env.scenario == "paper_challenging"
+    # Canonical mapping still exists for the unsuffixed name.
+    assert SCENARIO_HOLDOUT_CONFIG["paper_challenging"][0] == 10
+
+
+def test_knn_sorted_adds_detectable_buffers_without_breaking_v40_load():
+    base = SNCPPolicy(robot_vpref=1.0, action_dist="beta", pre_mlp=True, meanmax_pool=True, risk_head=True)
+    knn = SNCPPolicy(
+        robot_vpref=1.0, action_dist="beta", pre_mlp=True, meanmax_pool=True, risk_head=True,
+        human_token_mode="knn_sorted", knn_k=10, crowd_summary=True,
+    )
+    assert "_knn_k" not in base.state_dict()
+    assert "_knn_k" in knn.state_dict()
+    missing, unexpected = base.load_state_dict(base.state_dict(), strict=True)
+    assert not missing and not unexpected
+    rebuilt = build_policy_for_checkpoint(knn.state_dict(), robot_vpref=1.0, robot_wmax=1.8)
+    assert rebuilt.human_token_mode == "knn_sorted"
+    assert rebuilt.knn_k == 10
+    assert rebuilt.crowd_summary is True
+    assert rebuilt.knn_summary_radius == pytest.approx(2.0)
+    assert "_knn_summary_radius" in knn.state_dict()
+
+
+def test_knn_cap_keeps_full_hidden_and_prefers_nearest():
+    torch.manual_seed(0)
+    policy = SNCPPolicy(human_token_mode="knn_sorted", knn_k=2, crowd_summary=True)
+    B, H = 2, 5
+    spatial = torch.zeros(B, H, 6)
+    spatial[0] = torch.tensor([
+        [5.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.4, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [3.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.2, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [9.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    ])
+    spatial[1] = torch.tensor([
+        [0.1, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [8.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.3, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [7.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [6.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    ])
+    obs = {
+        "robot_node": torch.zeros(B, 7),
+        "spatial_edges": spatial,
+        "temporal_edges": torch.zeros(B, 2),
+    }
+    hidden = policy.init_hidden(B, H, torch.device("cpu"))
+    assert hidden["spatial_edge"].shape[0] == B * H
+    hidden["spatial_edge"] = torch.arange(
+        B * H * policy.spatial_wiring.units, dtype=torch.float32,
+    ).reshape(B * H, -1)
+    out1, _, _, new_h = policy(obs, hidden)
+    assert out1.shape == (B, 2)
+    assert new_h["spatial_edge"].shape == hidden["spatial_edge"].shape
+    assert policy.last_knn_idx.tolist() == [[3, 1], [0, 2]]
+    old = hidden["spatial_edge"].reshape(B, H, -1)
+    new = new_h["spatial_edge"].reshape(B, H, -1)
+    for far in (0, 2, 4):
+        assert torch.equal(old[0, far], new[0, far])
+    for far in (1, 3, 4):
+        assert torch.equal(old[1, far], new[1, far])
+    assert not torch.equal(old[0, 3], new[0, 3])
+    assert not torch.equal(old[0, 1], new[0, 1])
+    assert not torch.equal(old[1, 0], new[1, 0])
+    assert not torch.equal(old[1, 2], new[1, 2])
+
+
+def test_hh_graph_does_not_see_summary_token():
+    policy = SNCPPolicy(
+        hh_intent_graph=True, human_token_mode="knn_sorted", knn_k=2, crowd_summary=True,
+    )
+    seen = {}
+    original = policy._human_intent_graph
+
+    def wrapped(M_rh, spatial_edges, mask=None):
+        seen["H"] = int(M_rh.shape[1])
+        return original(M_rh, spatial_edges, mask)
+
+    policy._human_intent_graph = wrapped
+    obs = {
+        "robot_node": torch.zeros(1, 7),
+        "spatial_edges": torch.randn(1, 5, 6),
+        "temporal_edges": torch.zeros(1, 2),
+    }
+    hidden = policy.init_hidden(1, 5, torch.device("cpu"))
+    policy(obs, hidden)
+    assert seen["H"] == 2
+
+
+def test_pack_crowd_summary_encodes_count():
+    spatial = np.zeros((3, 6), dtype=np.float32)
+    spatial[0, :2] = (0.5, 0.0)
+    token = pack_crowd_summary(spatial, radius=2.0, n_ref=20.0)
+    assert token.shape == (6,)
+    assert token[0] == pytest.approx(3.0 / 20.0)
+    assert token[-1] == pytest.approx(1.0)
+
+
+def test_v40_like_checkpoint_loads_with_resume_and_knn_flags(tmp_path):
+    src = SNCPPolicy(
+        robot_vpref=1.0, robot_wmax=1.8, pre_mlp=True, meanmax_pool=True,
+        action_dist="beta", hh_intent_graph=True, risk_head=True,
+    )
+    ckpt = tmp_path / "v40.pt"
+    torch.save(src.state_dict(), ckpt)
+    args = build_parser().parse_args([
+        "--resume", str(ckpt),
+        "--lagrange_ppo",
+        "--human_token_mode", "knn_sorted",
+        "--knn_k", "10",
+    ])
+    env = SimpleNamespace(robot_vpref=1.0, robot_wmax=1.8)
+    policy = build_or_load_policy(args, env, torch.device("cpu"))
+    assert policy.risk_head is True
+    assert policy.hh_intent_graph is True
+    assert policy.human_token_mode == "knn_sorted"
+    assert policy.knn_k == 10
+    assert "_knn_k" in policy.state_dict()
+    knn_ckpt = tmp_path / "v41_knn.pt"
+    torch.save(policy.state_dict(), knn_ckpt)
+    detected = build_policy_for_checkpoint(
+        torch.load(knn_ckpt, map_location="cpu", weights_only=True),
+        robot_vpref=1.0, robot_wmax=1.8,
+    )
+    assert detected.human_token_mode == "knn_sorted"
+    rebuilt = build_policy_for_checkpoint(src.state_dict(), robot_vpref=1.0, robot_wmax=1.8)
+    missing, unexpected = rebuilt.load_state_dict(src.state_dict(), strict=False)
+    assert not missing and not unexpected
+
+
+def test_vectorized_lagrange_uses_adapted_cost_not_bce_label():
+    torch.manual_seed(0)
+    N, T, H = 2, 8, 3
+    policy = SNCPPolicy(risk_head=True)
+    agent = PPOAgent(
+        policy, epochs=1, batch_size=4, seq_len=T,
+        normalize_returns=False, use_lagrange=True,
+        lagrange_lambda_init=0.0, lagrange_cost_limit=0.05, lagrange_lr=1.0,
+        lagrange_lambda_max=10.0,
+    )
+    buf = VectorizedRolloutBuffer(num_envs=N, horizon=T)
+    hidden = policy.init_hidden(N, H, torch.device("cpu"))
+    coll = torch.ones(N)
+    adapted = torch.zeros(N)  # scaled all the way to 0 -> dual should not climb like raw 1.0
+    for _ in range(T):
+        obs = {
+            "robot_node": torch.randn(N, 7),
+            "spatial_edges": torch.randn(N, H, 6),
+            "temporal_edges": torch.randn(N, 2),
+        }
+        with torch.no_grad():
+            mu, std, value, new_h = policy(obs, hidden)
+            dist = policy.make_action_dist(mu, std)
+            action = dist.sample()
+            log_prob = dist.log_prob(action).sum(-1)
+        buf.store(
+            obs=obs, hidden=hidden, actions=action, log_probs=log_prob,
+            rewards=torch.zeros(N), values=value.squeeze(-1),
+            dones=torch.zeros(N), masks=torch.ones(N),
+            coll_labels=coll, clearance_labels=torch.ones(N),
+            cost_values=policy.last_cost_value.squeeze(-1).detach(),
+            lagrange_costs=adapted,
+        )
+        hidden = new_h
+    buf.finish(last_values=torch.zeros(N), last_dones=torch.zeros(N),
+               last_cost_values=torch.zeros(N))
+    data = buf.get_tensors(torch.device("cpu"))
+    assert torch.equal(data["coll_labels"], torch.ones(N, T))
+    assert torch.equal(data["lagrange_costs"], torch.zeros(N, T))
+    agent.update_vectorized(buf, torch.device("cpu"))
+    # mean adapted cost 0 < limit 0.05, so λ stays 0 (would rise if raw coll=1 were used).
+    assert agent.last_mean_cost == pytest.approx(0.0)
+    assert agent.lagrange_lambda == pytest.approx(0.0)
+
+
+def test_apply_v41_flags_default_summary_only_for_knn():
+    policy = SNCPPolicy()
+    apply_v41_runtime_flags(policy, SimpleNamespace(human_token_mode="all"))
+    assert policy.human_token_mode == "all"
+    assert policy.crowd_summary is False
+    apply_v41_runtime_flags(policy, SimpleNamespace(human_token_mode="knn_sorted", knn_k=8))
+    assert policy.crowd_summary is True
+    assert policy.knn_k == 8
+    apply_v41_runtime_flags(
+        policy, SimpleNamespace(human_token_mode="knn_sorted", knn_k=8, no_crowd_summary=True),
+    )
+    assert policy.crowd_summary is False
+
+
+def test_resume_without_token_flags_keeps_knn_checkpoint_mode(tmp_path):
+    src = SNCPPolicy(
+        robot_vpref=1.0, action_dist="beta",
+        human_token_mode="knn_sorted", knn_k=8, crowd_summary=True,
+        knn_summary_radius=3.5,
+    )
+    ckpt = tmp_path / "v41_knn.pt"
+    torch.save(src.state_dict(), ckpt)
+    args = build_parser().parse_args(["--resume", str(ckpt)])
+    assert args.human_token_mode is None
+    env = SimpleNamespace(robot_vpref=1.0, robot_wmax=1.8)
+    policy = build_or_load_policy(args, env, torch.device("cpu"))
+    assert policy.human_token_mode == "knn_sorted"
+    assert policy.knn_k == 8
+    assert policy.crowd_summary is True
+    assert policy.knn_summary_radius == pytest.approx(3.5)
+    assert "_knn_k" in policy.state_dict()
+    assert float(policy.state_dict()["_knn_summary_radius"].item()) == pytest.approx(3.5)
+
+
+def test_explicit_all_on_knn_checkpoint_drops_knn_buffers(tmp_path):
+    src = SNCPPolicy(
+        human_token_mode="knn_sorted", knn_k=8, crowd_summary=True, knn_summary_radius=3.5,
+    )
+    ckpt = tmp_path / "v41_knn.pt"
+    torch.save(src.state_dict(), ckpt)
+    args = build_parser().parse_args(["--resume", str(ckpt), "--human_token_mode", "all"])
+    env = SimpleNamespace(robot_vpref=0.26, robot_wmax=1.8)
+    policy = build_or_load_policy(args, env, torch.device("cpu"))
+    assert policy.human_token_mode == "all"
+    assert "_knn_k" not in policy.state_dict()
+    assert "_crowd_summary" not in policy.state_dict()
+    assert "_knn_summary_radius" not in policy.state_dict()
+    rebuilt = build_policy_for_checkpoint(policy.state_dict(), robot_vpref=0.26, robot_wmax=1.8)
+    assert rebuilt.human_token_mode == "all"
+    assert policy.crowd_summary is False
+
+
+def test_pre_radius_knn_checkpoint_still_loads_strict():
+    knn = SNCPPolicy(human_token_mode="knn_sorted", knn_k=10, crowd_summary=True)
+    state = {k: v for k, v in knn.state_dict().items() if k != "_knn_summary_radius"}
+    rebuilt = build_policy_for_checkpoint(state, robot_vpref=0.26, robot_wmax=1.8)
+    missing, unexpected = rebuilt.load_state_dict(state, strict=True)
+    assert not missing and not unexpected
+    assert rebuilt.human_token_mode == "knn_sorted"
+    assert rebuilt.knn_summary_radius == pytest.approx(2.0)
+    assert "_knn_summary_radius" not in rebuilt.state_dict()
+
+
+def test_fresh_policy_without_token_flags_stays_all():
+    args = build_parser().parse_args([])
+    env = SimpleNamespace(robot_vpref=0.26, robot_wmax=1.8)
+    policy = build_or_load_policy(args, env, torch.device("cpu"))
+    assert policy.human_token_mode == "all"
+    assert policy.crowd_summary is False
+    assert "_knn_k" not in policy.state_dict()
+
+
+def test_resume_keeps_crowd_summary_off_without_flags(tmp_path):
+    src = SNCPPolicy(human_token_mode="knn_sorted", knn_k=8, crowd_summary=False)
+    ckpt = tmp_path / "v41_knn_nosum.pt"
+    torch.save(src.state_dict(), ckpt)
+    args = build_parser().parse_args(["--resume", str(ckpt)])
+    env = SimpleNamespace(robot_vpref=0.26, robot_wmax=1.8)
+    policy = build_or_load_policy(args, env, torch.device("cpu"))
+    assert policy.human_token_mode == "knn_sorted"
+    assert policy.crowd_summary is False
+
+
+def test_knn_summary_radius_controls_n_near_in_summary_token():
+    policy = SNCPPolicy(
+        human_token_mode="knn_sorted", knn_k=2, crowd_summary=True, knn_summary_radius=1.0,
+    )
+    spatial = torch.zeros(1, 2, 6)
+    spatial[0, 0, :2] = torch.tensor([0.5, 0.0])
+    spatial[0, 1, :2] = torch.tensor([1.5, 0.0])
+    token = policy._crowd_summary_token(spatial)
+    assert float(token[0, 0, 3] * 20.0) == pytest.approx(1.0)
+
+
+def test_knn_summary_radius_roundtrips_through_checkpoint():
+    knn = SNCPPolicy(
+        human_token_mode="knn_sorted", knn_k=10, crowd_summary=True, knn_summary_radius=1.25,
+    )
+    assert "_knn_summary_radius" in knn.state_dict()
+    rebuilt = build_policy_for_checkpoint(knn.state_dict(), robot_vpref=0.26, robot_wmax=1.8)
+    assert rebuilt.knn_summary_radius == pytest.approx(1.25)
+    assert rebuilt.human_token_mode == "knn_sorted"
+
+
+def test_crowd_summary_flags_are_mutually_exclusive():
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["--crowd_summary", "--no_crowd_summary"])
+
+
+def test_knn_attn_count_scaling_uses_original_crowd_n():
+    torch.manual_seed(0)
+    policy = SNCPPolicy(
+        attn_count_scaling=True,
+        human_token_mode="knn_sorted", knn_k=2, crowd_summary=True,
+    )
+    seen = {}
+    original = policy._attention_pool
+
+    def wrapped(M_rh, m_rr, num_humans, mask=None):
+        seen["n"] = int(num_humans)
+        seen["H"] = int(M_rh.shape[1])
+        return original(M_rh, m_rr, num_humans, mask)
+
+    policy._attention_pool = wrapped
+    B, H = 1, 5
+    obs = {
+        "robot_node": torch.zeros(B, 7),
+        "spatial_edges": torch.randn(B, H, 6),
+        "temporal_edges": torch.zeros(B, 2),
+    }
+    hidden = policy.init_hidden(B, H, torch.device("cpu"))
+    policy(obs, hidden)
+    assert seen["H"] == 3  # K=2 + summary
+    assert seen["n"] == 5  # original crowd, excluding summary
+
+
+def test_knn_multihead_count_scaling_uses_original_crowd_n():
+    torch.manual_seed(0)
+    policy = SNCPPolicy(
+        attn_count_scaling=True, attn_heads=4,
+        human_token_mode="knn_sorted", knn_k=2, crowd_summary=True,
+    )
+    seen = {}
+    original = policy._multihead_attention
+
+    def wrapped(M_rh, m_rr, mask=None, count_n=None):
+        seen["H"] = int(M_rh.shape[1])
+        seen["count_n"] = count_n
+        return original(M_rh, m_rr, mask, count_n=count_n)
+
+    policy._multihead_attention = wrapped
+    B, H = 1, 5
+    obs = {
+        "robot_node": torch.zeros(B, 7),
+        "spatial_edges": torch.randn(B, H, 6),
+        "temporal_edges": torch.zeros(B, 2),
+    }
+    hidden = policy.init_hidden(B, H, torch.device("cpu"))
+    policy(obs, hidden)
+    assert seen["H"] == 3
+    assert seen["count_n"] == 5
+    torch.manual_seed(0)
+    M_rh = torch.randn(1, 3, 256)
+    m_rr = torch.randn(1, 256)
+    with torch.no_grad():
+        out_n, _ = original(M_rh, m_rr, count_n=5)
+        out_h, _ = original(M_rh, m_rr, count_n=3)
+    assert not torch.allclose(out_n, out_h, atol=1e-4)

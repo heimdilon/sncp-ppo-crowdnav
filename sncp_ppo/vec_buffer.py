@@ -97,12 +97,13 @@ class VectorizedRolloutBuffer:
         self.cost_values = []         # each: (N,) cost-critic V_cost(s_t)
         self.bootstraps = []          # each: (N,) V(s_final) at truncation; else 0
         self.cost_bootstraps = []     # each: (N,) V_cost(s_final) at truncation
+        self.lagrange_costs = []      # each: (N,) density-adapted cost (v41); else coll
         self.bootstrap_values = None  # (N, T), filled by finish()
         self.bootstrap_costs = None   # (N, T), cost-critic bootstrap
 
     def store(self, obs, hidden, actions, log_probs, rewards, values, dones, masks,
               coll_labels=None, clearance_labels=None, cost_values=None,
-              bootstrap=None, cost_bootstrap=None):
+              bootstrap=None, cost_bootstrap=None, lagrange_costs=None):
         self.obs_robot_node.append(obs['robot_node'].detach().clone())
         self.obs_spatial_edges.append(obs['spatial_edges'].detach().clone())
         self.obs_temporal_edges.append(obs['temporal_edges'].detach().clone())
@@ -133,6 +134,9 @@ class VectorizedRolloutBuffer:
         self.cost_values.append(torch.as_tensor(cost_values, dtype=torch.float32).detach().clone())
         self.bootstraps.append(torch.as_tensor(bootstrap, dtype=torch.float32).detach().clone())
         self.cost_bootstraps.append(torch.as_tensor(cost_bootstrap, dtype=torch.float32).detach().clone())
+        if lagrange_costs is None:
+            lagrange_costs = coll_labels
+        self.lagrange_costs.append(torch.as_tensor(lagrange_costs, dtype=torch.float32).detach().clone())
 
     def finish(self, last_values, last_dones, last_cost_values=None):
         """Finalize the rollout: merge per-step truncation bootstraps with the
@@ -199,5 +203,6 @@ class VectorizedRolloutBuffer:
             'coll_labels': stack(self.coll_labels) if self.coll_labels else torch.zeros(self.N, self.T, device=device),
             'clearance_labels': stack(self.clearance_labels) if self.clearance_labels else torch.zeros(self.N, self.T, device=device),
             'cost_values': stack(self.cost_values) if self.cost_values else torch.zeros(self.N, self.T, device=device),
+            'lagrange_costs': stack(self.lagrange_costs) if self.lagrange_costs else torch.zeros(self.N, self.T, device=device),
             'bootstrap_costs': cost_bootstrap.to(device),
         }

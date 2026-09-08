@@ -20,7 +20,9 @@ class SNCPPolicy(nn.Module):
                  attn_count_scaling=False, meanmax_pool=False, node_units=128,
                  node_output=48, attn_heads=1, action_dist='gaussian', sense_range=0.0,
                  hh_intent_graph=False, hh_attn_heads=4,
-                 cv_horizons=(1, 2, 3, 4), cv_dt=0.25, risk_head=False):
+                 cv_horizons=(1, 2, 3, 4), cv_dt=0.25, risk_head=False,
+                 human_token_mode='all', knn_k=10, crowd_summary=False,
+                 knn_summary_radius=2.0):
         super(SNCPPolicy, self).__init__()
 
         self.robot_vpref = robot_vpref
@@ -107,6 +109,17 @@ class SNCPPolicy(nn.Module):
             # Discounted cost-to-go critic. Separate from p_coll (short-horizon
             # collision classifier used only in L_risk BCE).
             self.cost_critic = nn.Linear(256, 1)
+
+        # v41: optional KNN-sorted K-cap over human tokens. Observation-side
+        # only (shared spatial LTC weights; no new layers) so a v40
+        # LTC+soft-HH+risk checkpoint still loads strictly. Default 'all'
+        # keeps every human and registers no extra buffers.
+        self.human_token_mode = str(human_token_mode)
+        self.knn_k = int(knn_k)
+        self.crowd_summary = bool(crowd_summary)
+        self.knn_summary_radius = float(knn_summary_radius)
+        self.last_knn_idx = None
+        self._sync_knn_buffers()
 
         # 1. Robot Node Encoder (MLP)
         # Input robot_node: [dg_local_x, dg_local_y, v_linear, dist_to_goal, vpref, radius, w_angular] (dim 7)
@@ -281,6 +294,40 @@ class SNCPPolicy(nn.Module):
             _orthogonal_linear(risk_linears[-1], gain=1.0)
             _orthogonal_linear(self.cost_critic, gain=1.0)
 
+    def _drop_buffer(self, name):
+        if name in self._buffers:
+            delattr(self, name)
+
+    def _sync_knn_buffers(self):
+        """Persist knn_sorted so eval auto-detects it (sense_range pattern).
+
+        Default mode 'all' registers nothing, so v14-v40 checkpoints stay
+        byte-identical. Switching back to 'all' drops the buffers so a later
+        eval cannot auto-detect KNN after an explicit ``--human_token_mode all``.
+        Called from __init__ and from apply_v41_runtime_flags after a strict
+        v40 load.
+        """
+        if str(getattr(self, 'human_token_mode', 'all')) != 'knn_sorted':
+            self._drop_buffer('_knn_k')
+            self._drop_buffer('_crowd_summary')
+            self._drop_buffer('_knn_summary_radius')
+            return
+        k = float(getattr(self, 'knn_k', 10))
+        if '_knn_k' not in self._buffers:
+            self.register_buffer('_knn_k', torch.tensor(k))
+        else:
+            self._knn_k.fill_(k)
+        flag = 1.0 if getattr(self, 'crowd_summary', False) else 0.0
+        if '_crowd_summary' not in self._buffers:
+            self.register_buffer('_crowd_summary', torch.tensor(flag))
+        else:
+            self._crowd_summary.fill_(flag)
+        radius = float(getattr(self, 'knn_summary_radius', 2.0))
+        if '_knn_summary_radius' not in self._buffers:
+            self.register_buffer('_knn_summary_radius', torch.tensor(radius))
+        else:
+            self._knn_summary_radius.fill_(radius)
+
     def init_hidden(self, batch_size, num_humans, device):
         h_temp = torch.zeros(batch_size, self.temporal_wiring.units, device=device)
         h_spat = torch.zeros(batch_size * num_humans, self.spatial_wiring.units, device=device)
@@ -347,11 +394,13 @@ class SNCPPolicy(nn.Module):
                 hh = torch.where(all_masked.view(-1, 1, 1), torch.zeros_like(hh), hh)
         return M_rh + torch.tanh(self.hh_gate) * hh
 
-    def _multihead_attention(self, M_rh, m_rr, mask=None):
+    def _multihead_attention(self, M_rh, m_rr, mask=None, count_n=None):
         """Canonical multi-head cross-attention: robot m_rr is the single query
         token, humans M_rh are the key/value tokens. Returns (a_attn [B,256],
         alpha [B, heads, 1, H]); each head has d_head = 256 // heads dims. mask
-        ([B,H] bool, True = visible) zeroes hidden humans' attention weights."""
+        ([B,H] bool, True = visible) zeroes hidden humans' attention weights.
+        count_n is the Eq 13 crowd count (original N, excluding a summary token).
+        """
         B, H, _ = M_rh.shape
         nh = self.attn_heads
         dh = 256 // nh
@@ -360,7 +409,8 @@ class SNCPPolicy(nn.Module):
         V = self.W_v(M_rh).view(B, H, nh, dh).permute(0, 2, 1, 3)    # [B, nh, H, dh]
         scores = torch.matmul(Q, K.transpose(-1, -2)) / math.sqrt(dh)  # [B, nh, 1, H]
         if self.attn_count_scaling:
-            scores = scores * H   # paper Eq 13 n-factor; matches single-head num_humans
+            n = int(H if count_n is None else count_n)
+            scores = scores * n
         if mask is not None:
             scores = scores.masked_fill((~mask).view(B, 1, 1, H), float('-inf'))
         alpha = F.softmax(scores, dim=-1)
@@ -373,13 +423,17 @@ class SNCPPolicy(nn.Module):
         """Attention-weighted pooling of per-human spatial features M_rh against
         the robot/temporal key m_rr. attn_heads>1 uses multi-head cross-attention;
         otherwise the legacy single-head weighted average. attn_count_scaling
-        scales attention scores by n (paper Eq 13) in BOTH paths. mask ([B,N] bool, True
-        = visible) restricts pooling to humans within the sensing radius: hidden
-        humans get zero attention weight and are excluded from the max; rows with no
-        visible human return a zero crowd vector."""
+        scales attention scores by n (paper Eq 13) in BOTH paths; n is the
+        original crowd count (not KNN token length, not the summary token).
+        mask ([B,N] bool, True = visible) restricts pooling to humans within
+        the sensing radius: hidden humans get zero attention weight and are
+        excluded from the max; rows with no visible human return a zero crowd
+        vector."""
         none_visible = (~mask).all(dim=1) if mask is not None else None
         if self.attn_heads > 1:
-            a_attn, _ = self._multihead_attention(M_rh, m_rr, mask)
+            a_attn, _ = self._multihead_attention(
+                M_rh, m_rr, mask, count_n=num_humans,
+            )
             if not self.meanmax_pool:
                 return a_attn
             a_max = (self._masked_max(M_rh, mask, none_visible) if mask is not None
@@ -426,6 +480,49 @@ class SNCPPolicy(nn.Module):
             return self._scale_action(out1 / (out1 + out2))   # alpha/(alpha+beta)
         return out1
 
+    def _crowd_summary_token(self, spatial_edges):
+        """One extra 6-dim token: [N/20, mean_dx, mean_dy, n_near/20, min_dist, 1]."""
+        batch_size, num_humans, _ = spatial_edges.shape
+        dist = torch.hypot(spatial_edges[..., 0], spatial_edges[..., 1])
+        radius = float(self.knn_summary_radius)
+        n_near = (dist <= radius).sum(dim=1, keepdim=True).to(dtype=spatial_edges.dtype)
+        mean_xy = spatial_edges[..., :2].mean(dim=1)
+        min_dist = dist.min(dim=1).values.unsqueeze(-1)
+        n_ref = 20.0
+        n_all = torch.full(
+            (batch_size, 1), float(num_humans),
+            device=spatial_edges.device, dtype=spatial_edges.dtype,
+        )
+        ones = torch.ones((batch_size, 1), device=spatial_edges.device, dtype=spatial_edges.dtype)
+        return torch.cat(
+            [n_all / n_ref, mean_xy, n_near / n_ref, min_dist, ones], dim=-1,
+        ).unsqueeze(1)
+
+    def _knn_prepare(self, spatial_edges, h_spat_flat, batch_size, num_humans):
+        """Gather the K nearest humans (sorted) for LTC+soft attention.
+
+        Persistent spatial hidden stays aligned with the original human index;
+        unselected humans keep their previous LTC state (scatter-back).
+        """
+        dist = torch.hypot(spatial_edges[..., 0], spatial_edges[..., 1])
+        if self.sense_range > 0:
+            dist = dist.masked_fill(dist > self.sense_range, float('inf'))
+        k = min(max(int(self.knn_k), 1), num_humans)
+        knn_idx = dist.topk(k, dim=1, largest=False, sorted=True).indices
+        self.last_knn_idx = knn_idx
+        batch_idx = torch.arange(batch_size, device=spatial_edges.device).unsqueeze(1).expand(-1, k)
+        knn_edges = spatial_edges[batch_idx, knn_idx]
+        units = h_spat_flat.shape[-1]
+        h_full = h_spat_flat.reshape(batch_size, num_humans, units)
+        knn_h = h_full[batch_idx, knn_idx]
+        if self.crowd_summary:
+            knn_edges = torch.cat([knn_edges, self._crowd_summary_token(spatial_edges)], dim=1)
+            knn_h = torch.cat(
+                [knn_h, torch.zeros(batch_size, 1, units, device=knn_h.device, dtype=knn_h.dtype)],
+                dim=1,
+            )
+        return knn_edges, knn_h, knn_idx, k, h_full
+
     def forward(self, obs, hidden_states):
         """
         Forward pass of the SNCP model.
@@ -459,28 +556,66 @@ class SNCPPolicy(nn.Module):
         m_rr = self.temporal_proj(m_rr_seq.squeeze(1))
 
         # 3. Spatial Edge Encoding (LTC)
-        spatial_flat = spatial_edges.reshape(batch_size * num_humans, 6)
-        if self.pre_mlp:
-            spatial_flat = self.spatial_pre_mlp(spatial_flat)
-        spatial_input = spatial_flat.unsqueeze(1)
         h_spat = hidden_states['spatial_edge']
         if h_spat.dim() == 3:
             h_spat_flat = h_spat.reshape(batch_size * num_humans, -1)
         else:
             h_spat_flat = h_spat
-            
-        M_rh_seq, h_spat_new_flat = self.spatial_ltc(spatial_input, h_spat_flat)
+
+        use_knn = getattr(self, 'human_token_mode', 'all') == 'knn_sorted' and num_humans > 0
+        scatter_idx = None
+        h_full = None
+        k_used = None
+        spatial_for_enc = spatial_edges
+        enc_humans = num_humans
+        h_for_enc = h_spat_flat
+        if use_knn:
+            spatial_for_enc, knn_h, scatter_idx, k_used, h_full = self._knn_prepare(
+                spatial_edges, h_spat_flat, batch_size, num_humans,
+            )
+            enc_humans = spatial_for_enc.shape[1]
+            h_for_enc = knn_h.reshape(batch_size * enc_humans, -1)
+        else:
+            self.last_knn_idx = None
+
+        spatial_flat = spatial_for_enc.reshape(batch_size * enc_humans, 6)
+        if self.pre_mlp:
+            spatial_flat = self.spatial_pre_mlp(spatial_flat)
+        spatial_input = spatial_flat.unsqueeze(1)
+        M_rh_seq, h_spat_new_flat = self.spatial_ltc(spatial_input, h_for_enc)
         M_rh_proj = self.spatial_proj(M_rh_seq.squeeze(1))
-        M_rh = M_rh_proj.reshape(batch_size, num_humans, 256)
+        M_rh = M_rh_proj.reshape(batch_size, enc_humans, 256)
 
         # 4. Attention Pooling — optionally mask humans beyond the sensing radius
         # (paper's limited perception: only nearby humans influence the action).
+        # The optional crowd-summary token is always visible and is excluded
+        # from the human-human graph (it is not a pedestrian).
+        has_summary = bool(
+            use_knn and getattr(self, 'crowd_summary', False)
+            and k_used is not None and enc_humans > k_used
+        )
         sense_mask = None
         if self.sense_range > 0:
-            dist = torch.hypot(spatial_edges[:, :, 0], spatial_edges[:, :, 1])  # [B, N] m
-            sense_mask = dist <= self.sense_range                                # [B, N] bool
+            dist = torch.hypot(spatial_for_enc[:, :, 0], spatial_for_enc[:, :, 1])
+            sense_mask = torch.isfinite(dist) & (dist <= self.sense_range)
+        if has_summary:
+            if sense_mask is None:
+                sense_mask = torch.ones(
+                    batch_size, enc_humans, dtype=torch.bool, device=spatial_for_enc.device,
+                )
+            else:
+                sense_mask = sense_mask.clone()
+            sense_mask[:, k_used:] = True
         if self.hh_intent_graph:
-            M_rh = self._human_intent_graph(M_rh, spatial_edges, sense_mask)
+            if has_summary:
+                human_mask = sense_mask[:, :k_used] if sense_mask is not None else None
+                M_h = self._human_intent_graph(
+                    M_rh[:, :k_used], spatial_for_enc[:, :k_used], human_mask,
+                )
+                M_rh = torch.cat([M_h, M_rh[:, k_used:]], dim=1)
+            else:
+                M_rh = self._human_intent_graph(M_rh, spatial_for_enc, sense_mask)
+        # Eq 13 n = original crowd count, not KNN token length / summary.
         u_att = self._attention_pool(M_rh, m_rr, num_humans, sense_mask)
         
         # 5. Node LTC Encoder
@@ -519,7 +654,17 @@ class SNCPPolicy(nn.Module):
             self.last_min_clearance = None
             self.last_cost_value = None
         
-        if h_spat.dim() == 3:
+        if scatter_idx is not None:
+            units = h_spat_new_flat.shape[-1]
+            h_knn_new = h_spat_new_flat.reshape(batch_size, enc_humans, units)
+            index = scatter_idx.unsqueeze(-1).expand(-1, -1, units)
+            h_full = h_full.clone()
+            h_full.scatter_(1, index, h_knn_new[:, :k_used])
+            if h_spat.dim() == 3:
+                h_spat_new = h_full
+            else:
+                h_spat_new = h_full.reshape(batch_size * num_humans, -1)
+        elif h_spat.dim() == 3:
             h_spat_new = h_spat_new_flat.reshape(batch_size, num_humans, -1)
         else:
             h_spat_new = h_spat_new_flat
@@ -580,10 +725,26 @@ def build_policy_for_checkpoint(state_dict, robot_vpref=0.26, robot_wmax=1.8,
     detected_risk = checkpoint_has_risk_head(state_dict)
     if risk_head is None:
         risk_head = detected_risk
-    return SNCPPolicy(robot_vpref=robot_vpref, robot_wmax=robot_wmax,
+    knn_k_buf = state_dict.get('_knn_k')
+    human_token_mode = 'knn_sorted' if knn_k_buf is not None else 'all'
+    knn_k = int(knn_k_buf.item()) if knn_k_buf is not None else 10
+    cs = state_dict.get('_crowd_summary')
+    crowd_summary = bool(cs is not None and float(cs.item()) > 0.5)
+    radius_buf = state_dict.get('_knn_summary_radius')
+    knn_summary_radius = float(radius_buf.item()) if radius_buf is not None else 2.0
+    policy = SNCPPolicy(robot_vpref=robot_vpref, robot_wmax=robot_wmax,
                       pre_mlp=pre_mlp, attn_count_scaling=attn_count_scaling,
                       meanmax_pool=meanmax_pool, node_units=node_units,
                       node_output=node_output, attn_heads=attn_heads,
                       action_dist=action_dist, sense_range=sense_range,
                       hh_intent_graph=hh_intent_graph, hh_attn_heads=hh_attn_heads,
-                      cv_horizons=cv_horizons, cv_dt=cv_dt, risk_head=risk_head)
+                      cv_horizons=cv_horizons, cv_dt=cv_dt, risk_head=risk_head,
+                      human_token_mode=human_token_mode, knn_k=knn_k,
+                      crowd_summary=crowd_summary,
+                      knn_summary_radius=knn_summary_radius)
+    # Pre-radius KNN checkpoints (knn_sorted without `_knn_summary_radius`)
+    # must still `load_state_dict` strictly. The Python attr stays at the
+    # 2.0 default; train-time apply_v41_runtime_flags re-syncs the buffer.
+    if radius_buf is None:
+        policy._drop_buffer('_knn_summary_radius')
+    return policy
