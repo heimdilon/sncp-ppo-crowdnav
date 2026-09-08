@@ -65,6 +65,7 @@ class PPOMemory:
         self.coll_labels = []
         self.clearance_labels = []
         self.cost_values = []
+        self.lagrange_costs = []
 
         # Episode boundary tracking
         self.episode_lengths = []
@@ -73,7 +74,7 @@ class PPOMemory:
         self._current_ep_len = 0
 
     def store(self, obs, h_states, action, log_prob, reward, value, mask,
-              coll_label=0.0, clearance_label=0.0, cost_value=0.0):
+              coll_label=0.0, clearance_label=0.0, cost_value=0.0, lagrange_cost=None):
         self.obs_robot_node.append(obs['robot_node'])
         self.obs_spatial_edges.append(obs['spatial_edges'])
         self.obs_temporal_edges.append(obs['temporal_edges'])
@@ -91,6 +92,7 @@ class PPOMemory:
         self.coll_labels.append(float(coll_label))
         self.clearance_labels.append(float(clearance_label))
         self.cost_values.append(float(cost_value))
+        self.lagrange_costs.append(float(coll_label if lagrange_cost is None else lagrange_cost))
         self._current_ep_len += 1
 
     def end_episode(self, bootstrap_value=0.0, bootstrap_cost=0.0):
@@ -124,6 +126,7 @@ class PPOMemory:
         self.coll_labels.clear()
         self.clearance_labels.clear()
         self.cost_values.clear()
+        self.lagrange_costs.clear()
         self.episode_lengths.clear()
         self.episode_bootstrap_values.clear()
         self.episode_bootstrap_costs.clear()
@@ -512,8 +515,11 @@ class PPOAgent:
 
         # Normalize advantages
         advantages = self._normalize_advantages(advantages)
+        lagrange_costs = torch.tensor(
+            np.array(self.memory.lagrange_costs), dtype=torch.float32, device=device,
+        )
         cost_adv_raw, cost_returns = self._cost_gae(
-            coll_labels, cost_values, masks, self.memory.episode_bootstrap_costs,
+            lagrange_costs, cost_values, masks, self.memory.episode_bootstrap_costs,
         )
         cost_adv = (
             self._normalize_advantages(cost_adv_raw)
@@ -708,7 +714,7 @@ class PPOAgent:
         self.last_approx_kl = epoch_kl
         self.last_clip_frac = epoch_clip_frac
         self.last_epochs_ran = epochs_ran
-        self._step_lagrange_dual(float(coll_labels.mean().item()) if coll_labels.numel() else 0.0)
+        self._step_lagrange_dual(float(lagrange_costs.mean().item()) if lagrange_costs.numel() else 0.0)
 
         # Decay learning rate per update if a scheduler is attached
         if self.scheduler is not None:
@@ -742,8 +748,9 @@ class PPOAgent:
             values = values / ret_std
 
         advantages = self._normalize_advantages(advantages)
+        lagrange_costs = data.get('lagrange_costs', data['coll_labels'])
         cost_adv_raw, cost_returns = self._cost_gae(
-            data['coll_labels'], data['cost_values'], data['dones'],
+            lagrange_costs, data['cost_values'], data['dones'],
             data['bootstrap_costs'], vectorized=True,
         )
         cost_adv = (
@@ -927,6 +934,6 @@ class PPOAgent:
         self.last_approx_kl = epoch_kl
         self.last_clip_frac = epoch_clip
         self.last_epochs_ran = epochs_ran
-        self._step_lagrange_dual(float(data['coll_labels'].mean().item()))
+        self._step_lagrange_dual(float(lagrange_costs.mean().item()))
         if self.scheduler is not None:
             self.scheduler.step()

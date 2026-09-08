@@ -125,6 +125,54 @@ Mimari bayrakları (hepsi varsayılan-kapalı, checkpoint'ten **otomatik algıla
 (Eq 11), `--meanmax_pool` (v30), `--node_units/--node_output` (v31), `--attn_heads` (v33),
 `--attn_count_scaling` (v29), `--action_dist beta` + `--ent_coef` (v34), `--sense_range` (v35).
 
+### v41 eğitim bayrakları (warm-start, kalkan KAPALI)
+
+Varsayılanlar **pre-v41 ile birebir**: ağırlık yoksa N hâlâ `randint(MIN, MAX)` (dahil),
+Lagrange maliyeti ölçeklenmez, tüm yayalar token olarak kalır. Mimari değişmez (LTC + soft HH
++ risk head + Lagrangian PPO). SparseHIG / action shield / CfC **yok**.
+
+Düzgün U[5,20] (eski davranış):
+
+```bash
+python -m sncp_ppo.train \
+    --num_envs 16 --horizon 128 --total_steps 4000000 \
+    --fixed_scenario paper_challenging --num_humans 20 --num_humans_range 5 20 \
+    --robot_vpref 1.0 --lr 1e-4 \
+    --pre_mlp --meanmax_pool --action_dist beta \
+    --lagrange_ppo \
+    --init_checkpoint checkpoints/sncp_ppo_v40.pt \
+    --holdout_scenarios paper_standard paper_challenging \
+    --save_path checkpoints/sncp_ppo_v41.pt
+```
+
+Hard-N boost + yoğunluk-uyumlu maliyet + min(N15,N20) holdout (stretch hedef, shield OFF):
+
+```bash
+python -m sncp_ppo.train \
+    --num_envs 16 --horizon 128 --total_steps 4000000 \
+    --fixed_scenario paper_challenging --num_humans 20 --num_humans_range 5 20 \
+    --human_count_weights 5:0.05,10:0.1,15:0.25,18:0.15,20:0.35 \
+    --cost_density_adapt --cost_adapt_alpha 0.15 --cost_adapt_mode n_near \
+    --robot_vpref 1.0 --lr 1e-4 \
+    --pre_mlp --meanmax_pool --action_dist beta \
+    --lagrange_ppo \
+    --resume checkpoints/sncp_ppo_v40.pt \
+    --holdout_scenarios paper_challenging --holdout_densities 15 20 \
+    --holdout_episodes 50 \
+    --save_path checkpoints/sncp_ppo_v41.pt
+```
+
+`--resume` / `--load_path` = `--init_checkpoint` (yalnız politika ağırlıkları; optimizer ve λ
+sıfırdan. λ'yı taşımak için `--lagrange_lambda_init`). `--total_steps` bu koşunun **ek** bütçesidir.
+Fazlı müfredat yok: farklı ağırlıklarla yeniden başlatın.
+
+İsteğe bağlı KNN token tavanı (hâlâ soft attention): `--human_token_mode knn_sorted --knn_k 10`.
+
+Best-ckpt `min(success)` listedeki holdout kolları üzerindendir. `min(N15,N20)` için
+`--holdout_scenarios paper_challenging_n15 paper_challenging_n20` veya yukarıdaki
+`--holdout_densities 15 20`. N=5/10/15/20'nin hepsini izlemek için
+`--holdout_densities 5 10 15 20`.
+
 ## Değerlendirme (dürüst çok-tohumlu tarama)
 
 ```bash

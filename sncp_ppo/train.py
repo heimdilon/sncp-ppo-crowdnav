@@ -13,6 +13,17 @@ from crowd_sim.crowd_env import CrowdSimEnv, PAPER_SCENARIO_CONFIG
 from sncp_ppo.models import SNCPPolicy, build_policy_for_checkpoint, checkpoint_has_risk_head, _is_risk_head_key
 from sncp_ppo.ppo import PPOAgent
 from sncp_ppo.risk_labeler import label_short_horizon_risk, label_vectorized_envs
+from sncp_ppo.v41_flags import (
+    adapt_lagrange_cost,
+    apply_v41_runtime_flags,
+    count_n_near,
+    expand_holdout_scenarios,
+    holdout_scenario_choices,
+    parse_human_count_weights,
+    resolve_holdout_arm,
+    resolve_init_checkpoint_path,
+    sample_human_count,
+)
 
 
 def set_seed(seed):
@@ -94,8 +105,8 @@ def evaluate_holdout(env, policy, agent, device, n_episodes, scenario, base_seed
     prev_num_humans = env.num_humans
     prev_vpref = env.human_vpref
 
-    n_h, vpref = SCENARIO_HOLDOUT_CONFIG.get(scenario, (5, 0.50))
-    env.scenario = scenario
+    env_scenario, n_h, vpref = resolve_holdout_arm(scenario, SCENARIO_HOLDOUT_CONFIG)
+    env.scenario = env_scenario
     env.num_humans = n_h
     env.human_vpref = vpref
 
@@ -370,7 +381,7 @@ def build_or_load_policy(args, env, device):
     (build_policy_for_checkpoint), so PPO fine-tunes from the cloned weights
     instead of from scratch. Without it, a fresh policy is built per --pre_mlp.
     """
-    init_ckpt = getattr(args, 'init_checkpoint', None)
+    init_ckpt = resolve_init_checkpoint_path(args)
     upgrade_ckpt = getattr(args, 'upgrade_checkpoint', None)
     if init_ckpt and upgrade_ckpt:
         raise ValueError("--init_checkpoint and --upgrade_checkpoint are mutually exclusive")
@@ -394,6 +405,7 @@ def build_or_load_policy(args, env, device):
         else:
             policy.load_state_dict(state)
             print(f"Initialized policy from {init_ckpt} (IL warm-start)")
+        apply_v41_runtime_flags(policy, args)
         return policy
     if upgrade_ckpt:
         state = _load_checkpoint(upgrade_ckpt, device)
@@ -415,8 +427,9 @@ def build_or_load_policy(args, env, device):
             f"Upgraded policy from {upgrade_ckpt} with zero-gated HH intent graph "
             f"(heads={policy.hh_attn_heads}, horizons={policy.cv_horizons}, dt={policy.cv_dt})"
         )
+        apply_v41_runtime_flags(policy, args)
         return policy
-    return SNCPPolicy(
+    policy = SNCPPolicy(
         robot_vpref=env.robot_vpref,
         robot_wmax=env.robot_wmax,
         pre_mlp=getattr(args, 'pre_mlp', False),
@@ -433,9 +446,25 @@ def build_or_load_policy(args, env, device):
         cv_dt=getattr(args, 'cv_dt', 0.25),
         risk_head=_want_risk_head(args),
     ).to(device)
+    apply_v41_runtime_flags(policy, args)
+    return policy
+
+
+def normalize_train_args(args):
+    """Resolve v41 aliases / expansions. Safe no-op when new flags are omitted."""
+    args.init_checkpoint = resolve_init_checkpoint_path(args)
+    weights = parse_human_count_weights(getattr(args, 'human_count_weights', None))
+    args.human_count_weights_parsed = weights
+    if weights is not None and getattr(args, 'num_humans_range', None) is None:
+        raise ValueError('--human_count_weights requires --num_humans_range MIN MAX')
+    args.holdout_scenarios = expand_holdout_scenarios(
+        args.holdout_scenarios, getattr(args, 'holdout_densities', None),
+    )
+    return args
 
 
 def train(args):
+    args = normalize_train_args(args)
     set_seed(args.seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device} | Seed: {args.seed}")
@@ -658,9 +687,13 @@ def train(args):
             # mask = 1 means "the world keeps going from here": true unless terminated
             # (truncation is a soft boundary handled via bootstrap value below).
             mask = 0.0 if terminated else 1.0
+            lagrange_cost = _maybe_adapt_lagrange_cost(
+                coll_label, obs['spatial_edges'], env.num_humans, args,
+            )
             agent.memory.store(
                 obs, h_states, action, log_prob, reward, value, mask,
                 coll_label=coll_label, clearance_label=clearance_label, cost_value=cost_value,
+                lagrange_cost=lagrange_cost,
             )
 
             obs = next_obs
@@ -892,7 +925,8 @@ def step_to_phase(steps_seen, total_steps, final_num_humans):
 
 def select_vectorized_phase(steps_seen, total_steps, final_num_humans,
                             replay_ratio=0.0, rng=random, fixed_scenario=None,
-                            bootstrap_easy_steps=0, num_humans_range=None):
+                            bootstrap_easy_steps=0, num_humans_range=None,
+                            human_count_weights=None):
     """Select the next vectorized PPO update phase.
 
     With replay enabled, a fraction of update windows re-samples a uniformly
@@ -914,7 +948,7 @@ def select_vectorized_phase(steps_seen, total_steps, final_num_humans,
         _, vpref = SCENARIO_HOLDOUT_CONFIG.get(fixed_scenario, (5, 0.26))
         n_humans = final_num_humans
         if num_humans_range is not None:
-            n_humans = rng.randint(int(num_humans_range[0]), int(num_humans_range[1]))
+            n_humans = sample_human_count(rng, num_humans_range, human_count_weights)
         return (fixed_scenario, n_humans, vpref), False
     phases = curriculum_phases(final_num_humans)
     current_idx = phase_index_for_steps(steps_seen, total_steps)
@@ -980,6 +1014,34 @@ def overlay_truncation_obs(next_obs, info, trunc_indices):
     return out
 
 
+def _maybe_adapt_lagrange_cost(coll, spatial_edges, n_humans, args):
+    """Scale Lagrange cost by local density. Returns None when the flag is off.
+
+    BCE collision labels stay unscaled; only the dual/GAE cost is adapted.
+    """
+    if not getattr(args, 'cost_density_adapt', False) or coll is None:
+        return None
+    if torch.is_tensor(spatial_edges):
+        se = spatial_edges.detach().cpu().numpy()
+    else:
+        se = np.asarray(spatial_edges)
+    n_near = count_n_near(se, radius=float(getattr(args, 'cost_adapt_radius', 2.0)))
+    raw = coll.detach().cpu().numpy() if torch.is_tensor(coll) else np.asarray(coll, dtype=np.float32)
+    adapted = adapt_lagrange_cost(
+        raw,
+        n_near=n_near,
+        n_humans=n_humans,
+        alpha=float(getattr(args, 'cost_adapt_alpha', 0.15)),
+        mode=str(getattr(args, 'cost_adapt_mode', 'n_near')),
+    )
+    if torch.is_tensor(coll):
+        return torch.as_tensor(adapted, dtype=coll.dtype, device=coll.device)
+    adapted = np.asarray(adapted, dtype=np.float32)
+    if adapted.ndim == 0:
+        return float(adapted)
+    return adapted
+
+
 def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, csv_file):
     """Vectorized rollout with step-budgeted curriculum and holdout eval.
 
@@ -1001,6 +1063,11 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
     fixed_scenario = getattr(args, 'fixed_scenario', None)
     bootstrap_easy_steps = getattr(args, 'bootstrap_easy_steps', 0)
     num_humans_range = getattr(args, 'num_humans_range', None)
+    human_count_weights = getattr(args, 'human_count_weights_parsed', None)
+    if human_count_weights is None:
+        human_count_weights = parse_human_count_weights(
+            getattr(args, 'human_count_weights', None)
+        )
     # Forces the paper budget on every env (incl. the easy bootstrap + holdout eval_env);
     # comfort_coeff/max_time above may be None, which the env resolves per this flag.
     paper_regime = fixed_scenario in PAPER_SCENARIO_CONFIG
@@ -1059,6 +1126,7 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
     (scenario, H, vpref), _ = select_vectorized_phase(
         0, args.total_steps, args.num_humans, fixed_scenario=fixed_scenario,
         bootstrap_easy_steps=bootstrap_easy_steps, num_humans_range=num_humans_range,
+        human_count_weights=human_count_weights,
     )
     envs, obs_np = build_envs(H, scenario, vpref)
     h = policy.init_hidden(batch_size=N, num_humans=H, device=device)
@@ -1071,6 +1139,21 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
     print(f"Curriculum by step budget: total={args.total_steps}, phases 10/25/50/75%")
     print(f"Replay ratio: {replay_ratio:.0%} of vectorized update windows sample earlier phases")
     print(f"Holdout every {args.eval_freq_updates} updates on {args.holdout_scenarios}")
+    if human_count_weights:
+        print(f"v41 weighted P(N)={dict(human_count_weights)} over range {num_humans_range} "
+              f"(omit --human_count_weights for flat U[MIN,MAX])")
+    if getattr(args, 'cost_density_adapt', False):
+        print(
+            f"v41 cost density adapt ON | mode={getattr(args, 'cost_adapt_mode', 'n_near')} "
+            f"alpha={getattr(args, 'cost_adapt_alpha', 0.15)} "
+            f"radius={getattr(args, 'cost_adapt_radius', 2.0)}"
+        )
+    token_mode = getattr(args, 'human_token_mode', 'all')
+    if token_mode == 'knn_sorted':
+        print(
+            f"v41 human tokens knn_sorted k={getattr(args, 'knn_k', 10)} "
+            f"(soft attention, not SparseHIG)"
+        )
     print("Note: --episodes is ignored in vectorized mode; --total_steps controls run length.")
     print("-" * 90)
 
@@ -1084,6 +1167,7 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
             fixed_scenario=fixed_scenario,
             bootstrap_easy_steps=bootstrap_easy_steps,
             num_humans_range=num_humans_range,
+            human_count_weights=human_count_weights,
         )
         if next_H != H or next_scenario != scenario:
             replay_mark = " replay" if is_replay_update else ""
@@ -1118,6 +1202,7 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
             act_np[:, 0] = np.clip(act_np[:, 0], 0.0, env.robot_vpref)
             act_np[:, 1] = np.clip(act_np[:, 1], -env.robot_wmax, env.robot_wmax)
             coll_t = clr_t = cost_v = None
+            lagrange_cost_t = None
             if getattr(policy, 'risk_head', False):
                 coll_np, clr_np = label_vectorized_envs(
                     envs, act_np, horizon_steps=int(getattr(args, 'risk_horizon', 6)),
@@ -1125,6 +1210,9 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
                 coll_t = torch.tensor(coll_np, dtype=torch.float32, device=device)
                 clr_t = torch.tensor(clr_np, dtype=torch.float32, device=device)
                 cost_v = policy.last_cost_value.squeeze(-1).detach()
+                lagrange_cost_t = _maybe_adapt_lagrange_cost(
+                    coll_t, obs_t['spatial_edges'], H, args,
+                )
             next_obs, reward, term, trunc, info = envs.step(act_np)
             done = np.logical_or(term, trunc)
             set_envs_vpref(envs, vpref)
@@ -1158,7 +1246,8 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
                       rewards=reward_t, values=value.squeeze(-1),
                       dones=done_t, masks=mask_t,
                       coll_labels=coll_t, clearance_labels=clr_t, cost_values=cost_v,
-                      bootstrap=boot_t, cost_bootstrap=cost_boot_t)
+                      bootstrap=boot_t, cost_bootstrap=cost_boot_t,
+                      lagrange_costs=lagrange_cost_t)
             obs_np = next_obs
             h = reset_hidden_where_done(h_next, done_t, H)
             total_steps += N
@@ -1311,7 +1400,15 @@ def build_parser():
     parser.add_argument('--num_humans_range', type=int, nargs=2, default=None,
                         metavar=('MIN', 'MAX'),
                         help='Density curriculum: sample N~U[MIN,MAX] per update window '
-                             '(paper trains 10-20). Default None = fixed --num_humans.')
+                             '(paper trains 10-20). Default None = fixed --num_humans. '
+                             'With --human_count_weights this becomes a weighted discrete '
+                             'sample over the listed N values that fall inside [MIN,MAX].')
+    parser.add_argument('--human_count_weights', type=str, default=None,
+                        help='v41 weighted P(N), e.g. "5:0.05,10:0.1,15:0.25,18:0.15,20:0.35". '
+                             'Requires --num_humans_range. Keys outside the range are ignored. '
+                             'Default None = inclusive uniform randint(MIN,MAX) (pre-v41). '
+                             'No mid-run schedule: restart with --resume and a new weight string '
+                             'for a later phase.')
     parser.add_argument('--scenario', type=str, default='easy',
                         help='Initial env scenario (curriculum overrides).')
     parser.add_argument('--seed', type=int, default=42)
@@ -1384,7 +1481,15 @@ def build_parser():
     parser.add_argument('--init_checkpoint', type=str, default=None,
                         help='Initialize the policy from this checkpoint instead of fresh weights '
                              '(v23 IL warm-start: PPO fine-tunes from the BC checkpoint). The '
-                             'architecture is auto-detected from the saved keys.')
+                             'architecture is auto-detected from the saved keys. --resume and '
+                             '--load_path are aliases. Optimizer / Lagrange λ start fresh; pass '
+                             '--lagrange_lambda_init to continue the dual. --total_steps is the '
+                             'ADDITIONAL env-step budget for this run, not a global counter.')
+    parser.add_argument('--resume', type=str, default=None,
+                        help='Alias of --init_checkpoint for v41 warm-start from a v40 LTC+soft-HH+'
+                             'risk+Lagrange checkpoint (same state-dict shape; no SparseHIG).')
+    parser.add_argument('--load_path', type=str, default=None,
+                        help='Alias of --init_checkpoint / --resume.')
     parser.add_argument('--upgrade_checkpoint', type=str, default=None,
                         help='Safely upgrade a pre-v37 checkpoint with the zero-initialized '
                              'human-human intention graph. Unlike --init_checkpoint, this permits '
@@ -1455,6 +1560,34 @@ def build_parser():
                         help='Initial Lagrange multiplier λ (v39).')
     parser.add_argument('--lagrange_lambda_max', type=float, default=10.0,
                         help='Upper clip on λ so the constraint cannot overwhelm the task reward.')
+    parser.add_argument('--cost_density_adapt', action='store_true',
+                        help='v41: scale the Lagrangian collision cost by local density, '
+                             'C\' = C / (1 + alpha * n_near) (or --cost_adapt_mode sqrt_n / n_humans). '
+                             'Does NOT change BCE labels or the core architecture. Default off.')
+    parser.add_argument('--cost_adapt_alpha', type=float, default=0.15,
+                        help='Density-adapt alpha in C\' = C / (1 + alpha * n_near) (v41).')
+    parser.add_argument('--cost_adapt_mode', type=str, default='n_near',
+                        choices=['n_near', 'sqrt_n', 'n_humans'],
+                        help='How to scale Lagrange cost when --cost_density_adapt is set. '
+                             'n_near (default) uses humans within --cost_adapt_radius; '
+                             'sqrt_n uses 1/sqrt(N); n_humans uses 1 + alpha*N.')
+    parser.add_argument('--cost_adapt_radius', type=float, default=2.0,
+                        help='Radius (m) for n_near in --cost_density_adapt (default 2.0).')
+    parser.add_argument('--human_token_mode', type=str, default='all',
+                        choices=['all', 'knn_sorted'],
+                        help='v41 optional human-token selection. "all" (default) keeps every '
+                             'pedestrian (pre-v41). "knn_sorted" keeps the K nearest tokens, '
+                             'sorted by distance, then runs the existing soft attention — '
+                             'NOT SparseHIG. No extra weights; v40 checkpoints still load.')
+    parser.add_argument('--knn_k', type=int, default=10,
+                        help='K for --human_token_mode knn_sorted (default 10).')
+    parser.add_argument('--crowd_summary', action='store_true',
+                        help='Append one 6-dim crowd-summary spatial token (count/mean/min-dist). '
+                             'On by default when --human_token_mode knn_sorted.')
+    parser.add_argument('--no_crowd_summary', action='store_true',
+                        help='Disable the knn_sorted crowd-summary token.')
+    parser.add_argument('--knn_summary_radius', type=float, default=2.0,
+                        help='Radius (m) used to pack n_near into the crowd-summary token.')
     parser.add_argument('--bootstrap_easy_steps', type=int, default=0,
                         help='Probe mode only: run an easy/1 warmup for this many env steps '
                              'before the --fixed_scenario phase. Cold-starting at fixed N=5 '
@@ -1480,10 +1613,18 @@ def build_parser():
                              '(v7 "50%%" holdout was really 38%% on 100-ep eval).')
     parser.add_argument('--holdout_scenarios', type=str, nargs='+',
                         default=['easy', 'hard'],
-                        choices=list(SCENARIO_HOLDOUT_CONFIG),
+                        choices=holdout_scenario_choices(SCENARIO_HOLDOUT_CONFIG),
                         help='Scenarios for periodic holdout eval. Best checkpoint is saved '
                              'when min(success across these) improves — rewards generalists, '
-                             'not "100%% on one, 0%% on the other" specialists.')
+                             'not "100%% on one, 0%% on the other" specialists. v41 density '
+                             'aliases: paper_challenging_n15 / paper_challenging_n20 so best '
+                             'selection can track min(N15, N20).')
+    parser.add_argument('--holdout_densities', type=int, nargs='+', default=None,
+                        metavar='N',
+                        help='v41: expand each paper_* holdout scenario across these N values '
+                             '(e.g. --holdout_scenarios paper_challenging --holdout_densities '
+                             '15 20 -> paper_challenging_n15,n20, and best-ckpt uses '
+                             'min(N15,N20)). Non-paper names are left unchanged. Default off.')
     parser.add_argument('--holdout_scenario', type=str, default=None,
                         help='[Deprecated] Single-scenario alias for --holdout_scenarios. '
                              'If set, overrides --holdout_scenarios with a one-element list.')

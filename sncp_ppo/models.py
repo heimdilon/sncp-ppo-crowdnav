@@ -20,7 +20,9 @@ class SNCPPolicy(nn.Module):
                  attn_count_scaling=False, meanmax_pool=False, node_units=128,
                  node_output=48, attn_heads=1, action_dist='gaussian', sense_range=0.0,
                  hh_intent_graph=False, hh_attn_heads=4,
-                 cv_horizons=(1, 2, 3, 4), cv_dt=0.25, risk_head=False):
+                 cv_horizons=(1, 2, 3, 4), cv_dt=0.25, risk_head=False,
+                 human_token_mode='all', knn_k=10, crowd_summary=False,
+                 knn_summary_radius=2.0):
         super(SNCPPolicy, self).__init__()
 
         self.robot_vpref = robot_vpref
@@ -107,6 +109,15 @@ class SNCPPolicy(nn.Module):
             # Discounted cost-to-go critic. Separate from p_coll (short-horizon
             # collision classifier used only in L_risk BCE).
             self.cost_critic = nn.Linear(256, 1)
+
+        # v41: optional KNN-sorted K-cap over human tokens. Observation-side
+        # only (no extra weights) so a v40 LTC+soft-HH+risk checkpoint still
+        # loads strictly. Default 'all' keeps every human, identical to v14-v40.
+        self.human_token_mode = str(human_token_mode)
+        self.knn_k = int(knn_k)
+        self.crowd_summary = bool(crowd_summary)
+        self.knn_summary_radius = float(knn_summary_radius)
+        self.last_knn_idx = None
 
         # 1. Robot Node Encoder (MLP)
         # Input robot_node: [dg_local_x, dg_local_y, v_linear, dist_to_goal, vpref, radius, w_angular] (dim 7)
@@ -426,6 +437,49 @@ class SNCPPolicy(nn.Module):
             return self._scale_action(out1 / (out1 + out2))   # alpha/(alpha+beta)
         return out1
 
+    def _crowd_summary_token(self, spatial_edges):
+        """One extra 6-dim token: [N/20, mean_dx, mean_dy, n_near/20, min_dist, 1]."""
+        batch_size, num_humans, _ = spatial_edges.shape
+        dist = torch.hypot(spatial_edges[..., 0], spatial_edges[..., 1])
+        radius = float(self.knn_summary_radius)
+        n_near = (dist <= radius).sum(dim=1, keepdim=True).to(dtype=spatial_edges.dtype)
+        mean_xy = spatial_edges[..., :2].mean(dim=1)
+        min_dist = dist.min(dim=1).values.unsqueeze(-1)
+        n_ref = 20.0
+        n_all = torch.full(
+            (batch_size, 1), float(num_humans),
+            device=spatial_edges.device, dtype=spatial_edges.dtype,
+        )
+        ones = torch.ones((batch_size, 1), device=spatial_edges.device, dtype=spatial_edges.dtype)
+        return torch.cat(
+            [n_all / n_ref, mean_xy, n_near / n_ref, min_dist, ones], dim=-1,
+        ).unsqueeze(1)
+
+    def _knn_prepare(self, spatial_edges, h_spat_flat, batch_size, num_humans):
+        """Gather the K nearest humans (sorted) for LTC+soft attention.
+
+        Persistent spatial hidden stays aligned with the original human index;
+        unselected humans keep their previous LTC state (scatter-back).
+        """
+        dist = torch.hypot(spatial_edges[..., 0], spatial_edges[..., 1])
+        if self.sense_range > 0:
+            dist = dist.masked_fill(dist > self.sense_range, float('inf'))
+        k = min(max(int(self.knn_k), 1), num_humans)
+        knn_idx = dist.topk(k, dim=1, largest=False, sorted=True).indices
+        self.last_knn_idx = knn_idx
+        batch_idx = torch.arange(batch_size, device=spatial_edges.device).unsqueeze(1).expand(-1, k)
+        knn_edges = spatial_edges[batch_idx, knn_idx]
+        units = h_spat_flat.shape[-1]
+        h_full = h_spat_flat.reshape(batch_size, num_humans, units)
+        knn_h = h_full[batch_idx, knn_idx]
+        if self.crowd_summary:
+            knn_edges = torch.cat([knn_edges, self._crowd_summary_token(spatial_edges)], dim=1)
+            knn_h = torch.cat(
+                [knn_h, torch.zeros(batch_size, 1, units, device=knn_h.device, dtype=knn_h.dtype)],
+                dim=1,
+            )
+        return knn_edges, knn_h, knn_idx, k, h_full
+
     def forward(self, obs, hidden_states):
         """
         Forward pass of the SNCP model.
@@ -459,29 +513,45 @@ class SNCPPolicy(nn.Module):
         m_rr = self.temporal_proj(m_rr_seq.squeeze(1))
 
         # 3. Spatial Edge Encoding (LTC)
-        spatial_flat = spatial_edges.reshape(batch_size * num_humans, 6)
-        if self.pre_mlp:
-            spatial_flat = self.spatial_pre_mlp(spatial_flat)
-        spatial_input = spatial_flat.unsqueeze(1)
         h_spat = hidden_states['spatial_edge']
         if h_spat.dim() == 3:
             h_spat_flat = h_spat.reshape(batch_size * num_humans, -1)
         else:
             h_spat_flat = h_spat
-            
-        M_rh_seq, h_spat_new_flat = self.spatial_ltc(spatial_input, h_spat_flat)
+
+        use_knn = getattr(self, 'human_token_mode', 'all') == 'knn_sorted' and num_humans > 0
+        scatter_idx = None
+        h_full = None
+        k_used = None
+        spatial_for_enc = spatial_edges
+        enc_humans = num_humans
+        h_for_enc = h_spat_flat
+        if use_knn:
+            spatial_for_enc, knn_h, scatter_idx, k_used, h_full = self._knn_prepare(
+                spatial_edges, h_spat_flat, batch_size, num_humans,
+            )
+            enc_humans = spatial_for_enc.shape[1]
+            h_for_enc = knn_h.reshape(batch_size * enc_humans, -1)
+        else:
+            self.last_knn_idx = None
+
+        spatial_flat = spatial_for_enc.reshape(batch_size * enc_humans, 6)
+        if self.pre_mlp:
+            spatial_flat = self.spatial_pre_mlp(spatial_flat)
+        spatial_input = spatial_flat.unsqueeze(1)
+        M_rh_seq, h_spat_new_flat = self.spatial_ltc(spatial_input, h_for_enc)
         M_rh_proj = self.spatial_proj(M_rh_seq.squeeze(1))
-        M_rh = M_rh_proj.reshape(batch_size, num_humans, 256)
+        M_rh = M_rh_proj.reshape(batch_size, enc_humans, 256)
 
         # 4. Attention Pooling — optionally mask humans beyond the sensing radius
         # (paper's limited perception: only nearby humans influence the action).
         sense_mask = None
         if self.sense_range > 0:
-            dist = torch.hypot(spatial_edges[:, :, 0], spatial_edges[:, :, 1])  # [B, N] m
-            sense_mask = dist <= self.sense_range                                # [B, N] bool
+            dist = torch.hypot(spatial_for_enc[:, :, 0], spatial_for_enc[:, :, 1])
+            sense_mask = torch.isfinite(dist) & (dist <= self.sense_range)
         if self.hh_intent_graph:
-            M_rh = self._human_intent_graph(M_rh, spatial_edges, sense_mask)
-        u_att = self._attention_pool(M_rh, m_rr, num_humans, sense_mask)
+            M_rh = self._human_intent_graph(M_rh, spatial_for_enc, sense_mask)
+        u_att = self._attention_pool(M_rh, m_rr, enc_humans, sense_mask)
         
         # 5. Node LTC Encoder
         node_input = torch.cat([v_m, m_rr, u_att], dim=-1).unsqueeze(1)
@@ -519,7 +589,17 @@ class SNCPPolicy(nn.Module):
             self.last_min_clearance = None
             self.last_cost_value = None
         
-        if h_spat.dim() == 3:
+        if scatter_idx is not None:
+            units = h_spat_new_flat.shape[-1]
+            h_knn_new = h_spat_new_flat.reshape(batch_size, enc_humans, units)
+            index = scatter_idx.unsqueeze(-1).expand(-1, -1, units)
+            h_full = h_full.clone()
+            h_full.scatter_(1, index, h_knn_new[:, :k_used])
+            if h_spat.dim() == 3:
+                h_spat_new = h_full
+            else:
+                h_spat_new = h_full.reshape(batch_size * num_humans, -1)
+        elif h_spat.dim() == 3:
             h_spat_new = h_spat_new_flat.reshape(batch_size, num_humans, -1)
         else:
             h_spat_new = h_spat_new_flat
