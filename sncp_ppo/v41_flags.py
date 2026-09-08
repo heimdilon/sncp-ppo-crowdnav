@@ -164,10 +164,15 @@ def resolve_holdout_arm(
     """Return ``(env_scenario, num_humans, human_vpref)`` for a holdout arm."""
     aliases = holdout_density_aliases()
     if name in aliases:
-        return aliases[name]
+        base, n_h, vpref = aliases[name]
+        if name in aliases and base in base_config:
+            vpref = float(base_config[base][1])
+        return base, int(n_h), float(vpref)
     match = _HOLD_N_RE.fullmatch(str(name))
     if match is not None:
-        return match.group(1), int(match.group(2)), 1.0
+        base = match.group(1)
+        vpref = float(base_config[base][1]) if base in base_config else 1.0
+        return base, int(match.group(2)), vpref
     n_h, vpref = base_config.get(name, (5, 0.50))
     return str(name), int(n_h), float(vpref)
 
@@ -187,10 +192,12 @@ def expand_holdout_scenarios(
     expanded: list[str] = []
     for sc in scenarios:
         match = _HOLD_N_RE.fullmatch(str(sc))
-        base = match.group(1) if match is not None else sc
-        if base in _PAPER_HOLD_BASES:
+        if match is not None:
+            expanded.append(sc)
+            continue
+        if sc in _PAPER_HOLD_BASES:
             for n in densities:
-                expanded.append(paper_holdout_alias(base, int(n)))
+                expanded.append(paper_holdout_alias(sc, int(n)))
         else:
             expanded.append(sc)
     return expanded
@@ -230,6 +237,8 @@ def apply_v41_runtime_flags(policy: Any, args: Any) -> None:
     if radius is None:
         radius = getattr(args, "cost_adapt_radius", DEFAULT_NEAR_RADIUS)
     policy.knn_summary_radius = float(radius if radius is not None else DEFAULT_NEAR_RADIUS)
+    if hasattr(policy, '_sync_knn_buffers'):
+        policy._sync_knn_buffers()
 
 
 def pack_crowd_summary(

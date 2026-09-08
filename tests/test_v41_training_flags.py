@@ -105,6 +105,8 @@ def test_count_n_near_from_spatial_edges():
     spatial = np.zeros((2, 4, 6), dtype=np.float32)
     spatial[0, 0, :2] = (0.5, 0.0)
     spatial[0, 1, :2] = (3.0, 0.0)
+    spatial[0, 2, :2] = (8.0, 0.0)
+    spatial[0, 3, :2] = (9.0, 0.0)
     spatial[1, :, 0] = 0.1
     near = count_n_near(spatial, radius=2.0)
     np.testing.assert_array_equal(near, [1.0, 4.0])
@@ -153,14 +155,21 @@ def test_resume_aliases_are_synonyms_and_conflict():
     assert resolve_init_checkpoint_path(a) == "a.pt"
     b = SimpleNamespace(init_checkpoint=None, resume="b.pt", load_path=None)
     assert resolve_init_checkpoint_path(b) == "b.pt"
-    c = SimpleNamespace(init_checkpoint="a.pt", resume="a.pt", load_path=None)
-    assert resolve_init_checkpoint_path(c) == "a.pt"
-    d = SimpleNamespace(init_checkpoint="a.pt", resume="b.pt", load_path=None)
+    c = SimpleNamespace(init_checkpoint=None, resume=None, load_path="c.pt")
+    assert resolve_init_checkpoint_path(c) == "c.pt"
+    d = SimpleNamespace(init_checkpoint="a.pt", resume="a.pt", load_path=None)
+    assert resolve_init_checkpoint_path(d) == "a.pt"
+    e = SimpleNamespace(init_checkpoint="a.pt", resume="b.pt", load_path=None)
     with pytest.raises(ValueError, match="conflicting"):
-        resolve_init_checkpoint_path(d)
+        resolve_init_checkpoint_path(e)
+    f = SimpleNamespace(init_checkpoint=None, resume="a.pt", load_path="b.pt")
+    with pytest.raises(ValueError, match="conflicting"):
+        resolve_init_checkpoint_path(f)
 
 
-def test_holdout_density_expand_and_resolve():
+def test_expand_holdout_keeps_already_suffixed_arms():
+    expanded = expand_holdout_scenarios(["paper_challenging_n15"], [15, 20])
+    assert expanded == ["paper_challenging_n15"]
     from sncp_ppo.train import SCENARIO_HOLDOUT_CONFIG
 
     expanded = expand_holdout_scenarios(["paper_challenging"], [15, 20])
@@ -250,41 +259,87 @@ def test_evaluate_holdout_uses_alias_density_not_canonical_ten(monkeypatch):
     assert SCENARIO_HOLDOUT_CONFIG["paper_challenging"][0] == 10
 
 
-def test_knn_sorted_does_not_change_state_dict_keys():
+def test_knn_sorted_adds_detectable_buffers_without_breaking_v40_load():
     base = SNCPPolicy(robot_vpref=1.0, action_dist="beta", pre_mlp=True, meanmax_pool=True, risk_head=True)
     knn = SNCPPolicy(
         robot_vpref=1.0, action_dist="beta", pre_mlp=True, meanmax_pool=True, risk_head=True,
-        human_token_mode="knn_sorted", knn_k=10,
+        human_token_mode="knn_sorted", knn_k=10, crowd_summary=True,
     )
-    assert set(base.state_dict()) == set(knn.state_dict())
+    assert "_knn_k" not in base.state_dict()
+    assert "_knn_k" in knn.state_dict()
+    missing, unexpected = base.load_state_dict(base.state_dict(), strict=True)
+    assert not missing and not unexpected
+    rebuilt = build_policy_for_checkpoint(knn.state_dict(), robot_vpref=1.0, robot_wmax=1.8)
+    assert rebuilt.human_token_mode == "knn_sorted"
+    assert rebuilt.knn_k == 10
+    assert rebuilt.crowd_summary is True
 
 
 def test_knn_cap_keeps_full_hidden_and_prefers_nearest():
     torch.manual_seed(0)
     policy = SNCPPolicy(human_token_mode="knn_sorted", knn_k=2, crowd_summary=True)
-    B, H = 1, 5
-    spatial = torch.tensor([[
+    B, H = 2, 5
+    spatial = torch.zeros(B, H, 6)
+    spatial[0] = torch.tensor([
         [5.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         [0.4, 0.0, 0.0, 0.0, 0.0, 0.0],
         [3.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         [0.2, 0.0, 0.0, 0.0, 0.0, 0.0],
         [9.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-    ]], dtype=torch.float32)
+    ])
+    spatial[1] = torch.tensor([
+        [0.1, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [8.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.3, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [7.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [6.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    ])
     obs = {
         "robot_node": torch.zeros(B, 7),
         "spatial_edges": spatial,
         "temporal_edges": torch.zeros(B, 2),
     }
     hidden = policy.init_hidden(B, H, torch.device("cpu"))
-    hidden["spatial_edge"] = torch.arange(H * policy.spatial_wiring.units, dtype=torch.float32).reshape(H, -1)
-    out1, out2, value, new_h = policy(obs, hidden)
-    assert out1.shape == (1, 2)
+    assert hidden["spatial_edge"].shape[0] == B * H
+    hidden["spatial_edge"] = torch.arange(
+        B * H * policy.spatial_wiring.units, dtype=torch.float32,
+    ).reshape(B * H, -1)
+    out1, _, _, new_h = policy(obs, hidden)
+    assert out1.shape == (B, 2)
     assert new_h["spatial_edge"].shape == hidden["spatial_edge"].shape
-    assert policy.last_knn_idx.tolist() == [[3, 1]]
-    old = hidden["spatial_edge"].reshape(H, -1)
-    new = new_h["spatial_edge"].reshape(H, -1)
+    assert policy.last_knn_idx.tolist() == [[3, 1], [0, 2]]
+    old = hidden["spatial_edge"].reshape(B, H, -1)
+    new = new_h["spatial_edge"].reshape(B, H, -1)
     for far in (0, 2, 4):
-        assert torch.equal(old[far], new[far])
+        assert torch.equal(old[0, far], new[0, far])
+    for far in (1, 3, 4):
+        assert torch.equal(old[1, far], new[1, far])
+    assert not torch.equal(old[0, 3], new[0, 3])
+    assert not torch.equal(old[0, 1], new[0, 1])
+    assert not torch.equal(old[1, 0], new[1, 0])
+    assert not torch.equal(old[1, 2], new[1, 2])
+
+
+def test_hh_graph_does_not_see_summary_token():
+    policy = SNCPPolicy(
+        hh_intent_graph=True, human_token_mode="knn_sorted", knn_k=2, crowd_summary=True,
+    )
+    seen = {}
+    original = policy._human_intent_graph
+
+    def wrapped(M_rh, spatial_edges, mask=None):
+        seen["H"] = int(M_rh.shape[1])
+        return original(M_rh, spatial_edges, mask)
+
+    policy._human_intent_graph = wrapped
+    obs = {
+        "robot_node": torch.zeros(1, 7),
+        "spatial_edges": torch.randn(1, 5, 6),
+        "temporal_edges": torch.zeros(1, 2),
+    }
+    hidden = policy.init_hidden(1, 5, torch.device("cpu"))
+    policy(obs, hidden)
+    assert seen["H"] == 2
 
 
 def test_pack_crowd_summary_encodes_count():
@@ -315,6 +370,14 @@ def test_v40_like_checkpoint_loads_with_resume_and_knn_flags(tmp_path):
     assert policy.hh_intent_graph is True
     assert policy.human_token_mode == "knn_sorted"
     assert policy.knn_k == 10
+    assert "_knn_k" in policy.state_dict()
+    knn_ckpt = tmp_path / "v41_knn.pt"
+    torch.save(policy.state_dict(), knn_ckpt)
+    detected = build_policy_for_checkpoint(
+        torch.load(knn_ckpt, map_location="cpu", weights_only=True),
+        robot_vpref=1.0, robot_wmax=1.8,
+    )
+    assert detected.human_token_mode == "knn_sorted"
     rebuilt = build_policy_for_checkpoint(src.state_dict(), robot_vpref=1.0, robot_wmax=1.8)
     missing, unexpected = rebuilt.load_state_dict(src.state_dict(), strict=False)
     assert not missing and not unexpected
@@ -356,6 +419,9 @@ def test_vectorized_lagrange_uses_adapted_cost_not_bce_label():
         hidden = new_h
     buf.finish(last_values=torch.zeros(N), last_dones=torch.zeros(N),
                last_cost_values=torch.zeros(N))
+    data = buf.get_tensors(torch.device("cpu"))
+    assert torch.equal(data["coll_labels"], torch.ones(N, T))
+    assert torch.equal(data["lagrange_costs"], torch.zeros(N, T))
     agent.update_vectorized(buf, torch.device("cpu"))
     # mean adapted cost 0 < limit 0.05, so λ stays 0 (would rise if raw coll=1 were used).
     assert agent.last_mean_cost == pytest.approx(0.0)

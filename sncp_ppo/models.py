@@ -111,13 +111,15 @@ class SNCPPolicy(nn.Module):
             self.cost_critic = nn.Linear(256, 1)
 
         # v41: optional KNN-sorted K-cap over human tokens. Observation-side
-        # only (no extra weights) so a v40 LTC+soft-HH+risk checkpoint still
-        # loads strictly. Default 'all' keeps every human, identical to v14-v40.
+        # only (shared spatial LTC weights; no new layers) so a v40
+        # LTC+soft-HH+risk checkpoint still loads strictly. Default 'all'
+        # keeps every human and registers no extra buffers.
         self.human_token_mode = str(human_token_mode)
         self.knn_k = int(knn_k)
         self.crowd_summary = bool(crowd_summary)
         self.knn_summary_radius = float(knn_summary_radius)
         self.last_knn_idx = None
+        self._sync_knn_buffers()
 
         # 1. Robot Node Encoder (MLP)
         # Input robot_node: [dg_local_x, dg_local_y, v_linear, dist_to_goal, vpref, radius, w_angular] (dim 7)
@@ -291,6 +293,26 @@ class SNCPPolicy(nn.Module):
                 _orthogonal_linear(m, gain=sqrt2)
             _orthogonal_linear(risk_linears[-1], gain=1.0)
             _orthogonal_linear(self.cost_critic, gain=1.0)
+
+    def _sync_knn_buffers(self):
+        """Persist knn_sorted so eval auto-detects it (sense_range pattern).
+
+        Default mode 'all' registers nothing, so v14-v40 checkpoints stay
+        byte-identical. Called from __init__ and from apply_v41_runtime_flags
+        after a strict v40 load.
+        """
+        if str(getattr(self, 'human_token_mode', 'all')) != 'knn_sorted':
+            return
+        k = float(getattr(self, 'knn_k', 10))
+        if getattr(self, '_knn_k', None) is None:
+            self.register_buffer('_knn_k', torch.tensor(k))
+        else:
+            self._knn_k.fill_(k)
+        flag = 1.0 if getattr(self, 'crowd_summary', False) else 0.0
+        if getattr(self, '_crowd_summary', None) is None:
+            self.register_buffer('_crowd_summary', torch.tensor(flag))
+        else:
+            self._crowd_summary.fill_(flag)
 
     def init_hidden(self, batch_size, num_humans, device):
         h_temp = torch.zeros(batch_size, self.temporal_wiring.units, device=device)
@@ -545,12 +567,33 @@ class SNCPPolicy(nn.Module):
 
         # 4. Attention Pooling — optionally mask humans beyond the sensing radius
         # (paper's limited perception: only nearby humans influence the action).
+        # The optional crowd-summary token is always visible and is excluded
+        # from the human-human graph (it is not a pedestrian).
+        has_summary = bool(
+            use_knn and getattr(self, 'crowd_summary', False)
+            and k_used is not None and enc_humans > k_used
+        )
         sense_mask = None
         if self.sense_range > 0:
             dist = torch.hypot(spatial_for_enc[:, :, 0], spatial_for_enc[:, :, 1])
             sense_mask = torch.isfinite(dist) & (dist <= self.sense_range)
+        if has_summary:
+            if sense_mask is None:
+                sense_mask = torch.ones(
+                    batch_size, enc_humans, dtype=torch.bool, device=spatial_for_enc.device,
+                )
+            else:
+                sense_mask = sense_mask.clone()
+            sense_mask[:, k_used:] = True
         if self.hh_intent_graph:
-            M_rh = self._human_intent_graph(M_rh, spatial_for_enc, sense_mask)
+            if has_summary:
+                human_mask = sense_mask[:, :k_used] if sense_mask is not None else None
+                M_h = self._human_intent_graph(
+                    M_rh[:, :k_used], spatial_for_enc[:, :k_used], human_mask,
+                )
+                M_rh = torch.cat([M_h, M_rh[:, k_used:]], dim=1)
+            else:
+                M_rh = self._human_intent_graph(M_rh, spatial_for_enc, sense_mask)
         u_att = self._attention_pool(M_rh, m_rr, enc_humans, sense_mask)
         
         # 5. Node LTC Encoder
@@ -660,10 +703,17 @@ def build_policy_for_checkpoint(state_dict, robot_vpref=0.26, robot_wmax=1.8,
     detected_risk = checkpoint_has_risk_head(state_dict)
     if risk_head is None:
         risk_head = detected_risk
+    knn_k_buf = state_dict.get('_knn_k')
+    human_token_mode = 'knn_sorted' if knn_k_buf is not None else 'all'
+    knn_k = int(knn_k_buf.item()) if knn_k_buf is not None else 10
+    cs = state_dict.get('_crowd_summary')
+    crowd_summary = bool(cs is not None and float(cs.item()) > 0.5)
     return SNCPPolicy(robot_vpref=robot_vpref, robot_wmax=robot_wmax,
                       pre_mlp=pre_mlp, attn_count_scaling=attn_count_scaling,
                       meanmax_pool=meanmax_pool, node_units=node_units,
                       node_output=node_output, attn_heads=attn_heads,
                       action_dist=action_dist, sense_range=sense_range,
                       hh_intent_graph=hh_intent_graph, hh_attn_heads=hh_attn_heads,
-                      cv_horizons=cv_horizons, cv_dt=cv_dt, risk_head=risk_head)
+                      cv_horizons=cv_horizons, cv_dt=cv_dt, risk_head=risk_head,
+                      human_token_mode=human_token_mode, knn_k=knn_k,
+                      crowd_summary=crowd_summary)
