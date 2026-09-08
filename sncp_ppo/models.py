@@ -294,25 +294,39 @@ class SNCPPolicy(nn.Module):
             _orthogonal_linear(risk_linears[-1], gain=1.0)
             _orthogonal_linear(self.cost_critic, gain=1.0)
 
+    def _drop_buffer(self, name):
+        if name in self._buffers:
+            delattr(self, name)
+
     def _sync_knn_buffers(self):
         """Persist knn_sorted so eval auto-detects it (sense_range pattern).
 
         Default mode 'all' registers nothing, so v14-v40 checkpoints stay
-        byte-identical. Called from __init__ and from apply_v41_runtime_flags
-        after a strict v40 load.
+        byte-identical. Switching back to 'all' drops the buffers so a later
+        eval cannot auto-detect KNN after an explicit ``--human_token_mode all``.
+        Called from __init__ and from apply_v41_runtime_flags after a strict
+        v40 load.
         """
         if str(getattr(self, 'human_token_mode', 'all')) != 'knn_sorted':
+            self._drop_buffer('_knn_k')
+            self._drop_buffer('_crowd_summary')
+            self._drop_buffer('_knn_summary_radius')
             return
         k = float(getattr(self, 'knn_k', 10))
-        if getattr(self, '_knn_k', None) is None:
+        if '_knn_k' not in self._buffers:
             self.register_buffer('_knn_k', torch.tensor(k))
         else:
             self._knn_k.fill_(k)
         flag = 1.0 if getattr(self, 'crowd_summary', False) else 0.0
-        if getattr(self, '_crowd_summary', None) is None:
+        if '_crowd_summary' not in self._buffers:
             self.register_buffer('_crowd_summary', torch.tensor(flag))
         else:
             self._crowd_summary.fill_(flag)
+        radius = float(getattr(self, 'knn_summary_radius', 2.0))
+        if '_knn_summary_radius' not in self._buffers:
+            self.register_buffer('_knn_summary_radius', torch.tensor(radius))
+        else:
+            self._knn_summary_radius.fill_(radius)
 
     def init_hidden(self, batch_size, num_humans, device):
         h_temp = torch.zeros(batch_size, self.temporal_wiring.units, device=device)
@@ -708,7 +722,9 @@ def build_policy_for_checkpoint(state_dict, robot_vpref=0.26, robot_wmax=1.8,
     knn_k = int(knn_k_buf.item()) if knn_k_buf is not None else 10
     cs = state_dict.get('_crowd_summary')
     crowd_summary = bool(cs is not None and float(cs.item()) > 0.5)
-    return SNCPPolicy(robot_vpref=robot_vpref, robot_wmax=robot_wmax,
+    radius_buf = state_dict.get('_knn_summary_radius')
+    knn_summary_radius = float(radius_buf.item()) if radius_buf is not None else 2.0
+    policy = SNCPPolicy(robot_vpref=robot_vpref, robot_wmax=robot_wmax,
                       pre_mlp=pre_mlp, attn_count_scaling=attn_count_scaling,
                       meanmax_pool=meanmax_pool, node_units=node_units,
                       node_output=node_output, attn_heads=attn_heads,
@@ -716,4 +732,11 @@ def build_policy_for_checkpoint(state_dict, robot_vpref=0.26, robot_wmax=1.8,
                       hh_intent_graph=hh_intent_graph, hh_attn_heads=hh_attn_heads,
                       cv_horizons=cv_horizons, cv_dt=cv_dt, risk_head=risk_head,
                       human_token_mode=human_token_mode, knn_k=knn_k,
-                      crowd_summary=crowd_summary)
+                      crowd_summary=crowd_summary,
+                      knn_summary_radius=knn_summary_radius)
+    # Pre-radius KNN checkpoints (knn_sorted without `_knn_summary_radius`)
+    # must still `load_state_dict` strictly. The Python attr stays at the
+    # 2.0 default; train-time apply_v41_runtime_flags re-syncs the buffer.
+    if radius_buf is None:
+        policy._drop_buffer('_knn_summary_radius')
+    return policy

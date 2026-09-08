@@ -167,6 +167,8 @@ sıfırdan. λ'yı taşımak için `--lagrange_lambda_init`). `--total_steps` bu
 Fazlı müfredat yok: farklı ağırlıklarla yeniden başlatın.
 
 İsteğe bağlı KNN token tavanı (hâlâ soft attention): `--human_token_mode knn_sorted --knn_k 10`.
+`--resume` sırasında bu bayrakları (ve `--knn_summary_radius`) vermemek checkpoint’teki
+modu / K’yı / yarıçapı korur; `--human_token_mode all` açıkça verilirse KNN buffer’ları düşer.
 
 Best-ckpt `min(success)` listedeki holdout kolları üzerindendir. `min(N15,N20)` için
 `--holdout_scenarios paper_challenging_n15 paper_challenging_n20` veya yukarıdaki

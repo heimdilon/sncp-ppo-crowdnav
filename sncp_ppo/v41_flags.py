@@ -224,20 +224,33 @@ def apply_v41_runtime_flags(policy: Any, args: Any) -> None:
 
     These are observation-side processing knobs, not extra weights, so a v40
     LTC+soft-HH+risk checkpoint still ``load_state_dict``s strictly.
+
+    Unspecified CLI knobs (``None``) leave whatever the constructor or
+    ``build_policy_for_checkpoint`` already set, so ``--resume`` of a KNN
+    checkpoint does not silently fall back to ``all``. Explicit
+    ``--human_token_mode all`` drops the KNN buffers so later eval cannot
+    auto-detect a mode the run did not train with.
     """
-    mode = getattr(args, "human_token_mode", "all") or "all"
-    policy.human_token_mode = str(mode)
-    policy.knn_k = int(getattr(args, "knn_k", 10) or 10)
+    mode = getattr(args, "human_token_mode", None)
+    if mode is not None:
+        policy.human_token_mode = str(mode)
+    knn_k = getattr(args, "knn_k", None)
+    if knn_k is not None:
+        policy.knn_k = int(knn_k)
     no_summary = bool(getattr(args, "no_crowd_summary", False))
     explicit = bool(getattr(args, "crowd_summary", False))
-    policy.crowd_summary = bool(
-        explicit or (policy.human_token_mode == "knn_sorted" and not no_summary)
-    )
+    if no_summary:
+        policy.crowd_summary = False
+    elif explicit:
+        policy.crowd_summary = True
+    elif mode == "knn_sorted":
+        policy.crowd_summary = True
+    elif mode == "all":
+        policy.crowd_summary = False
     radius = getattr(args, "knn_summary_radius", None)
-    if radius is None:
-        radius = getattr(args, "cost_adapt_radius", DEFAULT_NEAR_RADIUS)
-    policy.knn_summary_radius = float(radius if radius is not None else DEFAULT_NEAR_RADIUS)
-    if hasattr(policy, '_sync_knn_buffers'):
+    if radius is not None:
+        policy.knn_summary_radius = float(radius)
+    if hasattr(policy, "_sync_knn_buffers"):
         policy._sync_knn_buffers()
 
 

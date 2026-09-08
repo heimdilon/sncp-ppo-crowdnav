@@ -119,8 +119,10 @@ def test_parser_v41_defaults_preserve_old_cli():
     assert defaults.cost_density_adapt is False
     assert defaults.cost_adapt_alpha == pytest.approx(0.15)
     assert defaults.cost_adapt_mode == "n_near"
-    assert defaults.human_token_mode == "all"
-    assert defaults.knn_k == 10
+    # Unspecified (not "all"/10) so --resume keeps checkpoint KNN settings.
+    assert defaults.human_token_mode is None
+    assert defaults.knn_k is None
+    assert defaults.knn_summary_radius is None
     assert defaults.holdout_densities is None
     assert defaults.resume is None
     assert defaults.load_path is None
@@ -273,6 +275,8 @@ def test_knn_sorted_adds_detectable_buffers_without_breaking_v40_load():
     assert rebuilt.human_token_mode == "knn_sorted"
     assert rebuilt.knn_k == 10
     assert rebuilt.crowd_summary is True
+    assert rebuilt.knn_summary_radius == pytest.approx(2.0)
+    assert "_knn_summary_radius" in knn.state_dict()
 
 
 def test_knn_cap_keeps_full_hidden_and_prefers_nearest():
@@ -440,3 +444,93 @@ def test_apply_v41_flags_default_summary_only_for_knn():
         policy, SimpleNamespace(human_token_mode="knn_sorted", knn_k=8, no_crowd_summary=True),
     )
     assert policy.crowd_summary is False
+
+
+def test_resume_without_token_flags_keeps_knn_checkpoint_mode(tmp_path):
+    src = SNCPPolicy(
+        robot_vpref=1.0, action_dist="beta",
+        human_token_mode="knn_sorted", knn_k=8, crowd_summary=True,
+        knn_summary_radius=3.5,
+    )
+    ckpt = tmp_path / "v41_knn.pt"
+    torch.save(src.state_dict(), ckpt)
+    args = build_parser().parse_args(["--resume", str(ckpt)])
+    assert args.human_token_mode is None
+    env = SimpleNamespace(robot_vpref=1.0, robot_wmax=1.8)
+    policy = build_or_load_policy(args, env, torch.device("cpu"))
+    assert policy.human_token_mode == "knn_sorted"
+    assert policy.knn_k == 8
+    assert policy.crowd_summary is True
+    assert policy.knn_summary_radius == pytest.approx(3.5)
+    assert "_knn_k" in policy.state_dict()
+    assert float(policy.state_dict()["_knn_summary_radius"].item()) == pytest.approx(3.5)
+
+
+def test_explicit_all_on_knn_checkpoint_drops_knn_buffers(tmp_path):
+    src = SNCPPolicy(
+        human_token_mode="knn_sorted", knn_k=8, crowd_summary=True, knn_summary_radius=3.5,
+    )
+    ckpt = tmp_path / "v41_knn.pt"
+    torch.save(src.state_dict(), ckpt)
+    args = build_parser().parse_args(["--resume", str(ckpt), "--human_token_mode", "all"])
+    env = SimpleNamespace(robot_vpref=0.26, robot_wmax=1.8)
+    policy = build_or_load_policy(args, env, torch.device("cpu"))
+    assert policy.human_token_mode == "all"
+    assert "_knn_k" not in policy.state_dict()
+    assert "_crowd_summary" not in policy.state_dict()
+    assert "_knn_summary_radius" not in policy.state_dict()
+    rebuilt = build_policy_for_checkpoint(policy.state_dict(), robot_vpref=0.26, robot_wmax=1.8)
+    assert rebuilt.human_token_mode == "all"
+    assert policy.crowd_summary is False
+
+
+def test_pre_radius_knn_checkpoint_still_loads_strict():
+    knn = SNCPPolicy(human_token_mode="knn_sorted", knn_k=10, crowd_summary=True)
+    state = {k: v for k, v in knn.state_dict().items() if k != "_knn_summary_radius"}
+    rebuilt = build_policy_for_checkpoint(state, robot_vpref=0.26, robot_wmax=1.8)
+    missing, unexpected = rebuilt.load_state_dict(state, strict=True)
+    assert not missing and not unexpected
+    assert rebuilt.human_token_mode == "knn_sorted"
+    assert rebuilt.knn_summary_radius == pytest.approx(2.0)
+    assert "_knn_summary_radius" not in rebuilt.state_dict()
+
+
+def test_fresh_policy_without_token_flags_stays_all():
+    args = build_parser().parse_args([])
+    env = SimpleNamespace(robot_vpref=0.26, robot_wmax=1.8)
+    policy = build_or_load_policy(args, env, torch.device("cpu"))
+    assert policy.human_token_mode == "all"
+    assert policy.crowd_summary is False
+    assert "_knn_k" not in policy.state_dict()
+
+
+def test_resume_keeps_crowd_summary_off_without_flags(tmp_path):
+    src = SNCPPolicy(human_token_mode="knn_sorted", knn_k=8, crowd_summary=False)
+    ckpt = tmp_path / "v41_knn_nosum.pt"
+    torch.save(src.state_dict(), ckpt)
+    args = build_parser().parse_args(["--resume", str(ckpt)])
+    env = SimpleNamespace(robot_vpref=0.26, robot_wmax=1.8)
+    policy = build_or_load_policy(args, env, torch.device("cpu"))
+    assert policy.human_token_mode == "knn_sorted"
+    assert policy.crowd_summary is False
+
+
+def test_knn_summary_radius_controls_n_near_in_summary_token():
+    policy = SNCPPolicy(
+        human_token_mode="knn_sorted", knn_k=2, crowd_summary=True, knn_summary_radius=1.0,
+    )
+    spatial = torch.zeros(1, 2, 6)
+    spatial[0, 0, :2] = torch.tensor([0.5, 0.0])
+    spatial[0, 1, :2] = torch.tensor([1.5, 0.0])
+    token = policy._crowd_summary_token(spatial)
+    assert float(token[0, 0, 3] * 20.0) == pytest.approx(1.0)
+
+
+def test_knn_summary_radius_roundtrips_through_checkpoint():
+    knn = SNCPPolicy(
+        human_token_mode="knn_sorted", knn_k=10, crowd_summary=True, knn_summary_radius=1.25,
+    )
+    assert "_knn_summary_radius" in knn.state_dict()
+    rebuilt = build_policy_for_checkpoint(knn.state_dict(), robot_vpref=0.26, robot_wmax=1.8)
+    assert rebuilt.knn_summary_radius == pytest.approx(1.25)
+    assert rebuilt.human_token_mode == "knn_sorted"

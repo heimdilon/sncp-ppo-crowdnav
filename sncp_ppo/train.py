@@ -1148,10 +1148,12 @@ def _train_vectorized(args, env, policy, agent, device, log_path, csv_writer, cs
             f"alpha={getattr(args, 'cost_adapt_alpha', 0.15)} "
             f"radius={getattr(args, 'cost_adapt_radius', 2.0)}"
         )
-    token_mode = getattr(args, 'human_token_mode', 'all')
+    token_mode = getattr(policy, 'human_token_mode', 'all')
     if token_mode == 'knn_sorted':
         print(
-            f"v41 human tokens knn_sorted k={getattr(args, 'knn_k', 10)} "
+            f"v41 human tokens knn_sorted k={getattr(policy, 'knn_k', 10)} "
+            f"summary={bool(getattr(policy, 'crowd_summary', False))} "
+            f"radius={getattr(policy, 'knn_summary_radius', 2.0)} "
             f"(soft attention, not SparseHIG)"
         )
     print("Note: --episodes is ignored in vectorized mode; --total_steps controls run length.")
@@ -1573,21 +1575,26 @@ def build_parser():
                              'sqrt_n uses 1/sqrt(N); n_humans uses 1 + alpha*N.')
     parser.add_argument('--cost_adapt_radius', type=float, default=2.0,
                         help='Radius (m) for n_near in --cost_density_adapt (default 2.0).')
-    parser.add_argument('--human_token_mode', type=str, default='all',
+    parser.add_argument('--human_token_mode', type=str, default=None,
                         choices=['all', 'knn_sorted'],
-                        help='v41 optional human-token selection. "all" (default) keeps every '
-                             'pedestrian (pre-v41). "knn_sorted" keeps the K nearest tokens, '
-                             'sorted by distance, then runs the existing soft attention — '
-                             'NOT SparseHIG. No extra weights; v40 checkpoints still load.')
-    parser.add_argument('--knn_k', type=int, default=10,
-                        help='K for --human_token_mode knn_sorted (default 10).')
+                        help='v41 optional human-token selection. Omit on --resume to keep the '
+                             'checkpoint mode. Fresh policies default to "all" (every pedestrian, '
+                             'pre-v41). "knn_sorted" keeps the K nearest tokens, sorted by '
+                             'distance, then runs the existing soft attention — NOT SparseHIG. '
+                             'No extra weights; v40 checkpoints still load.')
+    parser.add_argument('--knn_k', type=int, default=None,
+                        help='K for --human_token_mode knn_sorted (fresh default 10). '
+                             'Omit on --resume to keep the checkpoint K.')
     parser.add_argument('--crowd_summary', action='store_true',
                         help='Append one 6-dim crowd-summary spatial token (count/mean/min-dist). '
-                             'On by default when --human_token_mode knn_sorted.')
+                             'On by default when --human_token_mode knn_sorted is passed; omit '
+                             'on --resume to keep the checkpoint flag.')
     parser.add_argument('--no_crowd_summary', action='store_true',
                         help='Disable the knn_sorted crowd-summary token.')
-    parser.add_argument('--knn_summary_radius', type=float, default=2.0,
-                        help='Radius (m) used to pack n_near into the crowd-summary token.')
+    parser.add_argument('--knn_summary_radius', type=float, default=None,
+                        help='Radius (m) used to pack n_near into the crowd-summary token '
+                             '(fresh default 2.0; persisted in the checkpoint). '
+                             'Omit on --resume to keep the saved radius.')
     parser.add_argument('--bootstrap_easy_steps', type=int, default=0,
                         help='Probe mode only: run an easy/1 warmup for this many env steps '
                              'before the --fixed_scenario phase. Cold-starting at fixed N=5 '
