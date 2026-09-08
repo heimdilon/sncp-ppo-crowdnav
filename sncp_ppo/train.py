@@ -457,6 +457,11 @@ def normalize_train_args(args):
     args.human_count_weights_parsed = weights
     if weights is not None and getattr(args, 'num_humans_range', None) is None:
         raise ValueError('--human_count_weights requires --num_humans_range MIN MAX')
+    if weights is not None and int(getattr(args, 'num_envs', 1) or 1) <= 1:
+        raise ValueError(
+            '--human_count_weights is only supported for vectorized training '
+            '(--num_envs > 1); the single-env curriculum ignores P(N)'
+        )
     args.holdout_scenarios = expand_holdout_scenarios(
         args.holdout_scenarios, getattr(args, 'holdout_densities', None),
     )
@@ -1407,10 +1412,10 @@ def build_parser():
                              'sample over the listed N values that fall inside [MIN,MAX].')
     parser.add_argument('--human_count_weights', type=str, default=None,
                         help='v41 weighted P(N), e.g. "5:0.05,10:0.1,15:0.25,18:0.15,20:0.35". '
-                             'Requires --num_humans_range. Keys outside the range are ignored. '
-                             'Default None = inclusive uniform randint(MIN,MAX) (pre-v41). '
-                             'No mid-run schedule: restart with --resume and a new weight string '
-                             'for a later phase.')
+                             'Requires --num_humans_range and --num_envs > 1. Keys outside the '
+                             'range are ignored. Default None = inclusive uniform '
+                             'randint(MIN,MAX) (pre-v41). No mid-run schedule: restart with '
+                             '--resume and a new weight string for a later phase.')
     parser.add_argument('--scenario', type=str, default='easy',
                         help='Initial env scenario (curriculum overrides).')
     parser.add_argument('--seed', type=int, default=42)
@@ -1585,12 +1590,19 @@ def build_parser():
     parser.add_argument('--knn_k', type=int, default=None,
                         help='K for --human_token_mode knn_sorted (fresh default 10). '
                              'Omit on --resume to keep the checkpoint K.')
-    parser.add_argument('--crowd_summary', action='store_true',
-                        help='Append one 6-dim crowd-summary spatial token (count/mean/min-dist). '
-                             'On by default when --human_token_mode knn_sorted is passed; omit '
-                             'on --resume to keep the checkpoint flag.')
-    parser.add_argument('--no_crowd_summary', action='store_true',
-                        help='Disable the knn_sorted crowd-summary token.')
+    crowd_summary_group = parser.add_mutually_exclusive_group()
+    crowd_summary_group.add_argument(
+        '--crowd_summary', action='store_true',
+        help='Append one 6-dim crowd-summary spatial token (count/mean/min-dist). '
+             'On by default when --human_token_mode knn_sorted is passed; omit '
+             'on --resume to keep the checkpoint flag. Mutually exclusive with '
+             '--no_crowd_summary.',
+    )
+    crowd_summary_group.add_argument(
+        '--no_crowd_summary', action='store_true',
+        help='Disable the knn_sorted crowd-summary token. '
+             'Mutually exclusive with --crowd_summary.',
+    )
     parser.add_argument('--knn_summary_radius', type=float, default=None,
                         help='Radius (m) used to pack n_near into the crowd-summary token '
                              '(fresh default 2.0; persisted in the checkpoint). '

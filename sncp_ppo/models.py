@@ -394,11 +394,13 @@ class SNCPPolicy(nn.Module):
                 hh = torch.where(all_masked.view(-1, 1, 1), torch.zeros_like(hh), hh)
         return M_rh + torch.tanh(self.hh_gate) * hh
 
-    def _multihead_attention(self, M_rh, m_rr, mask=None):
+    def _multihead_attention(self, M_rh, m_rr, mask=None, count_n=None):
         """Canonical multi-head cross-attention: robot m_rr is the single query
         token, humans M_rh are the key/value tokens. Returns (a_attn [B,256],
         alpha [B, heads, 1, H]); each head has d_head = 256 // heads dims. mask
-        ([B,H] bool, True = visible) zeroes hidden humans' attention weights."""
+        ([B,H] bool, True = visible) zeroes hidden humans' attention weights.
+        count_n is the Eq 13 crowd count (original N, excluding a summary token).
+        """
         B, H, _ = M_rh.shape
         nh = self.attn_heads
         dh = 256 // nh
@@ -407,7 +409,8 @@ class SNCPPolicy(nn.Module):
         V = self.W_v(M_rh).view(B, H, nh, dh).permute(0, 2, 1, 3)    # [B, nh, H, dh]
         scores = torch.matmul(Q, K.transpose(-1, -2)) / math.sqrt(dh)  # [B, nh, 1, H]
         if self.attn_count_scaling:
-            scores = scores * H   # paper Eq 13 n-factor; matches single-head num_humans
+            n = int(H if count_n is None else count_n)
+            scores = scores * n
         if mask is not None:
             scores = scores.masked_fill((~mask).view(B, 1, 1, H), float('-inf'))
         alpha = F.softmax(scores, dim=-1)
@@ -420,13 +423,17 @@ class SNCPPolicy(nn.Module):
         """Attention-weighted pooling of per-human spatial features M_rh against
         the robot/temporal key m_rr. attn_heads>1 uses multi-head cross-attention;
         otherwise the legacy single-head weighted average. attn_count_scaling
-        scales attention scores by n (paper Eq 13) in BOTH paths. mask ([B,N] bool, True
-        = visible) restricts pooling to humans within the sensing radius: hidden
-        humans get zero attention weight and are excluded from the max; rows with no
-        visible human return a zero crowd vector."""
+        scales attention scores by n (paper Eq 13) in BOTH paths; n is the
+        original crowd count (not KNN token length, not the summary token).
+        mask ([B,N] bool, True = visible) restricts pooling to humans within
+        the sensing radius: hidden humans get zero attention weight and are
+        excluded from the max; rows with no visible human return a zero crowd
+        vector."""
         none_visible = (~mask).all(dim=1) if mask is not None else None
         if self.attn_heads > 1:
-            a_attn, _ = self._multihead_attention(M_rh, m_rr, mask)
+            a_attn, _ = self._multihead_attention(
+                M_rh, m_rr, mask, count_n=num_humans,
+            )
             if not self.meanmax_pool:
                 return a_attn
             a_max = (self._masked_max(M_rh, mask, none_visible) if mask is not None
@@ -608,7 +615,8 @@ class SNCPPolicy(nn.Module):
                 M_rh = torch.cat([M_h, M_rh[:, k_used:]], dim=1)
             else:
                 M_rh = self._human_intent_graph(M_rh, spatial_for_enc, sense_mask)
-        u_att = self._attention_pool(M_rh, m_rr, enc_humans, sense_mask)
+        # Eq 13 n = original crowd count, not KNN token length / summary.
+        u_att = self._attention_pool(M_rh, m_rr, num_humans, sense_mask)
         
         # 5. Node LTC Encoder
         node_input = torch.cat([v_m, m_rr, u_att], dim=-1).unsqueeze(1)

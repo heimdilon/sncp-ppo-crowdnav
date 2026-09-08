@@ -206,6 +206,22 @@ def test_normalize_train_args_expands_densities_and_requires_range():
     with pytest.raises(ValueError, match="num_humans_range"):
         normalize_train_args(bad)
 
+    single_env = build_parser().parse_args([
+        "--human_count_weights", "20:1.0",
+        "--num_humans_range", "5", "20",
+    ])
+    assert single_env.num_envs == 1
+    with pytest.raises(ValueError, match="num_envs"):
+        normalize_train_args(single_env)
+
+    ok = build_parser().parse_args([
+        "--human_count_weights", "20:1.0",
+        "--num_humans_range", "5", "20",
+        "--num_envs", "16",
+    ])
+    normalize_train_args(ok)
+    assert ok.human_count_weights_parsed == {20: 1.0}
+
 
 def test_evaluate_holdout_uses_alias_density_not_canonical_ten(monkeypatch):
     from crowd_sim.crowd_env import CrowdSimEnv
@@ -534,3 +550,69 @@ def test_knn_summary_radius_roundtrips_through_checkpoint():
     rebuilt = build_policy_for_checkpoint(knn.state_dict(), robot_vpref=0.26, robot_wmax=1.8)
     assert rebuilt.knn_summary_radius == pytest.approx(1.25)
     assert rebuilt.human_token_mode == "knn_sorted"
+
+
+def test_crowd_summary_flags_are_mutually_exclusive():
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["--crowd_summary", "--no_crowd_summary"])
+
+
+def test_knn_attn_count_scaling_uses_original_crowd_n():
+    torch.manual_seed(0)
+    policy = SNCPPolicy(
+        attn_count_scaling=True,
+        human_token_mode="knn_sorted", knn_k=2, crowd_summary=True,
+    )
+    seen = {}
+    original = policy._attention_pool
+
+    def wrapped(M_rh, m_rr, num_humans, mask=None):
+        seen["n"] = int(num_humans)
+        seen["H"] = int(M_rh.shape[1])
+        return original(M_rh, m_rr, num_humans, mask)
+
+    policy._attention_pool = wrapped
+    B, H = 1, 5
+    obs = {
+        "robot_node": torch.zeros(B, 7),
+        "spatial_edges": torch.randn(B, H, 6),
+        "temporal_edges": torch.zeros(B, 2),
+    }
+    hidden = policy.init_hidden(B, H, torch.device("cpu"))
+    policy(obs, hidden)
+    assert seen["H"] == 3  # K=2 + summary
+    assert seen["n"] == 5  # original crowd, excluding summary
+
+
+def test_knn_multihead_count_scaling_uses_original_crowd_n():
+    torch.manual_seed(0)
+    policy = SNCPPolicy(
+        attn_count_scaling=True, attn_heads=4,
+        human_token_mode="knn_sorted", knn_k=2, crowd_summary=True,
+    )
+    seen = {}
+    original = policy._multihead_attention
+
+    def wrapped(M_rh, m_rr, mask=None, count_n=None):
+        seen["H"] = int(M_rh.shape[1])
+        seen["count_n"] = count_n
+        return original(M_rh, m_rr, mask, count_n=count_n)
+
+    policy._multihead_attention = wrapped
+    B, H = 1, 5
+    obs = {
+        "robot_node": torch.zeros(B, 7),
+        "spatial_edges": torch.randn(B, H, 6),
+        "temporal_edges": torch.zeros(B, 2),
+    }
+    hidden = policy.init_hidden(B, H, torch.device("cpu"))
+    policy(obs, hidden)
+    assert seen["H"] == 3
+    assert seen["count_n"] == 5
+    torch.manual_seed(0)
+    M_rh = torch.randn(1, 3, 256)
+    m_rr = torch.randn(1, 256)
+    with torch.no_grad():
+        out_n, _ = original(M_rh, m_rr, count_n=5)
+        out_h, _ = original(M_rh, m_rr, count_n=3)
+    assert not torch.allclose(out_n, out_h, atol=1e-4)
